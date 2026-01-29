@@ -28,16 +28,16 @@ class Summarizer:
         self.model = model
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    def summarize_async(self, turn: Turn, callback: Callable[[str], None]) -> None:
-        """Submit summarization job, calls callback with result."""
+    def summarize_async(self, turn: Turn, callback: Callable[[str, bool], None]) -> None:
+        """Submit summarization job, calls callback with (result, success)."""
         self._executor.submit(self._summarize, turn, callback)
 
-    def _summarize(self, turn: Turn, callback: Callable[[str], None]) -> None:
+    def _summarize(self, turn: Turn, callback: Callable[[str, bool], None]) -> None:
         """Call LLM API to summarize turn content."""
         try:
             content = turn.content_full
             if not content:
-                callback("[empty content]")
+                callback("[empty content]", False)
                 return
 
             # Truncate very long content to avoid token limits
@@ -68,17 +68,17 @@ class Summarizer:
 
             data = response.json()
             summary = data["choices"][0]["message"]["content"].strip()
-            callback(summary)
+            callback(summary, True)
 
         except requests.exceptions.ConnectionError:
             logger.debug("Summarizer: vLLM server not available")
-            callback("[server unavailable]")
+            callback("[server unavailable]", False)
         except requests.exceptions.Timeout:
             logger.debug("Summarizer: request timed out")
-            callback("[timeout]")
+            callback("[timeout]", False)
         except Exception as e:
             logger.debug(f"Summarizer error: {e}")
-            callback(f"[error: {type(e).__name__}]")
+            callback(f"[error: {type(e).__name__}]", False)
 
     def shutdown(self) -> None:
         """Shutdown the executor."""

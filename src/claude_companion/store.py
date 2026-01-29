@@ -187,12 +187,13 @@ class EventStore:
             except Exception:
                 pass
 
-    def _make_summary_callback(self, turn: Turn) -> Callable[[str], None]:
+    def _make_summary_callback(self, turn: Turn) -> Callable[[str, bool], None]:
         """Create a callback that updates turn summary and notifies listeners."""
-        def callback(summary: str) -> None:
+        def callback(summary: str, success: bool) -> None:
             turn.summary = summary
-            # Cache the summary
-            self._summary_cache.set(turn.content_full, summary)
+            # Only cache successful summaries
+            if success:
+                self._summary_cache.set(turn.content_full, summary)
             # Notify turn listeners to refresh TUI
             for listener in self._turn_listeners:
                 try:
