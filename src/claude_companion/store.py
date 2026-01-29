@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_alerts, send_system_notification
+from .cache import SummaryCache
 from .models import Event, Session, Turn
 from .summarizer import Summarizer
 from .transcript import parse_transcript
@@ -25,6 +26,7 @@ class EventStore:
         self._enable_notifications = enable_notifications
         self._watcher = TranscriptWatcher(self._on_watcher_turn)
         self._summarizer = Summarizer()
+        self._summary_cache = SummaryCache()
 
     def add_event(self, event: Event) -> None:
         """Add an event to the store."""
@@ -170,9 +172,13 @@ class EventStore:
         for alert in alerts:
             self._add_alert(alert)
 
-        # Submit assistant turns for summarization
+        # Submit assistant turns for summarization (check cache first)
         if turn.role == "assistant":
-            self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
+            cached = self._summary_cache.get(turn.content_full)
+            if cached:
+                turn.summary = cached
+            else:
+                self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
 
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:
@@ -185,6 +191,8 @@ class EventStore:
         """Create a callback that updates turn summary and notifies listeners."""
         def callback(summary: str) -> None:
             turn.summary = summary
+            # Cache the summary
+            self._summary_cache.set(turn.content_full, summary)
             # Notify turn listeners to refresh TUI
             for listener in self._turn_listeners:
                 try:
@@ -225,6 +233,16 @@ class EventStore:
         historical_turns = parse_transcript(path)
 
         if historical_turns:
+            # Apply cached summaries or submit for summarization
+            for turn in historical_turns:
+                if turn.role == "assistant":
+                    cached = self._summary_cache.get(turn.content_full)
+                    if cached:
+                        turn.summary = cached
+                    else:
+                        # Submit for summarization (will be cached when done)
+                        self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
+
             # Prepend historical turns before any new turns
             session.turns = historical_turns + session.turns
             # Renumber all turns
