@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
@@ -256,21 +257,21 @@ class TUI:
 
         if turn.expanded:
             content = turn.content_full
-            expand_indicator = "[dim]\\[-][/dim] "
+            expand_indicator = "\\[-] "
         else:
             # For assistant turns, show summary if available and enabled
             if turn.role == "assistant" and self._use_summary:
                 if turn.summary:
                     content = turn.summary
-                    expand_indicator = "[dim]\\[tldr;][/dim] "
+                    expand_indicator = "\\[tldr;] "
                 else:
-                    # Summary pending
-                    content = f"{turn.content_preview} [dim italic]\\[summarizing...][/dim italic]"
-                    expand_indicator = "[dim]\\[+][/dim] " if turn.content_full != turn.content_preview else ""
+                    # Summary pending - use Markdown italic to keep inline
+                    content = f"{turn.content_preview} *\\[summarizing...]*"
+                    expand_indicator = "\\[+] " if turn.content_full != turn.content_preview else ""
             else:
                 content = turn.content_preview
                 if turn.content_full != turn.content_preview:
-                    expand_indicator = "[dim]\\[+][/dim] "
+                    expand_indicator = "\\[+] "
                 else:
                     expand_indicator = ""
 
@@ -282,8 +283,15 @@ class TUI:
         if turn.role in ("user", "assistant"):
             subtitle = f"{turn.word_count:,} words"
 
+        # Render assistant content as Markdown for proper formatting
+        if turn.role == "assistant":
+            # Prepend indicator to content for inline display
+            panel_content = Markdown(f"{expand_indicator}{content}")
+        else:
+            panel_content = f"{expand_indicator}{content}"
+
         return Panel(
-            f"{expand_indicator}{content}",
+            panel_content,
             title=title,
             title_align="left",
             subtitle=subtitle,
