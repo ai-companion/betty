@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
@@ -282,8 +283,17 @@ class TUI:
         if turn.role in ("user", "assistant"):
             subtitle = f"{turn.word_count:,} words"
 
+        # Render assistant content as Markdown for proper formatting
+        if turn.role == "assistant":
+            # Use Group to combine indicator and markdown content
+            indicator = Text.from_markup(expand_indicator) if expand_indicator else None
+            md_content = Markdown(content)
+            panel_content = Group(indicator, md_content) if indicator else md_content
+        else:
+            panel_content = f"{expand_indicator}{content}"
+
         return Panel(
-            f"{expand_indicator}{content}",
+            panel_content,
             title=title,
             title_align="left",
             subtitle=subtitle,
