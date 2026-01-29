@@ -1,5 +1,6 @@
 """Rich TUI for Claude Companion."""
 
+import os
 import sys
 import threading
 import time
@@ -74,6 +75,38 @@ def get_tool_icon(tool_name: str | None) -> str:
     return TOOL_ICONS.get(tool_name, TOOL_ICONS["default"])
 
 
+class KeyReader:
+    """Non-blocking keyboard reader for Unix systems."""
+
+    def __init__(self):
+        self._old_settings = None
+        self._fd = sys.stdin.fileno()
+
+    def __enter__(self):
+        import termios
+        import tty
+        self._old_settings = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+        return self
+
+    def __exit__(self, *args):
+        import termios
+        if self._old_settings:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
+
+    def read_key(self) -> str | None:
+        """Read a key if available, return None if no input."""
+        import select
+        if select.select([sys.stdin], [], [], 0)[0]:
+            char = sys.stdin.read(1)
+            # Handle escape sequences (arrow keys)
+            if char == "\x1b":
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    char += sys.stdin.read(2)
+            return char
+        return None
+
+
 class TUI:
     """Rich TUI for displaying Claude Code sessions."""
 
@@ -90,8 +123,6 @@ class TUI:
         self._status_until: float = 0  # When to clear status message
         self._show_alerts = True  # Whether to show alerts panel
         self._auto_scroll = True  # Auto-scroll to bottom on new events
-        self._key_queue: list[str] = []  # Queue for keyboard input
-        self._key_lock = threading.Lock()
 
         # Register listener for store updates
         store.add_listener(self._on_event)
@@ -148,7 +179,7 @@ class TUI:
         # Stats and filter
         if active:
             _, filter_label = FILTERS[self._filter_index]
-            scroll_indicator = "" if self._auto_scroll else " [dim](scrolled)[/dim]"
+            scroll_indicator = "" if self._auto_scroll else " [dim](paused)[/dim]"
             stats = (
                 f"[dim]Model:[/dim] {active.model}  "
                 f"[dim]Words:[/dim] ↓{active.total_input_words:,} ↑{active.total_output_words:,}  "
@@ -297,7 +328,7 @@ class TUI:
         return Text.from_markup(
             f"{alert_indicator} "
             "[dim][1-9][/dim] Session  "
-            "[dim][↑↓/jk][/dim] Navigate  "
+            "[dim][jk][/dim] Navigate  "
             "[dim][f][/dim] Filter  "
             "[dim][x][/dim] Export  "
             "[dim][a][/dim] Alerts  "
@@ -328,44 +359,6 @@ class TUI:
         session = self.store.get_active_session()
         return self._get_filtered_turns(session)
 
-    def _input_thread(self) -> None:
-        """Thread for reading keyboard input."""
-        import select
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-
-        try:
-            tty.setraw(fd)
-            while self._running:
-                # Check if input available with timeout
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    char = sys.stdin.read(1)
-
-                    # Handle escape sequences (arrow keys)
-                    if char == "\x1b":
-                        if select.select([sys.stdin], [], [], 0.05)[0]:
-                            char += sys.stdin.read(2)
-
-                    with self._key_lock:
-                        self._key_queue.append(char)
-                    self._refresh_event.set()
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    def _process_keys(self) -> bool:
-        """Process queued key presses. Returns False to quit."""
-        with self._key_lock:
-            keys = self._key_queue.copy()
-            self._key_queue.clear()
-
-        for key in keys:
-            if not self._process_key(key):
-                return False
-        return True
-
     def _process_key(self, key: str) -> bool:
         """Process a key press. Returns False to quit."""
         turns = self._get_active_turns()
@@ -385,8 +378,8 @@ class TUI:
             self._auto_scroll = True
             self._refresh_event.set()
 
-        # Arrow keys and vim keys
-        elif key == "\x1b[A" or key == "k":  # Up arrow or k
+        # Vim keys for navigation
+        elif key == "k" or key == "\x1b[A":  # k or Up arrow
             self._auto_scroll = False  # User is navigating, disable auto-scroll
             if total_turns > 0:
                 if self._selected_index is None:
@@ -398,7 +391,7 @@ class TUI:
                     self._scroll_offset = self._selected_index
                 self._refresh_event.set()
 
-        elif key == "\x1b[B" or key == "j":  # Down arrow or j
+        elif key == "j" or key == "\x1b[B":  # j or Down arrow
             self._auto_scroll = False  # User is navigating, disable auto-scroll
             if total_turns > 0:
                 if self._selected_index is None:
@@ -410,7 +403,7 @@ class TUI:
                     self._scroll_offset = self._selected_index - self._max_visible_turns + 1
                 self._refresh_event.set()
 
-        elif key == "\n" or key == "\r" or key == " ":  # Enter or Space
+        elif key == "\n" or key == "\r" or key == " " or key == "o":  # Enter, Space, or o
             if self._selected_index is not None and 0 <= self._selected_index < total_turns:
                 turns[self._selected_index].expanded = not turns[self._selected_index].expanded
                 self._refresh_event.set()
@@ -471,30 +464,27 @@ class TUI:
         """Run the TUI."""
         self._running = True
 
-        # Start input thread
-        input_thread = threading.Thread(target=self._input_thread, daemon=True)
-        input_thread.start()
-
-        try:
+        with KeyReader() as keys:
             with Live(
                 self._render(),
                 console=self.console,
                 refresh_per_second=4,
-                screen=True,
+                screen=False,  # Don't use alternate screen
+                transient=True,  # Clear output on exit
             ) as live:
                 while self._running:
-                    # Wait for event or timeout
-                    self._refresh_event.wait(timeout=0.25)
-                    self._refresh_event.clear()
+                    # Check for keyboard input
+                    key = keys.read_key()
+                    if key:
+                        if not self._process_key(key):
+                            break
 
-                    # Process keyboard input
-                    if not self._process_keys():
-                        break
+                    # Wait for event or timeout
+                    self._refresh_event.wait(timeout=0.1)
+                    self._refresh_event.clear()
 
                     # Update display
                     live.update(self._render())
-        finally:
-            self._running = False
 
     def stop(self) -> None:
         """Stop the TUI."""
