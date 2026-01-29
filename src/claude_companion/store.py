@@ -6,6 +6,7 @@ from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_alerts, send_system_notification
 from .models import Event, Session, Turn
+from .summarizer import Summarizer
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher
 
@@ -23,6 +24,7 @@ class EventStore:
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
         self._watcher = TranscriptWatcher(self._on_watcher_turn)
+        self._summarizer = Summarizer()
 
     def add_event(self, event: Event) -> None:
         """Add an event to the store."""
@@ -168,6 +170,10 @@ class EventStore:
         for alert in alerts:
             self._add_alert(alert)
 
+        # Submit assistant turns for summarization
+        if turn.role == "assistant":
+            self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
+
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:
             try:
@@ -175,9 +181,22 @@ class EventStore:
             except Exception:
                 pass
 
+    def _make_summary_callback(self, turn: Turn) -> Callable[[str], None]:
+        """Create a callback that updates turn summary and notifies listeners."""
+        def callback(summary: str) -> None:
+            turn.summary = summary
+            # Notify turn listeners to refresh TUI
+            for listener in self._turn_listeners:
+                try:
+                    listener(turn)
+                except Exception:
+                    pass
+        return callback
+
     def stop(self) -> None:
-        """Stop the watcher."""
+        """Stop the watcher and summarizer."""
         self._watcher.stop()
+        self._summarizer.shutdown()
 
     def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> None:
         """Load historical turns from transcript file."""
