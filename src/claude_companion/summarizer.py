@@ -37,6 +37,7 @@ class Summarizer:
         try:
             content = turn.content_full
             if not content:
+                callback("[empty content]")
                 return
 
             # Truncate very long content to avoid token limits
@@ -71,10 +72,13 @@ class Summarizer:
 
         except requests.exceptions.ConnectionError:
             logger.debug("Summarizer: vLLM server not available")
+            callback("[server unavailable]")
         except requests.exceptions.Timeout:
             logger.debug("Summarizer: request timed out")
+            callback("[timeout]")
         except Exception as e:
             logger.debug(f"Summarizer error: {e}")
+            callback(f"[error: {type(e).__name__}]")
 
     def shutdown(self) -> None:
         """Shutdown the executor."""
