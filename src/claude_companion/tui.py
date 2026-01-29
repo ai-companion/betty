@@ -402,8 +402,9 @@ class TUI:
         return Text.from_markup(
             f"{alert_indicator}"
             "[dim]j/k[/dim]:nav "
+            "[dim]g/G[/dim]:end "
             "[dim]o[/dim]:open "
-            "[dim]s[/dim]:summary "
+            "[dim]s/S[/dim]:summary "
             "[dim]f[/dim]:filter "
             "[dim]m[/dim]:monitor "
             "[dim]?[/dim]:ask "
@@ -595,6 +596,14 @@ class TUI:
             self._use_summary = not self._use_summary
             mode = "summary" if self._use_summary else "preview"
             self._show_status(f"Preview mode: {mode}")
+            self._refresh_event.set()
+
+        elif key == "S":  # Summarize all historical turns without summaries
+            count = self.store.summarize_historical_turns()
+            if count > 0:
+                self._show_status(f"Summarizing {count} historical turns...")
+            else:
+                self._show_status("No historical turns need summarization")
             self._refresh_event.set()
 
         return True

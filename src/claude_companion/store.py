@@ -201,6 +201,30 @@ class EventStore:
                     pass
         return callback
 
+    def summarize_historical_turns(self) -> int:
+        """Submit all historical assistant turns without summaries for summarization.
+
+        Returns the count of turns submitted.
+        """
+        count = 0
+        with self._lock:
+            if not self._active_session_id:
+                return 0
+            session = self._sessions.get(self._active_session_id)
+            if not session:
+                return 0
+
+            for turn in session.turns:
+                if turn.is_historical and turn.role == "assistant" and not turn.summary:
+                    # Check cache first
+                    cached = self._summary_cache.get(turn.content_full)
+                    if cached:
+                        turn.summary = cached
+                    else:
+                        self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
+                        count += 1
+        return count
+
     def stop(self) -> None:
         """Stop the watcher and summarizer."""
         self._watcher.stop()
