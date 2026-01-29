@@ -253,9 +253,14 @@ Health check endpoint.
    - `claude-companion uninstall` to remove hooks
    - `claude-companion status` to check hook status
 
-### Phase 2: Enhanced Display (Future)
-- Expandable/collapsible content
-- Keyboard navigation
+### Phase 2: Enhanced Display (In Progress)
+- Expandable/collapsible content ✅
+- Keyboard navigation ✅
+  - Arrow keys (↑↓) to navigate turns
+  - Enter to expand/collapse selected turn
+  - e/c to expand/collapse all
+  - g/G to go to beginning/end
+  - Scroll indicators when content overflows
 - Search/filter turns
 - Export session log
 

@@ -2,15 +2,12 @@
 
 import sys
 import threading
-import time
 from datetime import datetime
 
 from rich.console import Console, Group
-from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.style import Style
-from rich.table import Table
 from rich.text import Text
 
 from .models import Event, Session, Turn
@@ -28,6 +25,7 @@ STYLES = {
     "tool_error": Style(color="red"),
     "stats": Style(dim=True),
     "header": Style(bold=True),
+    "selected": Style(bold=True),
 }
 
 # Icons for tools
@@ -71,6 +69,9 @@ class TUI:
         self.console = console or Console()
         self._running = False
         self._refresh_event = threading.Event()
+        self._selected_index: int | None = None  # Index into visible turns
+        self._scroll_offset = 0  # For scrolling through turns
+        self._max_visible_turns = 15
 
         # Register listener for store updates
         store.add_listener(self._on_event)
@@ -109,21 +110,34 @@ class TUI:
             border_style="blue",
         )
 
-    def _render_turn(self, turn: Turn) -> Panel:
+    def _render_turn(self, turn: Turn, is_selected: bool = False) -> Panel:
         """Render a single turn."""
         if turn.role == "user":
             title = f"Turn {turn.turn_number} │ User"
             border_style = "blue"
-            content = turn.content_preview
         elif turn.role == "assistant":
             title = f"Turn {turn.turn_number} │ Assistant"
             border_style = "green"
-            content = turn.content_preview
         else:  # tool
             icon = get_tool_icon(turn.tool_name)
             title = f"Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
             border_style = get_tool_style(turn.tool_name)
-            content = turn.content_full  # Show full content for tools
+
+        # Show full content if expanded, preview otherwise
+        if turn.expanded:
+            content = turn.content_full
+            expand_indicator = "[dim][-][/dim] "
+        else:
+            content = turn.content_preview
+            if turn.content_full != turn.content_preview:
+                expand_indicator = "[dim][+][/dim] "
+            else:
+                expand_indicator = ""
+
+        # Add selection indicator
+        if is_selected:
+            title = f"► {title}"
+            border_style = "white"
 
         # Add word count for non-tool turns
         subtitle = None
@@ -131,7 +145,7 @@ class TUI:
             subtitle = f"{turn.word_count:,} words"
 
         return Panel(
-            content,
+            f"{expand_indicator}{content}",
             title=title,
             title_align="left",
             subtitle=subtitle,
@@ -150,19 +164,35 @@ class TUI:
                 )
             )
 
-        # Show last N turns to fit screen
-        max_turns = 20
-        turns = session.turns[-max_turns:]
+        # Get visible turns with scrolling
+        total_turns = len(session.turns)
+        start_idx = self._scroll_offset
+        end_idx = min(start_idx + self._max_visible_turns, total_turns)
+        visible_turns = session.turns[start_idx:end_idx]
 
-        panels = [self._render_turn(turn) for turn in turns]
+        # Render each turn
+        panels = []
+        for i, turn in enumerate(visible_turns):
+            global_idx = start_idx + i
+            is_selected = self._selected_index == global_idx
+            panels.append(self._render_turn(turn, is_selected))
+
+        # Add scroll indicators if needed
+        if start_idx > 0:
+            panels.insert(0, Text(f"  ↑ {start_idx} more above", style="dim"))
+        if end_idx < total_turns:
+            panels.append(Text(f"  ↓ {total_turns - end_idx} more below", style="dim"))
+
         return Group(*panels)
 
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
         return Text.from_markup(
-            " [dim][1-9][/dim] Switch session  "
-            "[dim][q][/dim] Quit  "
-            "[dim][r][/dim] Refresh"
+            " [dim][1-9][/dim] Session  "
+            "[dim][↑↓][/dim] Navigate  "
+            "[dim][Enter][/dim] Expand  "
+            "[dim][e/c][/dim] Expand/Collapse all  "
+            "[dim][q][/dim] Quit"
         )
 
     def _render(self) -> Group:
@@ -176,10 +206,14 @@ class TUI:
             self._render_footer(),
         )
 
+    def _get_active_turns(self) -> list[Turn]:
+        """Get turns from active session."""
+        session = self.store.get_active_session()
+        return session.turns if session else []
+
     def _handle_input(self) -> bool:
         """Handle keyboard input. Returns False to quit."""
         import select
-        import sys
         import termios
         import tty
 
@@ -189,15 +223,85 @@ class TUI:
             tty.setcbreak(sys.stdin.fileno())
             if select.select([sys.stdin], [], [], 0)[0]:
                 char = sys.stdin.read(1)
-                if char == "q":
-                    return False
-                elif char == "r":
-                    self._refresh_event.set()
-                elif char.isdigit() and char != "0":
-                    self.store.set_active_session(int(char))
-                    self._refresh_event.set()
+
+                # Handle escape sequences (arrow keys)
+                if char == "\x1b":
+                    # Read the rest of the escape sequence
+                    if select.select([sys.stdin], [], [], 0.1)[0]:
+                        char += sys.stdin.read(2)
+
+                return self._process_key(char)
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+        return True
+
+    def _process_key(self, key: str) -> bool:
+        """Process a key press. Returns False to quit."""
+        turns = self._get_active_turns()
+        total_turns = len(turns)
+
+        if key == "q":
+            return False
+
+        elif key == "r":
+            self._refresh_event.set()
+
+        elif key.isdigit() and key != "0":
+            self.store.set_active_session(int(key))
+            self._selected_index = None
+            self._scroll_offset = 0
+            self._refresh_event.set()
+
+        # Arrow keys
+        elif key == "\x1b[A":  # Up arrow
+            if total_turns > 0:
+                if self._selected_index is None:
+                    self._selected_index = total_turns - 1
+                elif self._selected_index > 0:
+                    self._selected_index -= 1
+                # Adjust scroll to keep selection visible
+                if self._selected_index < self._scroll_offset:
+                    self._scroll_offset = self._selected_index
+                self._refresh_event.set()
+
+        elif key == "\x1b[B":  # Down arrow
+            if total_turns > 0:
+                if self._selected_index is None:
+                    self._selected_index = 0
+                elif self._selected_index < total_turns - 1:
+                    self._selected_index += 1
+                # Adjust scroll to keep selection visible
+                if self._selected_index >= self._scroll_offset + self._max_visible_turns:
+                    self._scroll_offset = self._selected_index - self._max_visible_turns + 1
+                self._refresh_event.set()
+
+        elif key == "\n" or key == "\r":  # Enter
+            if self._selected_index is not None and 0 <= self._selected_index < total_turns:
+                turns[self._selected_index].expanded = not turns[self._selected_index].expanded
+                self._refresh_event.set()
+
+        elif key == "e":  # Expand all
+            for turn in turns:
+                turn.expanded = True
+            self._refresh_event.set()
+
+        elif key == "c":  # Collapse all
+            for turn in turns:
+                turn.expanded = False
+            self._refresh_event.set()
+
+        elif key == "G":  # Go to end
+            if total_turns > 0:
+                self._selected_index = total_turns - 1
+                self._scroll_offset = max(0, total_turns - self._max_visible_turns)
+                self._refresh_event.set()
+
+        elif key == "g":  # Go to beginning
+            if total_turns > 0:
+                self._selected_index = 0
+                self._scroll_offset = 0
+                self._refresh_event.set()
 
         return True
 
