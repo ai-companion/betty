@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from enum import Enum
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -16,6 +17,13 @@ from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
 from .models import Event, Session, Turn
 from .store import EventStore
+
+
+class InputMode(Enum):
+    """Current input mode."""
+    NORMAL = "normal"
+    MONITOR = "monitor"
+    ASK = "ask"
 
 
 # Styles for different turn types
@@ -117,16 +125,32 @@ class TUI:
         self._refresh_event = threading.Event()
         self._selected_index: int | None = None  # Index into filtered turns
         self._scroll_offset = 0  # For scrolling through turns
-        self._max_visible_turns = 10  # Keep lower to ensure footer is visible
+        self._max_visible_turns = 8  # Reduced to make room for input boxes
         self._filter_index = 0  # Index into FILTERS
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
         self._show_alerts = True  # Whether to show alerts panel
         self._auto_scroll = True  # Auto-scroll to bottom on new events
 
+        # Input mode and text boxes
+        self._input_mode = InputMode.NORMAL
+        self._monitor_text = ""  # Monitoring instructions
+        self._ask_text = ""  # Ask about trace query
+        self._cursor_pos = 0  # Cursor position in current input
+
         # Register listener for store updates
         store.add_listener(self._on_event)
         store.add_alert_listener(self._on_alert)
+
+    @property
+    def monitor_instruction(self) -> str:
+        """Get the current monitoring instruction."""
+        return self._monitor_text
+
+    def on_ask_submit(self, query: str) -> None:
+        """Called when user submits an ask query. Override or set callback."""
+        # Placeholder - will be used for LLM integration later
+        self._show_status(f"Query: {query[:30]}...")
 
     def _on_event(self, event: Event) -> None:
         """Called when a new event arrives."""
@@ -306,6 +330,43 @@ class TUI:
             padding=(0, 1),
         )
 
+    def _render_input_box(self, title: str, text: str, is_active: bool, key_hint: str) -> Panel:
+        """Render an input box."""
+        if is_active:
+            # Show cursor
+            display_text = text + "█"
+            border_style = "green"
+            title_style = "bold green"
+        else:
+            display_text = text if text else f"[dim]Press [{key_hint}] to edit[/dim]"
+            border_style = "dim"
+            title_style = "dim"
+
+        return Panel(
+            display_text,
+            title=f"[{title_style}]{title}[/{title_style}]",
+            title_align="left",
+            border_style=border_style,
+            padding=(0, 1),
+            height=3,
+        )
+
+    def _render_input_boxes(self) -> Group:
+        """Render the two input boxes."""
+        monitor_box = self._render_input_box(
+            "Monitor Instructions",
+            self._monitor_text,
+            self._input_mode == InputMode.MONITOR,
+            "m"
+        )
+        ask_box = self._render_input_box(
+            "Ask About Trace",
+            self._ask_text,
+            self._input_mode == InputMode.ASK,
+            "?"
+        )
+        return Group(monitor_box, ask_box)
+
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
         # Check if we should show status message
@@ -314,6 +375,14 @@ class TUI:
 
         self._status_message = None
 
+        # Show different hints based on input mode
+        if self._input_mode != InputMode.NORMAL:
+            return Text.from_markup(
+                "[dim]Type to edit[/dim] │ "
+                "[dim]Enter[/dim]:Save │ "
+                "[dim]Esc[/dim]:Cancel"
+            )
+
         # Show alert count if any
         alerts = self.store.get_alerts()
         danger_count = sum(1 for a in alerts if a.level == AlertLevel.DANGER)
@@ -321,17 +390,17 @@ class TUI:
 
         alert_indicator = ""
         if danger_count > 0:
-            alert_indicator = f" [bold red]🚨 {danger_count}[/bold red]"
+            alert_indicator = f"[bold red]🚨{danger_count}[/bold red] "
         elif warn_count > 0:
-            alert_indicator = f" [yellow]⚠️  {warn_count}[/yellow]"
+            alert_indicator = f"[yellow]⚠️{warn_count}[/yellow] "
 
         return Text.from_markup(
             f"{alert_indicator}"
             "[dim]j/k[/dim]:Nav "
             "[dim]o[/dim]:Open "
             "[dim]f[/dim]:Filter "
-            "[dim]x[/dim]:Export "
-            "[dim]a[/dim]:Alerts "
+            "[dim]m[/dim]:Monitor "
+            "[dim]?[/dim]:Ask "
             "[dim]q[/dim]:Quit"
         )
 
@@ -350,6 +419,7 @@ class TUI:
             parts.append(alerts_panel)
 
         parts.append(self._render_turns(active))
+        parts.append(self._render_input_boxes())
         parts.append(self._render_footer())
 
         return Group(*parts)
@@ -359,8 +429,48 @@ class TUI:
         session = self.store.get_active_session()
         return self._get_filtered_turns(session)
 
+    def _process_input_key(self, key: str) -> bool:
+        """Process a key in input mode. Returns False to exit input mode."""
+        # Get current text based on mode
+        if self._input_mode == InputMode.MONITOR:
+            text = self._monitor_text
+        else:
+            text = self._ask_text
+
+        if key == "\x1b" or key == "\x1b[":  # Escape
+            self._input_mode = InputMode.NORMAL
+            return True
+
+        elif key == "\n" or key == "\r":  # Enter - save and exit
+            if self._input_mode == InputMode.ASK and text:
+                self.on_ask_submit(text)
+                self._ask_text = ""  # Clear after submit
+            self._input_mode = InputMode.NORMAL
+            return True
+
+        elif key == "\x7f" or key == "\x08":  # Backspace
+            if text:
+                text = text[:-1]
+
+        elif len(key) == 1 and key.isprintable():  # Regular character
+            text += key
+
+        # Save back
+        if self._input_mode == InputMode.MONITOR:
+            self._monitor_text = text
+        else:
+            self._ask_text = text
+
+        self._refresh_event.set()
+        return True
+
     def _process_key(self, key: str) -> bool:
         """Process a key press. Returns False to quit."""
+        # Handle input mode
+        if self._input_mode != InputMode.NORMAL:
+            self._process_input_key(key)
+            return True
+
         turns = self._get_active_turns()
         total_turns = len(turns)
 
@@ -368,6 +478,14 @@ class TUI:
             return False
 
         elif key == "r":
+            self._refresh_event.set()
+
+        elif key == "m":  # Enter monitor input mode
+            self._input_mode = InputMode.MONITOR
+            self._refresh_event.set()
+
+        elif key == "?":  # Enter ask input mode
+            self._input_mode = InputMode.ASK
             self._refresh_event.set()
 
         elif key.isdigit() and key != "0":
