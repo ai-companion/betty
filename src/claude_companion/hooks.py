@@ -17,11 +17,13 @@ HOOK_MARKER = "claude-companion"
 
 
 def _make_hook_command(port: int) -> str:
-    """Create the curl command for a hook. Fails silently if server not running."""
+    """Create the curl command for a hook. Runs in background to avoid blocking Claude startup."""
+    # Capture stdin first, then background and disown the curl request
     return (
-        f"curl -s --connect-timeout 1 -X POST http://localhost:{port}/event "
-        f"-H 'Content-Type: application/json' -d \"$(cat)\" "
-        f">/dev/null 2>&1 || true "
+        f"data=$(cat); "
+        f"(curl -s --connect-timeout 1 -X POST http://localhost:{port}/event "
+        f"-H 'Content-Type: application/json' -d \"$data\" "
+        f">/dev/null 2>&1 || true) &disown "
         f"# {HOOK_MARKER}"
     )
 
