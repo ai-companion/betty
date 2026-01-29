@@ -4,17 +4,21 @@ import threading
 from datetime import datetime
 from typing import Callable
 
+from .alerts import Alert, AlertLevel, check_event_for_alerts, send_system_notification
 from .models import Event, Session
 
 
 class EventStore:
     """Thread-safe store for session events."""
 
-    def __init__(self) -> None:
+    def __init__(self, enable_notifications: bool = True) -> None:
         self._sessions: dict[str, Session] = {}
+        self._alerts: list[Alert] = []
         self._lock = threading.Lock()
         self._listeners: list[Callable[[Event], None]] = []
+        self._alert_listeners: list[Callable[[Alert], None]] = []
         self._active_session_id: str | None = None
+        self._enable_notifications = enable_notifications
 
     def add_event(self, event: Event) -> None:
         """Add an event to the store."""
@@ -38,12 +42,50 @@ class EventStore:
             if event.event_type == "SessionStart":
                 self._active_session_id = session_id
 
+        # Check for alerts
+        alerts = check_event_for_alerts(event)
+        for alert in alerts:
+            self._add_alert(alert)
+
         # Notify listeners (outside lock to avoid deadlock)
         for listener in self._listeners:
             try:
                 listener(event)
             except Exception:
                 pass  # Don't let listener errors break the store
+
+    def _add_alert(self, alert: Alert) -> None:
+        """Add an alert and notify listeners."""
+        with self._lock:
+            self._alerts.append(alert)
+
+        # Send system notification for warnings and dangers
+        if self._enable_notifications and alert.level in (AlertLevel.WARNING, AlertLevel.DANGER):
+            send_system_notification(alert)
+
+        # Notify alert listeners
+        for listener in self._alert_listeners:
+            try:
+                listener(alert)
+            except Exception:
+                pass
+
+    def get_alerts(self, level: AlertLevel | None = None) -> list[Alert]:
+        """Get alerts, optionally filtered by level."""
+        with self._lock:
+            if level is None:
+                return list(self._alerts)
+            return [a for a in self._alerts if a.level == level]
+
+    def get_recent_alerts(self, count: int = 5) -> list[Alert]:
+        """Get the most recent alerts."""
+        with self._lock:
+            return list(self._alerts[-count:])
+
+    def clear_alerts(self) -> None:
+        """Clear all alerts."""
+        with self._lock:
+            self._alerts.clear()
 
     def get_sessions(self) -> list[Session]:
         """Get all sessions sorted by start time (most recent first)."""
@@ -82,3 +124,12 @@ class EventStore:
         """Remove a listener."""
         if listener in self._listeners:
             self._listeners.remove(listener)
+
+    def add_alert_listener(self, listener: Callable[[Alert], None]) -> None:
+        """Add a listener to be called on new alerts."""
+        self._alert_listeners.append(listener)
+
+    def remove_alert_listener(self, listener: Callable[[Alert], None]) -> None:
+        """Remove an alert listener."""
+        if listener in self._alert_listeners:
+            self._alert_listeners.remove(listener)

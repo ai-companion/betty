@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
 
+from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
 from .models import Event, Session, Turn
 from .store import EventStore
@@ -87,12 +88,20 @@ class TUI:
         self._filter_index = 0  # Index into FILTERS
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
+        self._show_alerts = True  # Whether to show alerts panel
+        self._pending_alert: Alert | None = None  # Most recent alert to highlight
 
         # Register listener for store updates
         store.add_listener(self._on_event)
+        store.add_alert_listener(self._on_alert)
 
     def _on_event(self, event: Event) -> None:
         """Called when a new event arrives."""
+        self._refresh_event.set()
+
+    def _on_alert(self, alert: Alert) -> None:
+        """Called when a new alert is triggered."""
+        self._pending_alert = alert
         self._refresh_event.set()
 
     def _get_filtered_turns(self, session: Session | None) -> list[Turn]:
@@ -225,6 +234,38 @@ class TUI:
 
         return Group(*panels)
 
+    def _render_alerts(self) -> Panel | None:
+        """Render alerts panel if there are any warnings/dangers."""
+        if not self._show_alerts:
+            return None
+
+        alerts = self.store.get_recent_alerts(3)
+        # Only show warnings and dangers
+        alerts = [a for a in alerts if a.level in (AlertLevel.WARNING, AlertLevel.DANGER)]
+
+        if not alerts:
+            return None
+
+        lines = []
+        for alert in alerts:
+            if alert.level == AlertLevel.DANGER:
+                icon = "🚨"
+                style = "bold red"
+            else:
+                icon = "⚠️ "
+                style = "yellow"
+
+            lines.append(f"[{style}]{icon} {alert.title}[/{style}]: {alert.message}")
+
+        content = "\n".join(lines)
+        return Panel(
+            content,
+            title="[bold red]Alerts[/bold red]",
+            title_align="left",
+            border_style="red",
+            padding=(0, 1),
+        )
+
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
         import time
@@ -235,12 +276,24 @@ class TUI:
 
         self._status_message = None
 
+        # Show alert count if any
+        alerts = self.store.get_alerts()
+        danger_count = sum(1 for a in alerts if a.level == AlertLevel.DANGER)
+        warn_count = sum(1 for a in alerts if a.level == AlertLevel.WARNING)
+
+        alert_indicator = ""
+        if danger_count > 0:
+            alert_indicator = f" [bold red]🚨 {danger_count}[/bold red]"
+        elif warn_count > 0:
+            alert_indicator = f" [yellow]⚠️  {warn_count}[/yellow]"
+
         return Text.from_markup(
-            " [dim][1-9][/dim] Session  "
+            f"{alert_indicator} "
+            "[dim][1-9][/dim] Session  "
             "[dim][↑↓][/dim] Navigate  "
-            "[dim][Enter][/dim] Expand  "
             "[dim][f][/dim] Filter  "
             "[dim][x][/dim] Export  "
+            "[dim][a][/dim] Alerts  "
             "[dim][q][/dim] Quit"
         )
 
@@ -249,11 +302,19 @@ class TUI:
         sessions = self.store.get_sessions()
         active = self.store.get_active_session()
 
-        return Group(
+        parts = [
             self._render_header(sessions, active),
-            self._render_turns(active),
-            self._render_footer(),
-        )
+        ]
+
+        # Add alerts panel if there are any
+        alerts_panel = self._render_alerts()
+        if alerts_panel:
+            parts.append(alerts_panel)
+
+        parts.append(self._render_turns(active))
+        parts.append(self._render_footer())
+
+        return Group(*parts)
 
     def _get_active_turns(self) -> list[Turn]:
         """Get filtered turns from active session."""
@@ -368,6 +429,15 @@ class TUI:
                 self._show_status(f"Exported to {filename}")
             else:
                 self._show_status("No session to export")
+
+        elif key == "a":  # Toggle/clear alerts
+            if self.store.get_alerts():
+                self.store.clear_alerts()
+                self._show_status("Alerts cleared")
+            else:
+                self._show_alerts = not self._show_alerts
+                self._show_status(f"Alerts {'shown' if self._show_alerts else 'hidden'}")
+            self._refresh_event.set()
 
         return True
 

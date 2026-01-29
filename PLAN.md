@@ -268,11 +268,25 @@ Health check endpoint.
   - Press [x] to export to Markdown
   - Exports to current directory with timestamp
 
-### Phase 3: Analysis & Alerts (Future)
-- Intent tracking
-- Anomaly detection
-- System notifications
-- Red text warnings for issues
+### Phase 3: Analysis & Alerts ✅ COMPLETE
+- Danger detection ✅
+  - Force push, hard reset, destructive commands
+  - Piping curl/wget to shell
+  - DROP/TRUNCATE SQL statements
+  - DELETE without WHERE
+- Sensitive file detection ✅
+  - .env, credentials, secrets
+  - SSH keys and config
+  - System files (/etc/)
+- System notifications ✅
+  - macOS notifications via osascript
+  - Linux notifications via notify-send
+  - Only for warnings and dangers
+- Red/yellow alerts panel ✅
+  - 🚨 Danger alerts in red
+  - ⚠️ Warning alerts in yellow
+  - Alert count in footer
+  - Press [a] to clear alerts
 
 ## Key Implementation Details
 
