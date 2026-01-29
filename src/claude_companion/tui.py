@@ -3,6 +3,7 @@
 import sys
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -10,6 +11,7 @@ from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
 
+from .export import export_session_markdown, get_export_filename
 from .models import Event, Session, Turn
 from .store import EventStore
 
@@ -42,6 +44,16 @@ TOOL_ICONS = {
     "default": "🔧",
 }
 
+# Filter options
+FILTERS = [
+    ("all", "All"),
+    ("tool", "Tools only"),
+    ("Read", "📄 Read"),
+    ("Write", "✏️ Write"),
+    ("Edit", "✏️ Edit"),
+    ("Bash", "💻 Bash"),
+]
+
 
 def get_tool_style(tool_name: str | None) -> Style:
     """Get style for a tool."""
@@ -69,15 +81,39 @@ class TUI:
         self.console = console or Console()
         self._running = False
         self._refresh_event = threading.Event()
-        self._selected_index: int | None = None  # Index into visible turns
+        self._selected_index: int | None = None  # Index into filtered turns
         self._scroll_offset = 0  # For scrolling through turns
         self._max_visible_turns = 15
+        self._filter_index = 0  # Index into FILTERS
+        self._status_message: str | None = None  # Temporary status message
+        self._status_until: float = 0  # When to clear status message
 
         # Register listener for store updates
         store.add_listener(self._on_event)
 
     def _on_event(self, event: Event) -> None:
         """Called when a new event arrives."""
+        self._refresh_event.set()
+
+    def _get_filtered_turns(self, session: Session | None) -> list[Turn]:
+        """Get turns filtered by current filter."""
+        if not session:
+            return []
+
+        filter_key, _ = FILTERS[self._filter_index]
+
+        if filter_key == "all":
+            return session.turns
+        elif filter_key == "tool":
+            return [t for t in session.turns if t.role == "tool"]
+        else:
+            return [t for t in session.turns if t.tool_name == filter_key]
+
+    def _show_status(self, message: str, duration: float = 3.0) -> None:
+        """Show a temporary status message."""
+        import time
+        self._status_message = message
+        self._status_until = time.time() + duration
         self._refresh_event.set()
 
     def _render_header(self, sessions: list[Session], active: Session | None) -> Panel:
@@ -92,12 +128,14 @@ class TUI:
 
         sessions_text = "  ".join(session_parts) if session_parts else "[dim]No sessions[/dim]"
 
-        # Stats
+        # Stats and filter
         if active:
+            _, filter_label = FILTERS[self._filter_index]
             stats = (
                 f"[dim]Model:[/dim] {active.model}  "
                 f"[dim]Words:[/dim] ↓{active.total_input_words:,} ↑{active.total_output_words:,}  "
-                f"[dim]Tools:[/dim] {active.total_tool_calls}"
+                f"[dim]Tools:[/dim] {active.total_tool_calls}  "
+                f"[dim]Filter:[/dim] {filter_label}"
             )
         else:
             stats = "[dim]Waiting for session...[/dim]"
@@ -156,19 +194,21 @@ class TUI:
 
     def _render_turns(self, session: Session | None) -> Group:
         """Render all turns for a session."""
-        if not session or not session.turns:
-            return Group(
-                Panel(
-                    "[dim]Waiting for activity...[/dim]",
-                    border_style="dim",
-                )
-            )
+        filtered_turns = self._get_filtered_turns(session)
+
+        if not filtered_turns:
+            filter_key, filter_label = FILTERS[self._filter_index]
+            if filter_key != "all" and session and session.turns:
+                msg = f"[dim]No {filter_label} turns. Press [f] to change filter.[/dim]"
+            else:
+                msg = "[dim]Waiting for activity...[/dim]"
+            return Group(Panel(msg, border_style="dim"))
 
         # Get visible turns with scrolling
-        total_turns = len(session.turns)
+        total_turns = len(filtered_turns)
         start_idx = self._scroll_offset
         end_idx = min(start_idx + self._max_visible_turns, total_turns)
-        visible_turns = session.turns[start_idx:end_idx]
+        visible_turns = filtered_turns[start_idx:end_idx]
 
         # Render each turn
         panels = []
@@ -187,11 +227,20 @@ class TUI:
 
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
+        import time
+
+        # Check if we should show status message
+        if self._status_message and time.time() < self._status_until:
+            return Text.from_markup(f" [bold green]{self._status_message}[/bold green]")
+
+        self._status_message = None
+
         return Text.from_markup(
             " [dim][1-9][/dim] Session  "
             "[dim][↑↓][/dim] Navigate  "
             "[dim][Enter][/dim] Expand  "
-            "[dim][e/c][/dim] Expand/Collapse all  "
+            "[dim][f][/dim] Filter  "
+            "[dim][x][/dim] Export  "
             "[dim][q][/dim] Quit"
         )
 
@@ -207,9 +256,9 @@ class TUI:
         )
 
     def _get_active_turns(self) -> list[Turn]:
-        """Get turns from active session."""
+        """Get filtered turns from active session."""
         session = self.store.get_active_session()
-        return session.turns if session else []
+        return self._get_filtered_turns(session)
 
     def _handle_input(self) -> bool:
         """Handle keyboard input. Returns False to quit."""
@@ -251,6 +300,7 @@ class TUI:
             self.store.set_active_session(int(key))
             self._selected_index = None
             self._scroll_offset = 0
+            self._filter_index = 0  # Reset filter on session change
             self._refresh_event.set()
 
         # Arrow keys
@@ -302,6 +352,22 @@ class TUI:
                 self._selected_index = 0
                 self._scroll_offset = 0
                 self._refresh_event.set()
+
+        elif key == "f":  # Cycle filter
+            self._filter_index = (self._filter_index + 1) % len(FILTERS)
+            self._selected_index = None
+            self._scroll_offset = 0
+            self._refresh_event.set()
+
+        elif key == "x":  # Export session
+            session = self.store.get_active_session()
+            if session:
+                filename = get_export_filename(session, "markdown")
+                output_path = Path.cwd() / filename
+                export_session_markdown(session, output_path)
+                self._show_status(f"Exported to {filename}")
+            else:
+                self._show_status("No session to export")
 
         return True
 
