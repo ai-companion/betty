@@ -33,15 +33,20 @@ STYLES = {
     "selected": Style(bold=True),
 }
 
-# Icons for tools
+# Icons for roles and tools (2 chars wide for alignment)
+ROLE_ICONS = {
+    "user": "👤",
+    "assistant": "🤖",
+}
+
 TOOL_ICONS = {
     "Read": "📄",
-    "Write": "✏️ ",
-    "Edit": "✏️ ",
+    "Write": "✏️",
+    "Edit": "✏️",
     "Bash": "💻",
     "Glob": "🔍",
     "Grep": "🔍",
-    "Task": "🤖",
+    "Task": "⚙️",
     "WebFetch": "🌐",
     "WebSearch": "🌐",
     "default": "🔧",
@@ -232,13 +237,15 @@ class TUI:
     def _render_turn(self, turn: Turn, is_selected: bool = False) -> Panel:
         """Render a single turn."""
         # Historical indicator for turns loaded from transcript
-        history_prefix = "[dim]◷[/dim] " if turn.is_historical else ""
+        history_prefix = "◷ " if turn.is_historical else ""
 
         if turn.role == "user":
-            title = f"{history_prefix}Turn {turn.turn_number} │ User"
+            icon = ROLE_ICONS["user"]
+            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} User"
             border_style = "blue" if not turn.is_historical else "dim blue"
         elif turn.role == "assistant":
-            title = f"{history_prefix}Turn {turn.turn_number} │ Assistant"
+            icon = ROLE_ICONS["assistant"]
+            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} Assistant"
             border_style = "green" if not turn.is_historical else "dim green"
         else:
             icon = get_tool_icon(turn.tool_name)
