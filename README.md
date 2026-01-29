@@ -39,6 +39,7 @@ The companion will automatically detect and display your Claude Code session.
 | `claude-companion install` | Install Claude Code hooks |
 | `claude-companion uninstall` | Remove Claude Code hooks |
 | `claude-companion status` | Check hook installation status |
+| `claude-companion config` | Configure LLM server for summarization |
 
 ## Options
 
@@ -47,11 +48,55 @@ The companion will automatically detect and display your Claude Code session.
 | `--port`, `-p` | HTTP server port (default: 5432) |
 | `--version`, `-v` | Show version |
 
+## LLM Summarization (Optional)
+
+The companion can summarize assistant responses using a local LLM. Supports:
+
+- **LM Studio** (recommended for Mac)
+- **Ollama**
+- **vLLM**
+
+### Setup with LM Studio
+
+```bash
+# 1. Start LM Studio and load a model
+# 2. Enable the local server in LM Studio (default: http://localhost:1234)
+# 3. Configure the companion
+claude-companion config --preset lm-studio
+
+# Or use custom settings
+claude-companion config --url http://localhost:1234/v1 --model your-model-name
+```
+
+### Setup with Ollama
+
+```bash
+# 1. Install Ollama: brew install ollama
+# 2. Start Ollama: ollama serve
+# 3. Pull a model: ollama pull qwen2.5:7b
+# 4. Configure the companion
+claude-companion config --preset ollama
+```
+
+### Environment Variables
+
+You can also configure via environment variables:
+
+```bash
+export CLAUDE_COMPANION_LLM_URL="http://localhost:1234/v1"
+export CLAUDE_COMPANION_LLM_MODEL="openai/gpt-oss-20b"
+claude-companion
+```
+
 ## TUI Keybindings
 
 | Key | Action |
 |-----|--------|
 | `1-9` | Switch between sessions |
+| `j/k` | Navigate turns |
+| `o` | Expand/collapse turn |
+| `s` | Toggle summary mode |
+| `f` | Filter turns |
 | `q` | Quit |
 | `r` | Refresh display |
 

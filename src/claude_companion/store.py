@@ -6,6 +6,7 @@ from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_alerts, send_system_notification
 from .cache import SummaryCache
+from .config import load_config
 from .models import Event, Session, Turn
 from .summarizer import Summarizer
 from .transcript import parse_transcript
@@ -25,7 +26,13 @@ class EventStore:
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
         self._watcher = TranscriptWatcher(self._on_watcher_turn)
-        self._summarizer = Summarizer()
+
+        # Load config and initialize summarizer
+        config = load_config()
+        self._summarizer = Summarizer(
+            base_url=config.llm.base_url,
+            model=config.llm.model,
+        )
         self._summary_cache = SummaryCache()
 
     def add_event(self, event: Event) -> None:
