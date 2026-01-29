@@ -5,25 +5,18 @@ import sys
 import threading
 import time
 from pathlib import Path
-from enum import Enum
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
+from rich.table import Table
 
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
 from .models import Event, Session, Turn
 from .store import EventStore
-
-
-class InputMode(Enum):
-    """Current input mode."""
-    NORMAL = "normal"
-    MONITOR = "monitor"
-    ASK = "ask"
 
 
 # Styles for different turn types
@@ -125,18 +118,19 @@ class TUI:
         self._refresh_event = threading.Event()
         self._selected_index: int | None = None  # Index into filtered turns
         self._scroll_offset = 0  # For scrolling through turns
-        self._max_visible_turns = 8  # Reduced to make room for input boxes
+        self._max_visible_turns = 10
         self._filter_index = 0  # Index into FILTERS
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
         self._show_alerts = True  # Whether to show alerts panel
         self._auto_scroll = True  # Auto-scroll to bottom on new events
 
-        # Input mode and text boxes
-        self._input_mode = InputMode.NORMAL
+        # Text boxes content
         self._monitor_text = ""  # Monitoring instructions
         self._ask_text = ""  # Ask about trace query
-        self._cursor_pos = 0  # Cursor position in current input
+
+        # Live display reference
+        self._live: Live | None = None
 
         # Register listener for store updates
         store.add_listener(self._on_event)
@@ -150,7 +144,7 @@ class TUI:
     def on_ask_submit(self, query: str) -> None:
         """Called when user submits an ask query. Override or set callback."""
         # Placeholder - will be used for LLM integration later
-        self._show_status(f"Query: {query[:30]}...")
+        self._show_status(f"Query submitted: {query[:30]}...")
 
     def _on_event(self, event: Event) -> None:
         """Called when a new event arrives."""
@@ -190,9 +184,8 @@ class TUI:
 
     def _render_header(self, sessions: list[Session], active: Session | None) -> Panel:
         """Render the header with session selector and stats."""
-        # Session selector
         session_parts = []
-        for i, session in enumerate(sessions[:9], 1):  # Max 9 sessions
+        for i, session in enumerate(sessions[:9], 1):
             if active and session.session_id == active.session_id:
                 session_parts.append(f"[bold reverse] {i} [/] {session.display_name}")
             else:
@@ -200,7 +193,6 @@ class TUI:
 
         sessions_text = "  ".join(session_parts) if session_parts else "[dim]No sessions[/dim]"
 
-        # Stats and filter
         if active:
             _, filter_label = FILTERS[self._filter_index]
             scroll_indicator = "" if self._auto_scroll else " [dim](paused)[/dim]"
@@ -229,12 +221,11 @@ class TUI:
         elif turn.role == "assistant":
             title = f"Turn {turn.turn_number} │ Assistant"
             border_style = "green"
-        else:  # tool
+        else:
             icon = get_tool_icon(turn.tool_name)
             title = f"Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
             border_style = get_tool_style(turn.tool_name)
 
-        # Show full content if expanded, preview otherwise
         if turn.expanded:
             content = turn.content_full
             expand_indicator = "[dim][-][/dim] "
@@ -245,12 +236,10 @@ class TUI:
             else:
                 expand_indicator = ""
 
-        # Add selection indicator
         if is_selected:
             title = f"► {title}"
             border_style = "white"
 
-        # Add word count for non-tool turns
         subtitle = None
         if turn.role in ("user", "assistant"):
             subtitle = f"{turn.word_count:,} words"
@@ -277,20 +266,17 @@ class TUI:
                 msg = "[dim]Waiting for activity...[/dim]"
             return Group(Panel(msg, border_style="dim"))
 
-        # Get visible turns with scrolling
         total_turns = len(filtered_turns)
         start_idx = self._scroll_offset
         end_idx = min(start_idx + self._max_visible_turns, total_turns)
         visible_turns = filtered_turns[start_idx:end_idx]
 
-        # Render each turn
         panels = []
         for i, turn in enumerate(visible_turns):
             global_idx = start_idx + i
             is_selected = self._selected_index == global_idx
             panels.append(self._render_turn(turn, is_selected))
 
-        # Add scroll indicators if needed
         if start_idx > 0:
             panels.insert(0, Text(f"  ↑ {start_idx} more above", style="dim"))
         if end_idx < total_turns:
@@ -304,7 +290,6 @@ class TUI:
             return None
 
         alerts = self.store.get_recent_alerts(3)
-        # Only show warnings and dangers
         alerts = [a for a in alerts if a.level in (AlertLevel.WARNING, AlertLevel.DANGER)]
 
         if not alerts:
@@ -318,72 +303,54 @@ class TUI:
             else:
                 icon = "⚠️ "
                 style = "yellow"
-
             lines.append(f"[{style}]{icon} {alert.title}[/{style}]: {alert.message}")
 
-        content = "\n".join(lines)
         return Panel(
-            content,
+            "\n".join(lines),
             title="[bold red]Alerts[/bold red]",
             title_align="left",
             border_style="red",
             padding=(0, 1),
         )
 
-    def _render_input_box(self, title: str, text: str, is_active: bool, key_hint: str) -> Panel:
-        """Render an input box."""
-        if is_active:
-            # Show cursor
-            display_text = text + "█"
-            border_style = "green"
-            title_style = "bold green"
-        else:
-            display_text = text if text else f"[dim]Press [{key_hint}] to edit[/dim]"
-            border_style = "dim"
-            title_style = "dim"
+    def _render_input_boxes(self) -> Table:
+        """Render the two input boxes as a table (different from turn panels)."""
+        table = Table.grid(expand=True)
+        table.add_column(ratio=1)
+        table.add_column(ratio=1)
 
-        return Panel(
-            display_text,
-            title=f"[{title_style}]{title}[/{title_style}]",
+        # Monitor box - use rounded style to differentiate
+        monitor_content = self._monitor_text if self._monitor_text else "[dim]Press [m] to set monitoring rules[/dim]"
+        monitor_box = Panel(
+            monitor_content,
+            title="[cyan]📋 Monitor[/cyan]",
             title_align="left",
-            border_style=border_style,
+            border_style="cyan",
             padding=(0, 1),
-            height=3,
+            style="on grey7",  # Subtle background
         )
 
-    def _render_input_boxes(self) -> Group:
-        """Render the two input boxes."""
-        monitor_box = self._render_input_box(
-            "Monitor Instructions",
-            self._monitor_text,
-            self._input_mode == InputMode.MONITOR,
-            "m"
+        # Ask box
+        ask_content = self._ask_text if self._ask_text else "[dim]Press [?] to ask about trace[/dim]"
+        ask_box = Panel(
+            ask_content,
+            title="[magenta]❓ Ask[/magenta]",
+            title_align="left",
+            border_style="magenta",
+            padding=(0, 1),
+            style="on grey7",
         )
-        ask_box = self._render_input_box(
-            "Ask About Trace",
-            self._ask_text,
-            self._input_mode == InputMode.ASK,
-            "?"
-        )
-        return Group(monitor_box, ask_box)
+
+        table.add_row(monitor_box, ask_box)
+        return table
 
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
-        # Check if we should show status message
         if self._status_message and time.time() < self._status_until:
             return Text.from_markup(f" [bold green]{self._status_message}[/bold green]")
 
         self._status_message = None
 
-        # Show different hints based on input mode
-        if self._input_mode != InputMode.NORMAL:
-            return Text.from_markup(
-                "[dim]Type to edit[/dim] │ "
-                "[dim]Enter[/dim]:Save │ "
-                "[dim]Esc[/dim]:Cancel"
-            )
-
-        # Show alert count if any
         alerts = self.store.get_alerts()
         danger_count = sum(1 for a in alerts if a.level == AlertLevel.DANGER)
         warn_count = sum(1 for a in alerts if a.level == AlertLevel.WARNING)
@@ -409,11 +376,8 @@ class TUI:
         sessions = self.store.get_sessions()
         active = self.store.get_active_session()
 
-        parts = [
-            self._render_header(sessions, active),
-        ]
+        parts = [self._render_header(sessions, active)]
 
-        # Add alerts panel if there are any
         alerts_panel = self._render_alerts()
         if alerts_panel:
             parts.append(alerts_panel)
@@ -429,48 +393,59 @@ class TUI:
         session = self.store.get_active_session()
         return self._get_filtered_turns(session)
 
-    def _process_input_key(self, key: str) -> bool:
-        """Process a key in input mode. Returns False to exit input mode."""
-        # Get current text based on mode
-        if self._input_mode == InputMode.MONITOR:
-            text = self._monitor_text
-        else:
-            text = self._ask_text
+    def _edit_text(self, title: str, initial: str) -> str:
+        """Open a native text input prompt. Returns edited text."""
+        import termios
+        import tty
 
-        if key == "\x1b" or key == "\x1b[":  # Escape
-            self._input_mode = InputMode.NORMAL
-            return True
+        # Stop live display temporarily
+        if self._live:
+            self._live.stop()
 
-        elif key == "\n" or key == "\r":  # Enter - save and exit
-            if self._input_mode == InputMode.ASK and text:
-                self.on_ask_submit(text)
-                self._ask_text = ""  # Clear after submit
-            self._input_mode = InputMode.NORMAL
-            return True
+        # Clear screen and show input prompt
+        self.console.clear()
+        self.console.print(f"\n[bold]{title}[/bold]")
+        self.console.print("[dim]Type your text, then press Enter to save (Esc to cancel)[/dim]\n")
 
-        elif key == "\x7f" or key == "\x08":  # Backspace
-            if text:
-                text = text[:-1]
+        # Show current value
+        text = initial
+        self.console.print(f"> {text}", end="", highlight=False)
 
-        elif len(key) == 1 and key.isprintable():  # Regular character
-            text += key
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
 
-        # Save back
-        if self._input_mode == InputMode.MONITOR:
-            self._monitor_text = text
-        else:
-            self._ask_text = text
+        try:
+            tty.setcbreak(fd)
+            while True:
+                char = sys.stdin.read(1)
 
-        self._refresh_event.set()
-        return True
+                if char == "\x1b":  # Escape
+                    text = initial  # Revert
+                    break
+                elif char == "\n" or char == "\r":  # Enter
+                    break
+                elif char == "\x7f" or char == "\x08":  # Backspace
+                    if text:
+                        text = text[:-1]
+                        # Clear line and reprint
+                        self.console.print("\r> " + text + " " * 10, end="", highlight=False)
+                        self.console.print("\r> " + text, end="", highlight=False)
+                elif char.isprintable():
+                    text += char
+                    self.console.print(char, end="", highlight=False)
+
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        # Restart live display
+        self.console.clear()
+        if self._live:
+            self._live.start()
+
+        return text
 
     def _process_key(self, key: str) -> bool:
         """Process a key press. Returns False to quit."""
-        # Handle input mode
-        if self._input_mode != InputMode.NORMAL:
-            self._process_input_key(key)
-            return True
-
         turns = self._get_active_turns()
         total_turns = len(turns)
 
@@ -480,84 +455,85 @@ class TUI:
         elif key == "r":
             self._refresh_event.set()
 
-        elif key == "m":  # Enter monitor input mode
-            self._input_mode = InputMode.MONITOR
+        elif key == "m":  # Edit monitor text
+            self._monitor_text = self._edit_text("Monitor Instructions", self._monitor_text)
             self._refresh_event.set()
 
-        elif key == "?":  # Enter ask input mode
-            self._input_mode = InputMode.ASK
+        elif key == "?":  # Edit ask text
+            new_text = self._edit_text("Ask About Trace", self._ask_text)
+            if new_text and new_text != self._ask_text:
+                self._ask_text = new_text
+                self.on_ask_submit(new_text)
+                self._ask_text = ""  # Clear after submit
             self._refresh_event.set()
 
         elif key.isdigit() and key != "0":
             self.store.set_active_session(int(key))
             self._selected_index = None
             self._scroll_offset = 0
-            self._filter_index = 0  # Reset filter on session change
+            self._filter_index = 0
             self._auto_scroll = True
             self._refresh_event.set()
 
-        # Vim keys for navigation
         elif key == "k" or key == "\x1b[A":  # k or Up arrow
-            self._auto_scroll = False  # User is navigating, disable auto-scroll
+            self._auto_scroll = False
             if total_turns > 0:
                 if self._selected_index is None:
                     self._selected_index = total_turns - 1
                 elif self._selected_index > 0:
                     self._selected_index -= 1
-                # Adjust scroll to keep selection visible
                 if self._selected_index < self._scroll_offset:
                     self._scroll_offset = self._selected_index
                 self._refresh_event.set()
 
         elif key == "j" or key == "\x1b[B":  # j or Down arrow
-            self._auto_scroll = False  # User is navigating, disable auto-scroll
+            self._auto_scroll = False
             if total_turns > 0:
                 if self._selected_index is None:
                     self._selected_index = 0
                 elif self._selected_index < total_turns - 1:
                     self._selected_index += 1
-                # Adjust scroll to keep selection visible
                 if self._selected_index >= self._scroll_offset + self._max_visible_turns:
                     self._scroll_offset = self._selected_index - self._max_visible_turns + 1
                 self._refresh_event.set()
 
-        elif key == "\n" or key == "\r" or key == " " or key == "o":  # Enter, Space, or o
+        elif key == "\n" or key == "\r" or key == " " or key == "o":
             if self._selected_index is not None and 0 <= self._selected_index < total_turns:
                 turns[self._selected_index].expanded = not turns[self._selected_index].expanded
                 self._refresh_event.set()
 
-        elif key == "e":  # Expand all
+        elif key == "e":
             for turn in turns:
                 turn.expanded = True
             self._refresh_event.set()
 
-        elif key == "c":  # Collapse all
+        elif key == "c":
             for turn in turns:
                 turn.expanded = False
             self._refresh_event.set()
 
-        elif key == "G":  # Go to end and re-enable auto-scroll
+        elif key == "G":
             if total_turns > 0:
                 self._selected_index = total_turns - 1
                 self._scroll_offset = max(0, total_turns - self._max_visible_turns)
                 self._auto_scroll = True
                 self._refresh_event.set()
 
-        elif key == "g":  # Go to beginning
+        elif key == "g":
             self._auto_scroll = False
             if total_turns > 0:
                 self._selected_index = 0
                 self._scroll_offset = 0
                 self._refresh_event.set()
 
-        elif key == "f":  # Cycle filter
+        elif key == "f":
             self._filter_index = (self._filter_index + 1) % len(FILTERS)
             self._selected_index = None
             self._scroll_offset = 0
             self._auto_scroll = True
             self._refresh_event.set()
 
-        elif key == "x":  # Export session
+        elif key == "x":
             session = self.store.get_active_session()
             if session:
                 filename = get_export_filename(session, "markdown")
@@ -567,7 +543,7 @@ class TUI:
             else:
                 self._show_status("No session to export")
 
-        elif key == "a":  # Toggle/clear alerts
+        elif key == "a":
             if self.store.get_alerts():
                 self.store.clear_alerts()
                 self._show_status("Alerts cleared")
@@ -586,27 +562,23 @@ class TUI:
             with Live(
                 self._render(),
                 console=self.console,
-                refresh_per_second=10,  # Higher rate for smoother typing
+                refresh_per_second=4,
                 screen=True,
                 vertical_overflow="visible",
             ) as live:
+                self._live = live
                 while self._running:
-                    # Check for keyboard input
                     key = keys.read_key()
                     if key:
                         if not self._process_key(key):
                             break
-                        # Immediate refresh after keypress for responsive typing
-                        live.update(self._render())
-                        continue  # Check for more keys immediately
 
-                    # Wait for event or timeout (shorter in input mode)
-                    timeout = 0.05 if self._input_mode != InputMode.NORMAL else 0.2
-                    self._refresh_event.wait(timeout=timeout)
+                    self._refresh_event.wait(timeout=0.2)
                     self._refresh_event.clear()
 
-                    # Update display
                     live.update(self._render())
+
+                self._live = None
 
     def stop(self) -> None:
         """Stop the TUI."""
