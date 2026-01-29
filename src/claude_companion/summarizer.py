@@ -1,4 +1,4 @@
-"""LLM summarization for assistant turns using vLLM server."""
+"""LLM summarization for assistant turns using OpenAI-compatible server."""
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -10,18 +10,14 @@ from .models import Turn
 
 logger = logging.getLogger(__name__)
 
-# Default vLLM server configuration
-DEFAULT_BASE_URL = "http://localhost:8008/v1"
-DEFAULT_MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
-
 
 class Summarizer:
-    """Summarizes assistant turns using a local vLLM server."""
+    """Summarizes assistant turns using an OpenAI-compatible server (vLLM, LM Studio, Ollama)."""
 
     def __init__(
         self,
-        base_url: str = DEFAULT_BASE_URL,
-        model: str = DEFAULT_MODEL,
+        base_url: str,
+        model: str,
         max_workers: int = 2,
     ):
         self.base_url = base_url.rstrip("/")
