@@ -2,7 +2,7 @@
 
 import sys
 import threading
-from datetime import datetime
+import time
 from pathlib import Path
 
 from rich.console import Console, Group
@@ -89,7 +89,9 @@ class TUI:
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
         self._show_alerts = True  # Whether to show alerts panel
-        self._pending_alert: Alert | None = None  # Most recent alert to highlight
+        self._auto_scroll = True  # Auto-scroll to bottom on new events
+        self._key_queue: list[str] = []  # Queue for keyboard input
+        self._key_lock = threading.Lock()
 
         # Register listener for store updates
         store.add_listener(self._on_event)
@@ -97,11 +99,18 @@ class TUI:
 
     def _on_event(self, event: Event) -> None:
         """Called when a new event arrives."""
+        # Auto-scroll to show new content
+        if self._auto_scroll:
+            session = self.store.get_active_session()
+            if session:
+                filtered = self._get_filtered_turns(session)
+                total = len(filtered)
+                if total > self._max_visible_turns:
+                    self._scroll_offset = total - self._max_visible_turns
         self._refresh_event.set()
 
     def _on_alert(self, alert: Alert) -> None:
         """Called when a new alert is triggered."""
-        self._pending_alert = alert
         self._refresh_event.set()
 
     def _get_filtered_turns(self, session: Session | None) -> list[Turn]:
@@ -120,7 +129,6 @@ class TUI:
 
     def _show_status(self, message: str, duration: float = 3.0) -> None:
         """Show a temporary status message."""
-        import time
         self._status_message = message
         self._status_until = time.time() + duration
         self._refresh_event.set()
@@ -140,11 +148,12 @@ class TUI:
         # Stats and filter
         if active:
             _, filter_label = FILTERS[self._filter_index]
+            scroll_indicator = "" if self._auto_scroll else " [dim](scrolled)[/dim]"
             stats = (
                 f"[dim]Model:[/dim] {active.model}  "
                 f"[dim]Words:[/dim] ↓{active.total_input_words:,} ↑{active.total_output_words:,}  "
                 f"[dim]Tools:[/dim] {active.total_tool_calls}  "
-                f"[dim]Filter:[/dim] {filter_label}"
+                f"[dim]Filter:[/dim] {filter_label}{scroll_indicator}"
             )
         else:
             stats = "[dim]Waiting for session...[/dim]"
@@ -268,8 +277,6 @@ class TUI:
 
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
-        import time
-
         # Check if we should show status message
         if self._status_message and time.time() < self._status_until:
             return Text.from_markup(f" [bold green]{self._status_message}[/bold green]")
@@ -290,7 +297,7 @@ class TUI:
         return Text.from_markup(
             f"{alert_indicator} "
             "[dim][1-9][/dim] Session  "
-            "[dim][↑↓][/dim] Navigate  "
+            "[dim][↑↓/jk][/dim] Navigate  "
             "[dim][f][/dim] Filter  "
             "[dim][x][/dim] Export  "
             "[dim][a][/dim] Alerts  "
@@ -321,29 +328,42 @@ class TUI:
         session = self.store.get_active_session()
         return self._get_filtered_turns(session)
 
-    def _handle_input(self) -> bool:
-        """Handle keyboard input. Returns False to quit."""
+    def _input_thread(self) -> None:
+        """Thread for reading keyboard input."""
         import select
         import termios
         import tty
 
-        # Check if input is available (non-blocking)
-        old_settings = termios.tcgetattr(sys.stdin)
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
         try:
-            tty.setcbreak(sys.stdin.fileno())
-            if select.select([sys.stdin], [], [], 0)[0]:
-                char = sys.stdin.read(1)
+            tty.setraw(fd)
+            while self._running:
+                # Check if input available with timeout
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    char = sys.stdin.read(1)
 
-                # Handle escape sequences (arrow keys)
-                if char == "\x1b":
-                    # Read the rest of the escape sequence
-                    if select.select([sys.stdin], [], [], 0.1)[0]:
-                        char += sys.stdin.read(2)
+                    # Handle escape sequences (arrow keys)
+                    if char == "\x1b":
+                        if select.select([sys.stdin], [], [], 0.05)[0]:
+                            char += sys.stdin.read(2)
 
-                return self._process_key(char)
+                    with self._key_lock:
+                        self._key_queue.append(char)
+                    self._refresh_event.set()
         finally:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
+    def _process_keys(self) -> bool:
+        """Process queued key presses. Returns False to quit."""
+        with self._key_lock:
+            keys = self._key_queue.copy()
+            self._key_queue.clear()
+
+        for key in keys:
+            if not self._process_key(key):
+                return False
         return True
 
     def _process_key(self, key: str) -> bool:
@@ -351,7 +371,7 @@ class TUI:
         turns = self._get_active_turns()
         total_turns = len(turns)
 
-        if key == "q":
+        if key == "q" or key == "\x03":  # q or Ctrl+C
             return False
 
         elif key == "r":
@@ -362,10 +382,12 @@ class TUI:
             self._selected_index = None
             self._scroll_offset = 0
             self._filter_index = 0  # Reset filter on session change
+            self._auto_scroll = True
             self._refresh_event.set()
 
-        # Arrow keys
-        elif key == "\x1b[A":  # Up arrow
+        # Arrow keys and vim keys
+        elif key == "\x1b[A" or key == "k":  # Up arrow or k
+            self._auto_scroll = False  # User is navigating, disable auto-scroll
             if total_turns > 0:
                 if self._selected_index is None:
                     self._selected_index = total_turns - 1
@@ -376,7 +398,8 @@ class TUI:
                     self._scroll_offset = self._selected_index
                 self._refresh_event.set()
 
-        elif key == "\x1b[B":  # Down arrow
+        elif key == "\x1b[B" or key == "j":  # Down arrow or j
+            self._auto_scroll = False  # User is navigating, disable auto-scroll
             if total_turns > 0:
                 if self._selected_index is None:
                     self._selected_index = 0
@@ -387,7 +410,7 @@ class TUI:
                     self._scroll_offset = self._selected_index - self._max_visible_turns + 1
                 self._refresh_event.set()
 
-        elif key == "\n" or key == "\r":  # Enter
+        elif key == "\n" or key == "\r" or key == " ":  # Enter or Space
             if self._selected_index is not None and 0 <= self._selected_index < total_turns:
                 turns[self._selected_index].expanded = not turns[self._selected_index].expanded
                 self._refresh_event.set()
@@ -402,13 +425,15 @@ class TUI:
                 turn.expanded = False
             self._refresh_event.set()
 
-        elif key == "G":  # Go to end
+        elif key == "G":  # Go to end and re-enable auto-scroll
             if total_turns > 0:
                 self._selected_index = total_turns - 1
                 self._scroll_offset = max(0, total_turns - self._max_visible_turns)
+                self._auto_scroll = True
                 self._refresh_event.set()
 
         elif key == "g":  # Go to beginning
+            self._auto_scroll = False
             if total_turns > 0:
                 self._selected_index = 0
                 self._scroll_offset = 0
@@ -418,6 +443,7 @@ class TUI:
             self._filter_index = (self._filter_index + 1) % len(FILTERS)
             self._selected_index = None
             self._scroll_offset = 0
+            self._auto_scroll = True
             self._refresh_event.set()
 
         elif key == "x":  # Export session
@@ -445,23 +471,30 @@ class TUI:
         """Run the TUI."""
         self._running = True
 
-        with Live(
-            self._render(),
-            console=self.console,
-            refresh_per_second=4,
-            screen=True,
-        ) as live:
-            while self._running:
-                # Wait for event or timeout
-                self._refresh_event.wait(timeout=0.25)
-                self._refresh_event.clear()
+        # Start input thread
+        input_thread = threading.Thread(target=self._input_thread, daemon=True)
+        input_thread.start()
 
-                # Handle input
-                if not self._handle_input():
-                    break
+        try:
+            with Live(
+                self._render(),
+                console=self.console,
+                refresh_per_second=4,
+                screen=True,
+            ) as live:
+                while self._running:
+                    # Wait for event or timeout
+                    self._refresh_event.wait(timeout=0.25)
+                    self._refresh_event.clear()
 
-                # Update display
-                live.update(self._render())
+                    # Process keyboard input
+                    if not self._process_keys():
+                        break
+
+                    # Update display
+                    live.update(self._render())
+        finally:
+            self._running = False
 
     def stop(self) -> None:
         """Stop the TUI."""
