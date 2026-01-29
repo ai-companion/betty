@@ -257,21 +257,21 @@ class TUI:
 
         if turn.expanded:
             content = turn.content_full
-            expand_indicator = "[dim]\\[-][/dim] "
+            expand_indicator = "\\[-] "
         else:
             # For assistant turns, show summary if available and enabled
             if turn.role == "assistant" and self._use_summary:
                 if turn.summary:
                     content = turn.summary
-                    expand_indicator = "[dim]\\[tldr;][/dim] "
+                    expand_indicator = "\\[tldr;] "
                 else:
                     # Summary pending - use Markdown italic to keep inline
                     content = f"{turn.content_preview} *\\[summarizing...]*"
-                    expand_indicator = "[dim]\\[+][/dim] " if turn.content_full != turn.content_preview else ""
+                    expand_indicator = "\\[+] " if turn.content_full != turn.content_preview else ""
             else:
                 content = turn.content_preview
                 if turn.content_full != turn.content_preview:
-                    expand_indicator = "[dim]\\[+][/dim] "
+                    expand_indicator = "\\[+] "
                 else:
                     expand_indicator = ""
 
@@ -285,10 +285,8 @@ class TUI:
 
         # Render assistant content as Markdown for proper formatting
         if turn.role == "assistant":
-            # Use Group to combine indicator and markdown content
-            indicator = Text.from_markup(expand_indicator) if expand_indicator else None
-            md_content = Markdown(content)
-            panel_content = Group(indicator, md_content) if indicator else md_content
+            # Prepend indicator to content for inline display
+            panel_content = Markdown(f"{expand_indicator}{content}")
         else:
             panel_content = f"{expand_indicator}{content}"
 
