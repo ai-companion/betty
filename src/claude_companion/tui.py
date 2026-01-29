@@ -129,6 +129,7 @@ class TUI:
         self._status_until: float = 0  # When to clear status message
         self._show_alerts = True  # Whether to show alerts panel
         self._auto_scroll = True  # Auto-scroll to bottom on new events
+        self._use_summary = True  # Use LLM summary vs first few chars for assistant preview
 
         # Text boxes content
         self._monitor_text = ""  # Monitoring instructions
@@ -255,13 +256,23 @@ class TUI:
 
         if turn.expanded:
             content = turn.content_full
-            expand_indicator = "[dim][-][/dim] "
+            expand_indicator = "[dim]\\[-][/dim] "
         else:
-            content = turn.content_preview
-            if turn.content_full != turn.content_preview:
-                expand_indicator = "[dim][+][/dim] "
+            # For assistant turns, show summary if available and enabled
+            if turn.role == "assistant" and self._use_summary:
+                if turn.summary:
+                    content = turn.summary
+                    expand_indicator = "[dim]\\[tldr;][/dim] "
+                else:
+                    # Summary pending
+                    content = f"{turn.content_preview} [dim italic]\\[summarizing...][/dim italic]"
+                    expand_indicator = "[dim]\\[+][/dim] " if turn.content_full != turn.content_preview else ""
             else:
-                expand_indicator = ""
+                content = turn.content_preview
+                if turn.content_full != turn.content_preview:
+                    expand_indicator = "[dim]\\[+][/dim] "
+                else:
+                    expand_indicator = ""
 
         if is_selected:
             title = f"► {title}"
@@ -391,7 +402,9 @@ class TUI:
         return Text.from_markup(
             f"{alert_indicator}"
             "[dim]j/k[/dim]:nav "
+            "[dim]g/G[/dim]:end "
             "[dim]o[/dim]:open "
+            "[dim]s/S[/dim]:summary "
             "[dim]f[/dim]:filter "
             "[dim]m[/dim]:monitor "
             "[dim]?[/dim]:ask "
@@ -577,6 +590,20 @@ class TUI:
             else:
                 self._show_alerts = not self._show_alerts
                 self._show_status(f"Alerts {'shown' if self._show_alerts else 'hidden'}")
+            self._refresh_event.set()
+
+        elif key == "s":
+            self._use_summary = not self._use_summary
+            mode = "summary" if self._use_summary else "preview"
+            self._show_status(f"Preview mode: {mode}")
+            self._refresh_event.set()
+
+        elif key == "S":  # Summarize all historical turns without summaries
+            count = self.store.summarize_historical_turns()
+            if count > 0:
+                self._show_status(f"Summarizing {count} historical turns...")
+            else:
+                self._show_status("No historical turns need summarization")
             self._refresh_event.set()
 
         return True

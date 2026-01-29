@@ -57,6 +57,7 @@ class Turn:
     timestamp: datetime = field(default_factory=datetime.now)
     expanded: bool = False
     is_historical: bool = False  # True if loaded from transcript history
+    summary: str | None = None  # LLM-generated summary for assistant turns
 
     @classmethod
     def from_event(cls, event: Event, turn_number: int) -> "Turn | None":
