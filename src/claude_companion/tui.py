@@ -196,10 +196,13 @@ class TUI:
         if active:
             _, filter_label = FILTERS[self._filter_index]
             scroll_indicator = "" if self._auto_scroll else " [dim](paused)[/dim]"
+            historical_count = sum(1 for t in active.turns if t.is_historical)
+            live_count = len(active.turns) - historical_count
+            turns_info = f"◷{historical_count}+{live_count}" if historical_count else f"{live_count}"
             stats = (
                 f"[dim]Model:[/dim] {active.model}  "
                 f"[dim]Words:[/dim] ↓{active.total_input_words:,} ↑{active.total_output_words:,}  "
-                f"[dim]Tools:[/dim] {active.total_tool_calls}  "
+                f"[dim]Turns:[/dim] {turns_info}  "
                 f"[dim]Filter:[/dim] {filter_label}{scroll_indicator}"
             )
         else:
@@ -215,16 +218,20 @@ class TUI:
 
     def _render_turn(self, turn: Turn, is_selected: bool = False) -> Panel:
         """Render a single turn."""
+        # Historical indicator for turns loaded from transcript
+        history_prefix = "[dim]◷[/dim] " if turn.is_historical else ""
+
         if turn.role == "user":
-            title = f"Turn {turn.turn_number} │ User"
-            border_style = "blue"
+            title = f"{history_prefix}Turn {turn.turn_number} │ User"
+            border_style = "blue" if not turn.is_historical else "dim blue"
         elif turn.role == "assistant":
-            title = f"Turn {turn.turn_number} │ Assistant"
-            border_style = "green"
+            title = f"{history_prefix}Turn {turn.turn_number} │ Assistant"
+            border_style = "green" if not turn.is_historical else "dim green"
         else:
             icon = get_tool_icon(turn.tool_name)
-            title = f"Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
-            border_style = get_tool_style(turn.tool_name)
+            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
+            base_style = get_tool_style(turn.tool_name)
+            border_style = base_style if not turn.is_historical else f"dim {base_style}"
 
         if turn.expanded:
             content = turn.content_full

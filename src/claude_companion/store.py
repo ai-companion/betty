@@ -6,6 +6,7 @@ from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_event_for_alerts, send_system_notification
 from .models import Event, Session
+from .transcript import get_transcript_path, parse_transcript
 
 
 class EventStore:
@@ -38,9 +39,11 @@ class EventStore:
             # Add event to session
             self._sessions[session_id].add_event(event)
 
-            # Auto-switch to new session on SessionStart
+            # Auto-switch to new session on SessionStart and load history
             if event.event_type == "SessionStart":
                 self._active_session_id = session_id
+                # Load transcript history
+                self._load_transcript_history(session_id, event.cwd)
 
         # Check for alerts
         alerts = check_event_for_alerts(event)
@@ -133,3 +136,25 @@ class EventStore:
         """Remove an alert listener."""
         if listener in self._alert_listeners:
             self._alert_listeners.remove(listener)
+
+    def _load_transcript_history(self, session_id: str, cwd: str | None) -> None:
+        """Load historical turns from transcript file."""
+        if not cwd:
+            return
+
+        transcript_path = get_transcript_path(session_id, cwd)
+        if not transcript_path:
+            return
+
+        session = self._sessions.get(session_id)
+        if not session:
+            return
+
+        # Parse transcript and prepend historical turns
+        historical_turns = parse_transcript(transcript_path)
+        if historical_turns:
+            # Prepend historical turns before any new turns
+            session.turns = historical_turns + session.turns
+            # Renumber all turns
+            for i, turn in enumerate(session.turns):
+                turn.turn_number = i + 1
