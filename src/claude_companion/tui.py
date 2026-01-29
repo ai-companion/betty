@@ -117,7 +117,7 @@ class TUI:
         self._refresh_event = threading.Event()
         self._selected_index: int | None = None  # Index into filtered turns
         self._scroll_offset = 0  # For scrolling through turns
-        self._max_visible_turns = 15
+        self._max_visible_turns = 10  # Keep lower to ensure footer is visible
         self._filter_index = 0  # Index into FILTERS
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
@@ -326,13 +326,13 @@ class TUI:
             alert_indicator = f" [yellow]⚠️  {warn_count}[/yellow]"
 
         return Text.from_markup(
-            f"{alert_indicator} "
-            "[dim][1-9][/dim] Session  "
-            "[dim][jk][/dim] Navigate  "
-            "[dim][f][/dim] Filter  "
-            "[dim][x][/dim] Export  "
-            "[dim][a][/dim] Alerts  "
-            "[dim][q][/dim] Quit"
+            f"{alert_indicator}"
+            "[dim]j/k[/dim]:Nav "
+            "[dim]o[/dim]:Open "
+            "[dim]f[/dim]:Filter "
+            "[dim]x[/dim]:Export "
+            "[dim]a[/dim]:Alerts "
+            "[dim]q[/dim]:Quit"
         )
 
     def _render(self) -> Group:
