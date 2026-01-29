@@ -255,7 +255,6 @@ class TUI:
             base_style = get_tool_style(turn.tool_name)
             border_style = base_style if not turn.is_historical else f"dim {base_style}"
 
-        content_suffix = ""  # Rich markup suffix (e.g., summarizing indicator)
         if turn.expanded:
             content = turn.content_full
             expand_indicator = "[dim]\\[-][/dim] "
@@ -266,9 +265,8 @@ class TUI:
                     content = turn.summary
                     expand_indicator = "[dim]\\[tldr;][/dim] "
                 else:
-                    # Summary pending - keep suffix separate for proper rendering
-                    content = turn.content_preview
-                    content_suffix = " [dim italic]\\[summarizing...][/dim italic]"
+                    # Summary pending - use Markdown italic to keep inline
+                    content = f"{turn.content_preview} *\\[summarizing...]*"
                     expand_indicator = "[dim]\\[+][/dim] " if turn.content_full != turn.content_preview else ""
             else:
                 content = turn.content_preview
@@ -287,14 +285,10 @@ class TUI:
 
         # Render assistant content as Markdown for proper formatting
         if turn.role == "assistant":
-            # Use Group to combine indicator, markdown content, and suffix
-            parts = []
-            if expand_indicator:
-                parts.append(Text.from_markup(expand_indicator))
-            parts.append(Markdown(content))
-            if content_suffix:
-                parts.append(Text.from_markup(content_suffix))
-            panel_content = Group(*parts)
+            # Use Group to combine indicator and markdown content
+            indicator = Text.from_markup(expand_indicator) if expand_indicator else None
+            md_content = Markdown(content)
+            panel_content = Group(indicator, md_content) if indicator else md_content
         else:
             panel_content = f"{expand_indicator}{content}"
 
