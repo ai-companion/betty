@@ -363,12 +363,12 @@ class TUI:
 
         return Text.from_markup(
             f"{alert_indicator}"
-            "[dim]j/k[/dim]:Nav "
-            "[dim]o[/dim]:Open "
-            "[dim]f[/dim]:Filter "
-            "[dim]m[/dim]:Monitor "
-            "[dim]?[/dim]:Ask "
-            "[dim]q[/dim]:Quit"
+            "[dim]j/k[/dim]:nav "
+            "[dim]o[/dim]:open "
+            "[dim]f[/dim]:filter "
+            "[dim]m[/dim]:monitor "
+            "[dim]?[/dim]:ask "
+            "[dim]q[/dim]:quit"
         )
 
     def _render(self) -> Group:
