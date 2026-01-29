@@ -586,7 +586,7 @@ class TUI:
             with Live(
                 self._render(),
                 console=self.console,
-                refresh_per_second=2,
+                refresh_per_second=10,  # Higher rate for smoother typing
                 screen=True,
                 vertical_overflow="visible",
             ) as live:
@@ -596,9 +596,13 @@ class TUI:
                     if key:
                         if not self._process_key(key):
                             break
+                        # Immediate refresh after keypress for responsive typing
+                        live.update(self._render())
+                        continue  # Check for more keys immediately
 
-                    # Wait for event or timeout
-                    self._refresh_event.wait(timeout=0.2)
+                    # Wait for event or timeout (shorter in input mode)
+                    timeout = 0.05 if self._input_mode != InputMode.NORMAL else 0.2
+                    self._refresh_event.wait(timeout=timeout)
                     self._refresh_event.clear()
 
                     # Update display
