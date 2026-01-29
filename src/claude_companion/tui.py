@@ -135,6 +135,7 @@ class TUI:
         # Register listener for store updates
         store.add_listener(self._on_event)
         store.add_alert_listener(self._on_alert)
+        store.add_turn_listener(self._on_turn)
 
     @property
     def monitor_instruction(self) -> str:
@@ -160,6 +161,18 @@ class TUI:
 
     def _on_alert(self, alert: Alert) -> None:
         """Called when a new alert is triggered."""
+        self._refresh_event.set()
+
+    def _on_turn(self, turn: Turn) -> None:
+        """Called when a new turn arrives from transcript watcher."""
+        # Auto-scroll to show new content
+        if self._auto_scroll:
+            session = self.store.get_active_session()
+            if session:
+                filtered = self._get_filtered_turns(session)
+                total = len(filtered)
+                if total > self._max_visible_turns:
+                    self._scroll_offset = total - self._max_visible_turns
         self._refresh_event.set()
 
     def _get_filtered_turns(self, session: Session | None) -> list[Turn]:

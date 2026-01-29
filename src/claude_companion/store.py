@@ -5,8 +5,9 @@ from datetime import datetime
 from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_event_for_alerts, send_system_notification
-from .models import Event, Session
+from .models import Event, Session, Turn
 from .transcript import parse_transcript
+from .watcher import TranscriptWatcher
 
 
 class EventStore:
@@ -18,8 +19,10 @@ class EventStore:
         self._lock = threading.Lock()
         self._listeners: list[Callable[[Event], None]] = []
         self._alert_listeners: list[Callable[[Alert], None]] = []
+        self._turn_listeners: list[Callable[[Turn], None]] = []
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
+        self._watcher = TranscriptWatcher(self._on_watcher_turn)
 
     def add_event(self, event: Event) -> None:
         """Add an event to the store."""
@@ -44,6 +47,10 @@ class EventStore:
                 self._active_session_id = session_id
                 # Load transcript history using transcript_path from hook
                 self._load_transcript_history(session_id, event.transcript_path)
+                # Start watching for new content
+                if event.transcript_path:
+                    start_turn = len(self._sessions[session_id].turns)
+                    self._watcher.watch(event.transcript_path, start_turn)
 
         # Check for alerts
         alerts = check_event_for_alerts(event)
@@ -136,6 +143,36 @@ class EventStore:
         """Remove an alert listener."""
         if listener in self._alert_listeners:
             self._alert_listeners.remove(listener)
+
+    def add_turn_listener(self, listener: Callable[[Turn], None]) -> None:
+        """Add a listener to be called on new turns from watcher."""
+        self._turn_listeners.append(listener)
+
+    def remove_turn_listener(self, listener: Callable[[Turn], None]) -> None:
+        """Remove a turn listener."""
+        if listener in self._turn_listeners:
+            self._turn_listeners.remove(listener)
+
+    def _on_watcher_turn(self, turn: Turn) -> None:
+        """Handle new turn from transcript watcher."""
+        with self._lock:
+            if self._active_session_id:
+                session = self._sessions.get(self._active_session_id)
+                if session:
+                    # Renumber turn based on current session turns
+                    turn.turn_number = len(session.turns) + 1
+                    session.turns.append(turn)
+
+        # Notify turn listeners (outside lock)
+        for listener in self._turn_listeners:
+            try:
+                listener(turn)
+            except Exception:
+                pass
+
+    def stop(self) -> None:
+        """Stop the watcher."""
+        self._watcher.stop()
 
     def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> None:
         """Load historical turns from transcript file."""

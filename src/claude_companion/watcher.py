@@ -1,0 +1,133 @@
+"""Watch transcript files for real-time updates."""
+
+import json
+import threading
+import time
+from pathlib import Path
+from typing import Callable
+
+from .models import Turn, count_words, _truncate
+
+
+class TranscriptWatcher:
+    """Watch a transcript file for new entries."""
+
+    def __init__(self, on_turn: Callable[[Turn], None]):
+        self._on_turn = on_turn
+        self._current_path: Path | None = None
+        self._last_position: int = 0
+        self._turn_number: int = 0
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def watch(self, transcript_path: str, start_turn: int = 0) -> None:
+        """Start watching a transcript file."""
+        path = Path(transcript_path)
+        if not path.exists():
+            return
+
+        with self._lock:
+            self._current_path = path
+            self._last_position = path.stat().st_size  # Start from end
+            self._turn_number = start_turn
+
+        if not self._running:
+            self._running = True
+            self._thread = threading.Thread(target=self._watch_loop, daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        """Stop watching."""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1.0)
+
+    def _watch_loop(self) -> None:
+        """Main watch loop - poll for new content."""
+        while self._running:
+            try:
+                self._check_for_updates()
+            except Exception:
+                pass  # Don't crash on errors
+            time.sleep(0.5)  # Poll every 500ms
+
+    def _check_for_updates(self) -> None:
+        """Check for new content in the transcript file."""
+        with self._lock:
+            path = self._current_path
+            pos = self._last_position
+
+        if not path or not path.exists():
+            return
+
+        current_size = path.stat().st_size
+        if current_size <= pos:
+            return  # No new content
+
+        # Read new content
+        with open(path, "r") as f:
+            f.seek(pos)
+            new_content = f.read()
+            new_position = f.tell()
+
+        with self._lock:
+            self._last_position = new_position
+
+        # Parse new lines
+        for line in new_content.strip().split("\n"):
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                turns = self._parse_entry(entry)
+                for turn in turns:
+                    self._on_turn(turn)
+            except json.JSONDecodeError:
+                continue
+
+    def _parse_entry(self, entry: dict) -> list[Turn]:
+        """Parse a transcript entry and return turns."""
+        turns: list[Turn] = []
+        entry_type = entry.get("type", "")
+
+        if entry_type == "user":
+            message = entry.get("message", {})
+            content = message.get("content", "")
+            if isinstance(content, str) and content:
+                with self._lock:
+                    self._turn_number += 1
+                    turn_num = self._turn_number
+                turns.append(Turn(
+                    turn_number=turn_num,
+                    role="user",
+                    content_preview=_truncate(content, 100),
+                    content_full=content,
+                    word_count=count_words(content),
+                ))
+
+        elif entry_type == "assistant":
+            message = entry.get("message", {})
+            content = message.get("content", [])
+
+            if isinstance(content, list):
+                for block in content:
+                    block_type = block.get("type", "")
+
+                    if block_type == "text":
+                        text = block.get("text", "")
+                        if text:
+                            with self._lock:
+                                self._turn_number += 1
+                                turn_num = self._turn_number
+                            turns.append(Turn(
+                                turn_number=turn_num,
+                                role="assistant",
+                                content_preview=_truncate(text, 100),
+                                content_full=text,
+                                word_count=count_words(text),
+                            ))
+
+                    # Skip tool_use - already handled by hooks
+
+        return turns

@@ -56,6 +56,7 @@ def run_companion(port: int) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        store.stop()
         server.shutdown()
         console.print("\n[dim]Goodbye![/dim]")
 
