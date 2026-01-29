@@ -105,6 +105,7 @@ class TUI:
         return Panel(
             content,
             title="[bold]Claude Companion[/bold]",
+            title_align="left",
             border_style="blue",
         )
 
@@ -132,7 +133,9 @@ class TUI:
         return Panel(
             content,
             title=title,
+            title_align="left",
             subtitle=subtitle,
+            subtitle_align="right",
             border_style=border_style,
             padding=(0, 1),
         )
