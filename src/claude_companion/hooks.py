@@ -20,10 +20,11 @@ HOOK_MARKER = "claude-companion"
 
 
 def _make_hook_command(port: int) -> str:
-    """Create the curl command for a hook."""
+    """Create the curl command for a hook. Fails silently if server not running."""
     return (
-        f"curl -s -X POST http://localhost:{port}/event "
+        f"curl -s --connect-timeout 1 -X POST http://localhost:{port}/event "
         f"-H 'Content-Type: application/json' -d \"$(cat)\" "
+        f">/dev/null 2>&1 || true "
         f"# {HOOK_MARKER}"
     )
 
