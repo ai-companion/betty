@@ -24,12 +24,17 @@ class TranscriptWatcher:
     def watch(self, transcript_path: str, start_turn: int = 0) -> None:
         """Start watching a transcript file."""
         path = Path(transcript_path)
-        if not path.exists():
-            return
+
+        # Wait for file to exist (up to 2 seconds)
+        for _ in range(20):
+            if path.exists():
+                break
+            time.sleep(0.1)
 
         with self._lock:
             self._current_path = path
-            self._last_position = path.stat().st_size  # Start from end
+            # Start from end if file exists, otherwise from 0
+            self._last_position = path.stat().st_size if path.exists() else 0
             self._turn_number = start_turn
 
         if not self._running:

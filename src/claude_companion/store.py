@@ -180,7 +180,16 @@ class EventStore:
             return
 
         from pathlib import Path
+        import time
+
         path = Path(transcript_path)
+
+        # Wait for file to exist (up to 2 seconds)
+        for _ in range(20):
+            if path.exists():
+                break
+            time.sleep(0.1)
+
         if not path.exists():
             return
 
@@ -190,6 +199,7 @@ class EventStore:
 
         # Parse transcript and prepend historical turns
         historical_turns = parse_transcript(path)
+
         if historical_turns:
             # Prepend historical turns before any new turns
             session.turns = historical_turns + session.turns
