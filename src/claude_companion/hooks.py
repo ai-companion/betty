@@ -106,7 +106,9 @@ def uninstall_hooks() -> dict[str, str]:
     hooks = settings.get("hooks", {})
     results = {}
 
-    for event in HOOK_EVENTS:
+    # Iterate over ALL events in settings, not just HOOK_EVENTS
+    # This ensures we clean up legacy hooks from older versions
+    for event in list(hooks.keys()):
         event_hooks = hooks.get(event, [])
         original_count = len(event_hooks)
 
@@ -122,8 +124,6 @@ def uninstall_hooks() -> dict[str, str]:
 
         if len(filtered_hooks) < original_count:
             results[event] = "removed"
-        else:
-            results[event] = "not found"
 
         if filtered_hooks:
             hooks[event] = filtered_hooks
