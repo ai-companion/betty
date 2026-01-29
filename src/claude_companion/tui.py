@@ -327,7 +327,7 @@ class TUI:
         table.add_column(ratio=1)
 
         # Monitor box - use rounded style to differentiate
-        monitor_content = self._monitor_text if self._monitor_text else "[dim]Press [m] to set monitoring rules[/dim]"
+        monitor_content = self._monitor_text if self._monitor_text else "[dim]Press \\[m] to set monitoring rules[/dim]"
         monitor_box = Panel(
             monitor_content,
             title="[cyan]📋 Monitor[/cyan]",
@@ -338,7 +338,7 @@ class TUI:
         )
 
         # Ask box
-        ask_content = self._ask_text if self._ask_text else "[dim]Press [?] to ask about trace[/dim]"
+        ask_content = self._ask_text if self._ask_text else "[dim]Press \\[?] to ask about trace[/dim]"
         ask_box = Panel(
             ask_content,
             title="[magenta]❓ Ask[/magenta]",
