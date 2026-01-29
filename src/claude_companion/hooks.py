@@ -7,12 +7,9 @@ from typing import Any
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
 # Hook events we want to listen to
+# Only SessionStart is needed - we get everything else from watching the transcript
 HOOK_EVENTS = [
     "SessionStart",
-    "PreToolUse",
-    "PostToolUse",
-    "Stop",
-    "SessionEnd",
 ]
 
 # Marker to identify our hooks

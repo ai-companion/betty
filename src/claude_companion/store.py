@@ -4,7 +4,7 @@ import threading
 from datetime import datetime
 from typing import Callable
 
-from .alerts import Alert, AlertLevel, check_event_for_alerts, send_system_notification
+from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_alerts, send_system_notification
 from .models import Event, Session, Turn
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher
@@ -162,6 +162,11 @@ class EventStore:
                     # Renumber turn based on current session turns
                     turn.turn_number = len(session.turns) + 1
                     session.turns.append(turn)
+
+        # Check for alerts on tool turns
+        alerts = check_turn_for_alerts(turn)
+        for alert in alerts:
+            self._add_alert(alert)
 
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:

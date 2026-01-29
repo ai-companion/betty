@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .models import Event
+from .models import Event, Turn
 
 
 class AlertLevel(Enum):
@@ -23,7 +23,8 @@ class Alert:
     level: AlertLevel
     title: str
     message: str
-    event: Event
+    event: Event | None = None
+    turn: Turn | None = None
 
 
 # Patterns for detecting potentially dangerous operations
@@ -64,7 +65,7 @@ INFO_PATTERNS = [
 
 
 def check_event_for_alerts(event: Event) -> list[Alert]:
-    """Check an event for potential alerts."""
+    """Check an event for potential alerts (legacy, kept for compatibility)."""
     alerts = []
 
     if event.event_type != "PreToolUse":
@@ -73,17 +74,37 @@ def check_event_for_alerts(event: Event) -> list[Alert]:
     # Check Bash commands
     if event.tool_name == "Bash" and event.tool_input:
         command = event.tool_input.get("command", "")
-        alerts.extend(_check_command(command, event))
+        alerts.extend(_check_command(command, event=event))
 
     # Check file writes for sensitive paths
     if event.tool_name in ("Write", "Edit") and event.tool_input:
         file_path = event.tool_input.get("file_path", "")
-        alerts.extend(_check_file_operation(file_path, event))
+        alerts.extend(_check_file_operation(file_path, event=event))
 
     return alerts
 
 
-def _check_command(command: str, event: Event) -> list[Alert]:
+def check_turn_for_alerts(turn: Turn) -> list[Alert]:
+    """Check a turn for potential alerts."""
+    alerts = []
+
+    if turn.role != "tool":
+        return alerts
+
+    # Check Bash commands
+    if turn.tool_name == "Bash":
+        # content_full contains the command
+        alerts.extend(_check_command(turn.content_full, turn=turn))
+
+    # Check file writes for sensitive paths
+    if turn.tool_name in ("Write", "Edit", "Read"):
+        # content_full contains the file path (possibly with extra info)
+        alerts.extend(_check_file_operation(turn.content_full, turn=turn))
+
+    return alerts
+
+
+def _check_command(command: str, event: Event | None = None, turn: Turn | None = None) -> list[Alert]:
     """Check a bash command for dangerous patterns."""
     alerts = []
 
@@ -94,12 +115,13 @@ def _check_command(command: str, event: Event) -> list[Alert]:
                 title=title,
                 message=f"Command: {command[:100]}{'...' if len(command) > 100 else ''}",
                 event=event,
+                turn=turn,
             ))
 
     return alerts
 
 
-def _check_file_operation(file_path: str, event: Event) -> list[Alert]:
+def _check_file_operation(file_path: str, event: Event | None = None, turn: Turn | None = None) -> list[Alert]:
     """Check file operations for sensitive paths."""
     alerts = []
 
@@ -120,6 +142,7 @@ def _check_file_operation(file_path: str, event: Event) -> list[Alert]:
                 title=title,
                 message=f"File: {file_path}",
                 event=event,
+                turn=turn,
             ))
 
     return alerts

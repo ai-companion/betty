@@ -167,13 +167,3 @@ class Session:
                     if part == "projects" and i + 1 < len(parts):
                         self.project_path = parts[i + 1]
                         break
-
-        # Create turn for tool uses
-        if event.event_type == "PreToolUse":
-            turn = Turn.from_event(event, len(self.turns) + 1)
-            if turn:
-                self.turns.append(turn)
-
-        # Mark session as ended
-        if event.event_type == "SessionEnd":
-            self.active = False
