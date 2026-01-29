@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 
 from rich.console import Console, Group
-from rich.live import Live
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
@@ -463,15 +462,14 @@ class TUI:
     def run(self) -> None:
         """Run the TUI."""
         self._running = True
+        last_render = ""
 
         with KeyReader() as keys:
-            with Live(
-                self._render(),
-                console=self.console,
-                refresh_per_second=4,
-                screen=False,  # Don't use alternate screen
-                transient=True,  # Clear output on exit
-            ) as live:
+            # Clear screen and hide cursor
+            self.console.print("\033[2J\033[H", end="")  # Clear screen, move to top
+            self.console.print("\033[?25l", end="")  # Hide cursor
+
+            try:
                 while self._running:
                     # Check for keyboard input
                     key = keys.read_key()
@@ -480,11 +478,24 @@ class TUI:
                             break
 
                     # Wait for event or timeout
-                    self._refresh_event.wait(timeout=0.1)
+                    self._refresh_event.wait(timeout=0.2)
                     self._refresh_event.clear()
 
-                    # Update display
-                    live.update(self._render())
+                    # Render to string and only update if changed
+                    with self.console.capture() as capture:
+                        self.console.print(self._render())
+                    new_render = capture.get()
+
+                    if new_render != last_render:
+                        # Move cursor to top and redraw
+                        self.console.print("\033[H", end="")  # Move to top
+                        self.console.print(self._render())
+                        # Clear any leftover lines
+                        self.console.print("\033[J", end="")  # Clear to end of screen
+                        last_render = new_render
+            finally:
+                # Show cursor again
+                self.console.print("\033[?25h", end="")
 
     def stop(self) -> None:
         """Stop the TUI."""
