@@ -31,6 +31,12 @@ def main(ctx: click.Context, port: int, version: bool, continue_session: bool, r
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
+        # Check for mutually exclusive options
+        resume_flags = sum([continue_session, resume, continue_global, resume_global])
+        if resume_flags > 1:
+            console.print("[red]Error:[/red] Options -c, -r, -C, -R are mutually exclusive.")
+            raise SystemExit(1)
+
         config = load_config()
 
         # Determine project scope: -c/-r filter by current dir, -C/-R are global
@@ -67,6 +73,11 @@ def _pick_session(project_path: str | None = None) -> str | None:
 
     from rich.live import Live
     from rich.text import Text
+
+    # Check for TTY - picker requires interactive terminal
+    if not sys.stdin.isatty():
+        console.print("[red]Error:[/red] Session picker requires an interactive terminal.")
+        return None
 
     history = get_history(limit=20, project_path=project_path)
     if not history:
