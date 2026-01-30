@@ -2,9 +2,13 @@
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+
+# Default style for TUI
+DEFAULT_STYLE = "rich"
 
 
 @dataclass
@@ -22,6 +26,7 @@ class Config:
     """Claude Companion configuration."""
 
     llm: LLMConfig
+    style: str = field(default=DEFAULT_STYLE)
 
 
 # Default configuration
@@ -30,7 +35,8 @@ DEFAULT_CONFIG = Config(
         provider="local",
         base_url="http://localhost:8008/v1",  # vLLM default
         model="Qwen/Qwen3-30B-A3B-Instruct-2507",
-    )
+    ),
+    style=DEFAULT_STYLE,
 )
 
 # Config file path
@@ -42,7 +48,7 @@ def load_config() -> Config:
     """Load configuration from environment, file, or defaults.
 
     Priority (highest to lowest):
-    1. Environment variables (CLAUDE_COMPANION_LLM_PROVIDER, CLAUDE_COMPANION_LLM_URL, CLAUDE_COMPANION_LLM_MODEL)
+    1. Environment variables (CLAUDE_COMPANION_*)
     2. Config file (~/.claude-companion/config.json)
     3. Hardcoded defaults
 
@@ -54,6 +60,7 @@ def load_config() -> Config:
     provider = DEFAULT_CONFIG.llm.provider
     llm_url = DEFAULT_CONFIG.llm.base_url
     llm_model = DEFAULT_CONFIG.llm.model
+    style = DEFAULT_STYLE
 
     # Try loading from config file
     if CONFIG_FILE.exists():
@@ -64,6 +71,7 @@ def load_config() -> Config:
                 provider = llm_data.get("provider", provider)
                 llm_url = llm_data.get("base_url", llm_url)
                 llm_model = llm_data.get("model", llm_model)
+                style = data.get("style", style)
         except Exception:
             # Silently fall back to defaults if config file is malformed
             pass
@@ -72,6 +80,7 @@ def load_config() -> Config:
     provider = os.getenv("CLAUDE_COMPANION_LLM_PROVIDER", provider)
     llm_url = os.getenv("CLAUDE_COMPANION_LLM_URL", llm_url)
     llm_model = os.getenv("CLAUDE_COMPANION_LLM_MODEL", llm_model)
+    style = os.getenv("CLAUDE_COMPANION_STYLE", style)
 
     # Load API key from environment based on provider
     api_key = None
@@ -88,7 +97,8 @@ def load_config() -> Config:
             base_url=llm_url,
             model=llm_model,
             api_key=api_key,
-        )
+        ),
+        style=style,
     )
 
 
@@ -103,11 +113,12 @@ def save_config(config: Config) -> None:
         "llm": {
             "provider": config.llm.provider,
             "model": config.llm.model,
-        }
+        },
+        "style": config.style,
     }
 
-    # Only save base_url for local providers
-    if config.llm.provider == "local" and config.llm.base_url:
+    # Save base_url for local providers and openrouter
+    if config.llm.provider in ("local", "openrouter") and config.llm.base_url:
         data["llm"]["base_url"] = config.llm.base_url
 
     with open(CONFIG_FILE, "w") as f:
