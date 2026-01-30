@@ -68,7 +68,7 @@ class TUI:
         self._refresh_event = threading.Event()
         self._selected_index: int | None = None  # Index into filtered turns
         self._scroll_offset = 0  # For scrolling through turns
-        self._max_visible_turns = 10
+        self._last_visible_count = 5  # Updated by _render_turns based on actual space
         self._filter_index = 0  # Index into filters
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
@@ -90,6 +90,29 @@ class TUI:
         store.add_alert_listener(self._on_alert)
         store.add_turn_listener(self._on_turn)
 
+    def _measure_height(self, renderable) -> int:
+        """Measure the height of a renderable in lines."""
+        options = self.console.options
+        lines = list(self.console.render_lines(renderable, options))
+        return len(lines)
+
+    def _get_available_height_for_turns(self) -> int:
+        """Calculate available height for turns area."""
+        session = self.store.get_active_session()
+        sessions = self.store.get_sessions()
+
+        # Measure actual overhead
+        header_height = self._measure_height(self._render_header(sessions, session))
+        status_height = self._measure_height(self._style.render_status_line(self._monitor_text))
+        footer_height = self._measure_height(self._render_footer())
+
+        alerts_panel = self._render_alerts()
+        alerts_height = self._measure_height(alerts_panel) if alerts_panel else 0
+
+        # +2 for potential scroll indicators
+        overhead = header_height + alerts_height + status_height + footer_height + 2
+        return self.console.size.height - overhead
+
     @property
     def monitor_instruction(self) -> str:
         """Get the current monitoring instruction."""
@@ -108,8 +131,8 @@ class TUI:
             if session:
                 filtered = self._get_filtered_turns(session)
                 total = len(filtered)
-                if total > self._max_visible_turns:
-                    self._scroll_offset = total - self._max_visible_turns
+                if total > self._last_visible_count:
+                    self._scroll_offset = total - self._last_visible_count
         self._refresh_event.set()
 
     def _on_alert(self, alert: Alert) -> None:
@@ -124,8 +147,8 @@ class TUI:
             if session:
                 filtered = self._get_filtered_turns(session)
                 total = len(filtered)
-                if total > self._max_visible_turns:
-                    self._scroll_offset = total - self._max_visible_turns
+                if total > self._last_visible_count:
+                    self._scroll_offset = total - self._last_visible_count
         self._refresh_event.set()
 
     def _get_filtered_turns(self, session: Session | None) -> list[Turn]:
@@ -180,9 +203,7 @@ class TUI:
             return Group(Panel(msg, border_style="dim"))
 
         total_turns = len(filtered_turns)
-        start_idx = self._scroll_offset
-        end_idx = min(start_idx + self._max_visible_turns, total_turns)
-        visible_turns = filtered_turns[start_idx:end_idx]
+        available_height = self._get_available_height_for_turns()
 
         # Compute conversation turn numbers (only counting user+assistant)
         conv_turn_map: dict[int, int] = {}
@@ -192,18 +213,32 @@ class TUI:
                 conv_turn += 1
                 conv_turn_map[id(turn)] = conv_turn
 
+        # Add turns one by one until we run out of space
         panels = []
-        for i, turn in enumerate(visible_turns):
-            global_idx = start_idx + i
-            is_selected = self._selected_index == global_idx
-            panels.append(
-                self._style.render_turn(
-                    turn,
-                    is_selected,
-                    conv_turn_map.get(id(turn), 0),
-                    self._use_summary,
-                )
+        used_height = 0
+        start_idx = self._scroll_offset
+        end_idx = start_idx
+
+        for i in range(start_idx, total_turns):
+            turn = filtered_turns[i]
+            is_selected = self._selected_index == i
+            panel = self._style.render_turn(
+                turn,
+                is_selected,
+                conv_turn_map.get(id(turn), 0),
+                self._use_summary,
             )
+            panel_height = self._measure_height(panel)
+
+            if used_height + panel_height > available_height and panels:
+                break  # Would overflow, stop here
+
+            panels.append(panel)
+            used_height += panel_height
+            end_idx = i + 1
+
+        # Store how many turns we actually showed (for scroll calculations)
+        self._last_visible_count = end_idx - start_idx
 
         if start_idx > 0:
             panels.insert(0, Text(f"  ↑ {start_idx} more above", style="dim"))
@@ -393,9 +428,9 @@ class TUI:
                     self._selected_index = 0
                 elif self._selected_index < total_turns - 1:
                     self._selected_index += 1
-                if self._selected_index >= self._scroll_offset + self._max_visible_turns:
+                if self._selected_index >= self._scroll_offset + self._last_visible_count:
                     self._scroll_offset = (
-                        self._selected_index - self._max_visible_turns + 1
+                        self._selected_index - self._last_visible_count + 1
                     )
                 self._refresh_event.set()
 
@@ -422,7 +457,7 @@ class TUI:
         elif key == "G":
             if total_turns > 0:
                 self._selected_index = total_turns - 1
-                self._scroll_offset = max(0, total_turns - self._max_visible_turns)
+                self._scroll_offset = max(0, total_turns - self._last_visible_count)
                 self._auto_scroll = True
                 self._refresh_event.set()
 
@@ -481,8 +516,34 @@ class TUI:
         if session:
             filtered = self._get_filtered_turns(session)
             total = len(filtered)
-            if total > self._max_visible_turns:
-                self._scroll_offset = total - self._max_visible_turns
+            if total == 0:
+                self._scroll_offset = 0
+                self._selected_index = None
+                return
+
+            # Calculate how many turns fit by measuring from the end
+            available_height = self._get_available_height_for_turns()
+            conv_turn_map: dict[int, int] = {}
+            conv_turn = 0
+            for turn in filtered:
+                if turn.role in ("user", "assistant"):
+                    conv_turn += 1
+                    conv_turn_map[id(turn)] = conv_turn
+
+            # Measure turns from the end backwards
+            used_height = 0
+            visible_count = 0
+            for i in range(total - 1, -1, -1):
+                turn = filtered[i]
+                panel = self._style.render_turn(turn, False, conv_turn_map.get(id(turn), 0), self._use_summary)
+                panel_height = self._measure_height(panel)
+                if used_height + panel_height > available_height and visible_count > 0:
+                    break
+                used_height += panel_height
+                visible_count += 1
+
+            self._last_visible_count = visible_count
+            self._scroll_offset = max(0, total - visible_count)
             self._selected_index = None
 
     def run(self) -> None:
