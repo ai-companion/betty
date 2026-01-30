@@ -50,13 +50,33 @@ The companion will automatically detect and display your Claude Code session.
 
 ## LLM Summarization (Optional)
 
-The companion can summarize assistant responses using a local LLM. Supports:
+The companion can summarize assistant responses using either **local LLMs** (free) or **API providers** (paid).
 
-- **LM Studio** (recommended for Mac)
-- **Ollama**
-- **vLLM**
+### Available Providers
 
-### Setup with LM Studio
+**Local (Free):**
+- **LM Studio** - Recommended for Mac
+- **Ollama** - Easy setup with Homebrew
+- **vLLM** - High-performance server
+
+**API (Paid):**
+- **OpenRouter** - Access to multiple models
+- **OpenAI** - GPT models
+- **Anthropic** - Claude models
+
+### Quick Setup
+
+```bash
+# View all available providers
+claude-companion config
+
+# Check current configuration
+claude-companion config --show
+```
+
+### Local Providers
+
+#### LM Studio (Recommended for Mac)
 
 ```bash
 # 1. Start LM Studio and load a model
@@ -64,27 +84,99 @@ The companion can summarize assistant responses using a local LLM. Supports:
 # 3. Configure the companion
 claude-companion config --preset lm-studio
 
-# Or use custom settings
-claude-companion config --url http://localhost:1234/v1 --model your-model-name
+# 4. Start the companion
+claude-companion
 ```
 
-### Setup with Ollama
+#### Ollama
 
 ```bash
-# 1. Install Ollama: brew install ollama
-# 2. Start Ollama: ollama serve
-# 3. Pull a model: ollama pull qwen2.5:7b
-# 4. Configure the companion
+# 1. Install and start Ollama
+brew install ollama
+ollama serve
+
+# 2. Pull a model
+ollama pull qwen2.5:7b
+
+# 3. Configure the companion
 claude-companion config --preset ollama
+
+# 4. Start the companion
+claude-companion
 ```
 
-### Environment Variables
+### API Providers
 
-You can also configure via environment variables:
+#### OpenRouter (Multiple Models)
 
 ```bash
-export CLAUDE_COMPANION_LLM_URL="http://localhost:1234/v1"
-export CLAUDE_COMPANION_LLM_MODEL="openai/gpt-oss-20b"
+# 1. Get API key from https://openrouter.ai/keys
+# 2. Configure the companion
+claude-companion config --preset openrouter
+
+# 3. Set API key and start
+export OPENROUTER_API_KEY="sk-or-v1-..."
+claude-companion
+```
+
+**Cost:** ~$0.15-0.60 per 1M tokens (very cheap for summarization)
+
+#### OpenAI
+
+```bash
+# 1. Get API key from https://platform.openai.com/api-keys
+# 2. Configure the companion
+claude-companion config --preset openai
+
+# 3. Set API key and start
+export OPENAI_API_KEY="sk-..."
+claude-companion
+```
+
+**Uses:** gpt-4o-mini model by default
+
+#### Anthropic
+
+```bash
+# 1. Get API key from https://console.anthropic.com/
+# 2. Configure the companion
+claude-companion config --preset anthropic
+
+# 3. Set API key and start
+export ANTHROPIC_API_KEY="sk-ant-..."
+claude-companion
+```
+
+**Uses:** Claude 3.5 Haiku by default
+
+### Switching Between Providers
+
+Simply reconfigure and restart:
+
+```bash
+# Switch to OpenRouter
+claude-companion config --preset openrouter
+export OPENROUTER_API_KEY="sk-or-v1-..."
+claude-companion
+
+# Switch back to LM Studio
+claude-companion config --preset lm-studio
+claude-companion  # No API key needed
+```
+
+### Permanent API Key Setup
+
+Add to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-..."
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Then simply:
+```bash
+claude-companion config --preset openrouter
 claude-companion
 ```
 
