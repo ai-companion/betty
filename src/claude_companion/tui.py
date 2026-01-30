@@ -7,7 +7,6 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.style import Style
 from rich.text import Text
@@ -280,18 +279,15 @@ class TUI:
             text.append(" ")
             if indicator:
                 text.append(f"{indicator} ", style="bold white")
+            text.append(content)
         else:
             text.append(BULLET, style=bullet_style)
             text.append(" ")
             if indicator:
                 text.append(f"{indicator} ", style="dim")
-
-        # For assistant, render content as Markdown for formatting
-        if turn.role == "assistant":
-            return Group(text, Markdown(content))
-        else:
             text.append(content)
-            return text
+
+        return text
 
     def _render_turns(self, session: Session | None) -> Group:
         """Render all turns for a session."""
