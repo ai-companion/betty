@@ -7,90 +7,14 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
-from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
 from .models import Event, Session, Turn
 from .store import EventStore
-
-
-# UI styles
-UI_STYLES = ["default", "claude-code"]
-
-# === Claude Code style constants ===
-BULLET = "⏺"
-BULLET_STYLES = {
-    "assistant": "white",
-    "tool": "green",
-}
-
-TOOL_INDICATORS = {
-    "Read": "read",
-    "Write": "write",
-    "Edit": "edit",
-    "Bash": "$",
-    "Glob": "glob",
-    "Grep": "grep",
-    "Task": "task",
-    "WebFetch": "fetch",
-    "WebSearch": "search",
-    "default": "tool",
-}
-
-FILTERS_CLAUDE = [
-    ("all", "All"),
-    ("tool", "Tools"),
-    ("Read", "Read"),
-    ("Write", "Write"),
-    ("Edit", "Edit"),
-    ("Bash", "Bash"),
-]
-
-# === Default style constants (original with emojis/boxes) ===
-ROLE_ICONS = {
-    "user": "👤",
-    "assistant": "🤖",
-}
-
-TOOL_ICONS = {
-    "Read": "📄",
-    "Write": "✏️",
-    "Edit": "✏️",
-    "Bash": "💻",
-    "Glob": "🔍",
-    "Grep": "🔍",
-    "Task": "⚙️",
-    "WebFetch": "🌐",
-    "WebSearch": "🌐",
-    "default": "🔧",
-}
-
-FILTERS_DEFAULT = [
-    ("all", "All"),
-    ("tool", "Tools only"),
-    ("Read", "📄 Read"),
-    ("Write", "✏️ Write"),
-    ("Edit", "✏️ Edit"),
-    ("Bash", "💻 Bash"),
-]
-
-
-def get_tool_indicator(tool_name: str | None) -> str:
-    """Get text indicator for a tool (claude-code style)."""
-    if not tool_name:
-        return TOOL_INDICATORS["default"]
-    return TOOL_INDICATORS.get(tool_name, TOOL_INDICATORS["default"])
-
-
-def get_tool_icon(tool_name: str | None) -> str:
-    """Get icon for a tool (default style)."""
-    if not tool_name:
-        return TOOL_ICONS["default"]
-    return TOOL_ICONS.get(tool_name, TOOL_ICONS["default"])
+from .styles import STYLES, get_style
 
 
 class KeyReader:
@@ -103,18 +27,21 @@ class KeyReader:
     def __enter__(self):
         import termios
         import tty
+
         self._old_settings = termios.tcgetattr(self._fd)
         tty.setcbreak(self._fd)
         return self
 
     def __exit__(self, *args):
         import termios
+
         if self._old_settings:
             termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
 
     def read_key(self) -> str | None:
         """Read a key if available, return None if no input."""
         import select
+
         if select.select([sys.stdin], [], [], 0)[0]:
             char = sys.stdin.read(1)
             # Handle escape sequences (arrow keys)
@@ -141,14 +68,15 @@ class TUI:
         self._selected_index: int | None = None  # Index into filtered turns
         self._scroll_offset = 0  # For scrolling through turns
         self._max_visible_turns = 10
-        self._filter_index = 0  # Index into FILTERS
+        self._filter_index = 0  # Index into filters
         self._status_message: str | None = None  # Temporary status message
         self._status_until: float = 0  # When to clear status message
         self._show_alerts = True  # Whether to show alerts panel
         self._auto_scroll = True  # Auto-scroll to bottom on new events
         self._use_summary = True  # Use LLM summary vs first few chars for assistant preview
-        # UI style: "default" (boxes with emojis) or "claude-code" (minimal)
-        self._ui_style = ui_style if ui_style in UI_STYLES else "default"
+
+        # Style renderer
+        self._style = get_style(ui_style if ui_style in STYLES else "default")
 
         # Monitor instruction text
         self._monitor_text = ""  # Monitoring instructions
@@ -160,11 +88,6 @@ class TUI:
         store.add_listener(self._on_event)
         store.add_alert_listener(self._on_alert)
         store.add_turn_listener(self._on_turn)
-
-    @property
-    def _filters(self) -> list:
-        """Get filters for current UI style."""
-        return FILTERS_CLAUDE if self._ui_style == "claude-code" else FILTERS_DEFAULT
 
     @property
     def monitor_instruction(self) -> str:
@@ -209,7 +132,7 @@ class TUI:
         if not session:
             return []
 
-        filter_key, _ = self._filters[self._filter_index]
+        filter_key, _ = self._style.filters[self._filter_index]
 
         if filter_key == "all":
             return session.turns
@@ -233,186 +156,14 @@ class TUI:
             else:
                 session_parts.append(f"[dim][{i}][/dim] {session.display_name}")
 
-        sessions_text = "  ".join(session_parts) if session_parts else "[dim]No sessions[/dim]"
-
-        if active:
-            _, filter_label = self._filters[self._filter_index]
-            scroll_indicator = "" if self._auto_scroll else " [dim](paused)[/dim]"
-            historical_count = sum(1 for t in active.turns if t.is_historical)
-            live_count = len(active.turns) - historical_count
-
-            if self._ui_style == "claude-code":
-                turns_info = f"h{historical_count}+{live_count}" if historical_count else f"{live_count}"
-                stats = (
-                    f"{active.model} | "
-                    f"in:{active.total_input_words:,} out:{active.total_output_words:,} | "
-                    f"turns:{turns_info} | "
-                    f"{filter_label}{scroll_indicator}"
-                )
-            else:
-                turns_info = f"◷{historical_count}+{live_count}" if historical_count else f"{live_count}"
-                stats = (
-                    f"[dim]Model:[/dim] {active.model}  "
-                    f"[dim]Words:[/dim] ↓{active.total_input_words:,} ↑{active.total_output_words:,}  "
-                    f"[dim]Turns:[/dim] {turns_info}  "
-                    f"[dim]Filter:[/dim] {filter_label}{scroll_indicator}"
-                )
-        else:
-            stats = "[dim]Waiting for session...[/dim]"
-
-        if self._ui_style == "claude-code":
-            content = f"{sessions_text}\n[dim]{stats}[/dim]"
-            border_style = "dim"
-        else:
-            content = f"{sessions_text}\n{stats}"
-            border_style = "blue"
-
-        return Panel(
-            content,
-            title="[bold]Claude Companion[/bold]",
-            title_align="left",
-            border_style=border_style,
+        sessions_text = (
+            "  ".join(session_parts) if session_parts else "[dim]No sessions[/dim]"
         )
 
-    def _render_turn(self, turn: Turn, is_selected: bool = False, conv_turn: int = 0) -> Text | Group | Panel:
-        """Render a single turn."""
-        if self._ui_style == "claude-code":
-            return self._render_turn_claude_code(turn, is_selected, conv_turn)
-        else:
-            return self._render_turn_default(turn, is_selected)
+        _, filter_label = self._style.filters[self._filter_index]
 
-    def _render_turn_claude_code(self, turn: Turn, is_selected: bool, conv_turn: int) -> Text | Group:
-        """Render a turn in Claude Code style (minimal with bullets)."""
-        selected_text_style = "light_steel_blue" if is_selected else ""
-
-        # User turns: "❯ message" with dim background
-        if turn.role == "user":
-            content = turn.content_full if turn.expanded else turn.content_preview
-            indicator_style = selected_text_style or "dim"
-            content_style = selected_text_style or "on grey15"
-            row = Table.grid(padding=(0, 0))
-            row.add_column(width=2)
-            row.add_column()
-            row.add_row(
-                Text("❯ ", style=indicator_style),
-                Text(content, style=content_style),
-            )
-            return Group(row, Text(""))
-
-        # Assistant turns: render as Markdown with colored bullet
-        if turn.role == "assistant":
-            bullet_style = selected_text_style or BULLET_STYLES["assistant"]
-            if turn.expanded:
-                indicator = "\\[-]"
-                content = turn.content_full
-            elif self._use_summary and turn.summary:
-                indicator = "\\[tldr]"
-                content = turn.summary
-            elif self._use_summary and not turn.summary:
-                indicator = "\\[+]"
-                content = f"{turn.content_preview} *summarizing...*"
-            elif turn.content_full != turn.content_preview:
-                indicator = "\\[+]"
-                content = turn.content_preview
-            else:
-                indicator = ""
-                content = turn.content_preview
-
-            md_content = f"**{indicator}** {content}" if indicator else content
-            row = Table.grid(padding=(0, 0))
-            row.add_column(width=2)
-            row.add_column()
-            row.add_row(
-                Text(f"{BULLET} ", style=bullet_style),
-                Markdown(md_content, style=selected_text_style),
-            )
-
-            parts = [row]
-            if conv_turn > 0:
-                status = f"── turn {conv_turn}, {turn.word_count} words ──"
-                parts.append(Text(status, style="dim", justify="right"))
-            return Group(*parts)
-
-        # Tool turns: render as Text to preserve verbatim output
-        bullet_style = selected_text_style or BULLET_STYLES["tool"]
-        tool_indicator = get_tool_indicator(turn.tool_name)
-        content = turn.content_full if turn.expanded else turn.content_preview
-
-        row = Table.grid(padding=(0, 0))
-        row.add_column(width=2)
-        row.add_column()
-
-        # Build tool content with indicator prefix
-        tool_text = Text()
-        tool_text.append(f"[{tool_indicator}] ", style="bold" if not selected_text_style else selected_text_style)
-        tool_text.append(content, style=selected_text_style or "dim")
-
-        row.add_row(
-            Text(f"{BULLET} ", style=bullet_style),
-            tool_text,
-        )
-        return Group(row, Text(""))
-
-    def _render_turn_default(self, turn: Turn, is_selected: bool) -> Panel:
-        """Render a turn in default style (boxes with emojis)."""
-        history_prefix = "◷ " if turn.is_historical else ""
-
-        if turn.role == "user":
-            icon = ROLE_ICONS["user"]
-            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} User"
-            border_style = "blue" if not turn.is_historical else "dim blue"
-        elif turn.role == "assistant":
-            icon = ROLE_ICONS["assistant"]
-            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} Assistant"
-            border_style = "green" if not turn.is_historical else "dim green"
-        else:
-            icon = get_tool_icon(turn.tool_name)
-            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
-            # Use string-based border styles for tools
-            if turn.tool_name in ("Write", "Edit"):
-                border_style = "yellow" if not turn.is_historical else "dim yellow"
-            elif turn.tool_name == "Bash":
-                border_style = "magenta" if not turn.is_historical else "dim magenta"
-            else:
-                border_style = "cyan" if not turn.is_historical else "dim cyan"
-
-        if turn.expanded:
-            content = turn.content_full
-            expand_indicator = "\\[-] "
-        else:
-            if turn.role == "assistant" and self._use_summary:
-                if turn.summary:
-                    content = turn.summary
-                    expand_indicator = "\\[tldr;] "
-                else:
-                    content = f"{turn.content_preview} *\\[summarizing...]*"
-                    expand_indicator = "\\[+] " if turn.content_full != turn.content_preview else ""
-            else:
-                content = turn.content_preview
-                expand_indicator = "\\[+] " if turn.content_full != turn.content_preview else ""
-
-        if is_selected:
-            title = f"► {title}"
-            border_style = "white"
-
-        subtitle = None
-        if turn.role in ("user", "assistant"):
-            subtitle = f"{turn.word_count:,} words"
-
-        if turn.role == "assistant":
-            panel_content = Markdown(f"{expand_indicator}{content}")
-        else:
-            # Use Text for user/tool content to avoid markup parsing issues
-            panel_content = Text(f"{expand_indicator}{content}")
-
-        return Panel(
-            panel_content,
-            title=title,
-            title_align="left",
-            subtitle=subtitle,
-            subtitle_align="right",
-            border_style=border_style,
-            padding=(0, 1),
+        return self._style.render_header(
+            sessions_text, active, filter_label, self._auto_scroll
         )
 
     def _render_turns(self, session: Session | None) -> Group:
@@ -420,7 +171,7 @@ class TUI:
         filtered_turns = self._get_filtered_turns(session)
 
         if not filtered_turns:
-            filter_key, filter_label = self._filters[self._filter_index]
+            filter_key, filter_label = self._style.filters[self._filter_index]
             if filter_key != "all" and session and session.turns:
                 msg = f"[dim]No {filter_label} turns. Press \\[f] to change filter.[/dim]"
             else:
@@ -444,7 +195,14 @@ class TUI:
         for i, turn in enumerate(visible_turns):
             global_idx = start_idx + i
             is_selected = self._selected_index == global_idx
-            panels.append(self._render_turn(turn, is_selected, conv_turn_map.get(id(turn), 0)))
+            panels.append(
+                self._style.render_turn(
+                    turn,
+                    is_selected,
+                    conv_turn_map.get(id(turn), 0),
+                    self._use_summary,
+                )
+            )
 
         if start_idx > 0:
             panels.insert(0, Text(f"  ↑ {start_idx} more above", style="dim"))
@@ -466,13 +224,8 @@ class TUI:
 
         lines = []
         for alert in alerts:
-            if alert.level == AlertLevel.DANGER:
-                indicator = "🚨" if self._ui_style == "default" else "\\[!]"
-                style = "bold red"
-            else:
-                indicator = "⚠️ " if self._ui_style == "default" else "\\[*]"
-                style = "yellow"
-            lines.append(f"[{style}]{indicator} {alert.title}[/{style}]: {alert.message}")
+            level = "danger" if alert.level == AlertLevel.DANGER else "warning"
+            lines.append(self._style.format_alert_line(level, alert.title, alert.message))
 
         return Panel(
             "\n".join(lines),
@@ -482,51 +235,12 @@ class TUI:
             padding=(0, 1),
         )
 
-    def _render_status_line(self) -> Panel | Table:
-        """Render the status line (claude-code) or input boxes (default)."""
-        if self._ui_style == "claude-code":
-            if self._monitor_text:
-                content = self._monitor_text
-            else:
-                content = "[dim]Press \\[m] to set[/dim]"
-            return Panel(
-                content,
-                title="[bold]Monitor[/bold]",
-                title_align="left",
-                border_style="dim",
-            )
-        else:
-            # Default style: two input boxes side by side
-            table = Table.grid(expand=True)
-            table.add_column(ratio=1)
-            table.add_column(ratio=1)
-
-            monitor_content = self._monitor_text if self._monitor_text else "[dim]Press \\[m] to set monitoring rules[/dim]"
-            monitor_box = Panel(
-                monitor_content,
-                title="[cyan]📋 Monitor[/cyan]",
-                title_align="left",
-                border_style="cyan",
-                padding=(0, 1),
-                style="on grey7",
-            )
-
-            ask_box = Panel(
-                "[dim]Press \\[?] to ask about trace[/dim]",
-                title="[magenta]❓ Ask[/magenta]",
-                title_align="left",
-                border_style="magenta",
-                padding=(0, 1),
-                style="on grey7",
-            )
-
-            table.add_row(monitor_box, ask_box)
-            return table
-
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
         if self._status_message and time.time() < self._status_until:
-            return Text.from_markup(f" [bold green]{self._status_message}[/bold green]")
+            return Text.from_markup(
+                f" [bold green]{self._status_message}[/bold green]"
+            )
 
         self._status_message = None
 
@@ -534,18 +248,7 @@ class TUI:
         danger_count = sum(1 for a in alerts if a.level == AlertLevel.DANGER)
         warn_count = sum(1 for a in alerts if a.level == AlertLevel.WARNING)
 
-        if self._ui_style == "claude-code":
-            alert_indicator = ""
-            if danger_count > 0:
-                alert_indicator = f"[bold red]\\[!{danger_count}][/bold red] "
-            elif warn_count > 0:
-                alert_indicator = f"[yellow]\\[*{warn_count}][/yellow] "
-        else:
-            alert_indicator = ""
-            if danger_count > 0:
-                alert_indicator = f"[bold red]🚨{danger_count}[/bold red] "
-            elif warn_count > 0:
-                alert_indicator = f"[yellow]⚠️{warn_count}[/yellow] "
+        alert_indicator = self._style.get_alert_indicator(danger_count, warn_count)
 
         return Text.from_markup(
             f"{alert_indicator}"
@@ -572,7 +275,7 @@ class TUI:
             parts.append(alerts_panel)
 
         parts.append(self._render_turns(active))
-        parts.append(self._render_status_line())
+        parts.append(self._style.render_status_line(self._monitor_text))
         parts.append(self._render_footer())
 
         return Group(*parts)
@@ -594,7 +297,9 @@ class TUI:
         # Clear screen and show input prompt
         self.console.clear()
         self.console.print(f"\n[bold]{title}[/bold]")
-        self.console.print("[dim]Type your text, then press Enter to save (Esc to cancel)[/dim]\n")
+        self.console.print(
+            "[dim]Type your text, then press Enter to save (Esc to cancel)[/dim]\n"
+        )
 
         # Show current value
         text = initial
@@ -617,7 +322,9 @@ class TUI:
                     if text:
                         text = text[:-1]
                         # Clear line and reprint
-                        self.console.print("\r> " + text + " " * 10, end="", highlight=False)
+                        self.console.print(
+                            "\r> " + text + " " * 10, end="", highlight=False
+                        )
                         self.console.print("\r> " + text, end="", highlight=False)
                 elif char.isprintable():
                     text += char
@@ -645,7 +352,9 @@ class TUI:
             self._refresh_event.set()
 
         elif key == "m":  # Edit monitor text
-            self._monitor_text = self._edit_text("Monitor Instructions", self._monitor_text)
+            self._monitor_text = self._edit_text(
+                "Monitor Instructions", self._monitor_text
+            )
             self._refresh_event.set()
 
         elif key == "?":  # Ask about trace
@@ -681,12 +390,19 @@ class TUI:
                 elif self._selected_index < total_turns - 1:
                     self._selected_index += 1
                 if self._selected_index >= self._scroll_offset + self._max_visible_turns:
-                    self._scroll_offset = self._selected_index - self._max_visible_turns + 1
+                    self._scroll_offset = (
+                        self._selected_index - self._max_visible_turns + 1
+                    )
                 self._refresh_event.set()
 
         elif key == "\n" or key == "\r" or key == " " or key == "o":
-            if self._selected_index is not None and 0 <= self._selected_index < total_turns:
-                turns[self._selected_index].expanded = not turns[self._selected_index].expanded
+            if (
+                self._selected_index is not None
+                and 0 <= self._selected_index < total_turns
+            ):
+                turns[self._selected_index].expanded = not turns[
+                    self._selected_index
+                ].expanded
                 self._refresh_event.set()
 
         elif key == "e":
@@ -714,7 +430,7 @@ class TUI:
                 self._refresh_event.set()
 
         elif key == "f":
-            self._filter_index = (self._filter_index + 1) % len(self._filters)
+            self._filter_index = (self._filter_index + 1) % len(self._style.filters)
             self._selected_index = None
             self._scroll_offset = 0
             self._auto_scroll = True
