@@ -6,7 +6,7 @@ from rich.table import Table
 
 from . import __version__
 from .config import CONFIG_FILE, DEFAULT_STYLE, get_example_configs, load_config, save_config, Config, LLMConfig
-from .history import get_history, get_most_recent
+from .history import cwd_to_project_path, get_history, get_most_recent
 from .hooks import check_hooks_status, install_hooks, uninstall_hooks
 from .server import ServerThread
 from .store import EventStore
@@ -18,10 +18,12 @@ console = Console()
 @click.group(invoke_without_command=True)
 @click.option("--port", "-p", default=5432, help="Port for the HTTP server")
 @click.option("--version", "-v", is_flag=True, help="Show version")
-@click.option("--continue", "-c", "continue_session", is_flag=True, help="Continue the most recent watched session")
-@click.option("--resume", "-r", is_flag=True, help="Select a session to resume from history")
+@click.option("--continue", "-c", "continue_session", is_flag=True, help="Continue the most recent session (current dir)")
+@click.option("--resume", "-r", is_flag=True, help="Select a session to resume (current dir)")
+@click.option("-C", "continue_global", is_flag=True, help="Continue the most recent session (global)")
+@click.option("-R", "resume_global", is_flag=True, help="Select a session to resume (global)")
 @click.pass_context
-def main(ctx: click.Context, port: int, version: bool, continue_session: bool, resume: bool) -> None:
+def main(ctx: click.Context, port: int, version: bool, continue_session: bool, resume: bool, continue_global: bool, resume_global: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -31,26 +33,32 @@ def main(ctx: click.Context, port: int, version: bool, continue_session: bool, r
     if ctx.invoked_subcommand is None:
         config = load_config()
 
-        # Handle -c/--continue: load most recent session
+        # Determine project scope: -c/-r filter by current dir, -C/-R are global
+        project_path = None
+        if continue_session or resume:
+            project_path = cwd_to_project_path()
+
+        # Handle -c/--continue or -C: load most recent session
         initial_transcript = None
-        if continue_session:
-            recent = get_most_recent()
+        if continue_session or continue_global:
+            recent = get_most_recent(project_path=project_path)
             if recent:
                 initial_transcript = recent.transcript_path
                 console.print(f"[dim]Continuing session:[/dim] {recent.project_name}")
             else:
-                console.print("[yellow]No session history found.[/yellow]")
+                scope = "current directory" if project_path else "global"
+                console.print(f"[yellow]No session history found ({scope}).[/yellow]")
 
-        # Handle -r/--resume: show session picker
-        elif resume:
-            initial_transcript = _pick_session()
+        # Handle -r/--resume or -R: show session picker
+        elif resume or resume_global:
+            initial_transcript = _pick_session(project_path=project_path)
             if initial_transcript is None:
                 return  # User cancelled or no history
 
         run_companion(port, config.style, initial_transcript)
 
 
-def _pick_session() -> str | None:
+def _pick_session(project_path: str | None = None) -> str | None:
     """Show interactive session picker for -r/--resume. Returns transcript path or None."""
     import select
     import sys
@@ -60,7 +68,7 @@ def _pick_session() -> str | None:
     from rich.live import Live
     from rich.text import Text
 
-    history = get_history(limit=20)
+    history = get_history(limit=20, project_path=project_path)
     if not history:
         console.print("[yellow]No session history found.[/yellow]")
         return None

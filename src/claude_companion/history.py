@@ -99,11 +99,31 @@ def save_session(record: SessionRecord) -> None:
     _save_history(history)
 
 
-def get_history(limit: int = 20) -> list[SessionRecord]:
-    """Get recent session history, sorted by last_accessed (most recent first)."""
+def cwd_to_project_path(cwd: str | Path | None = None) -> str:
+    """Convert a directory path to Claude's project_path format.
+
+    e.g., /Users/kai/src/foo -> -Users-kai-src-foo
+    """
+    if cwd is None:
+        cwd = Path.cwd()
+    return str(cwd).replace("/", "-")
+
+
+def get_history(limit: int = 20, project_path: str | None = None) -> list[SessionRecord]:
+    """Get recent session history, sorted by last_accessed (most recent first).
+
+    Args:
+        limit: Maximum number of records to return.
+        project_path: If provided, only return sessions matching this project path.
+    """
     history = _load_history()
     records = []
-    for r in history[:limit]:
+    for r in history:
+        if len(records) >= limit:
+            break
+        # Filter by project_path if specified
+        if project_path and r.get("project_path") != project_path:
+            continue
         try:
             records.append(SessionRecord(
                 session_id=r["session_id"],
@@ -117,7 +137,11 @@ def get_history(limit: int = 20) -> list[SessionRecord]:
     return records
 
 
-def get_most_recent() -> SessionRecord | None:
-    """Get the most recently accessed session."""
-    history = get_history(limit=1)
+def get_most_recent(project_path: str | None = None) -> SessionRecord | None:
+    """Get the most recently accessed session.
+
+    Args:
+        project_path: If provided, only consider sessions matching this project path.
+    """
+    history = get_history(limit=1, project_path=project_path)
     return history[0] if history else None
