@@ -419,7 +419,6 @@ class ClaudeCodeStyle(StyleRenderer):
 STYLES: dict[str, type[StyleRenderer]] = {
     "rich": RichStyle,
     "claude-code": ClaudeCodeStyle,
-    "default": RichStyle,  # Alias for backwards compatibility
 }
 
 

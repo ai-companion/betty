@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig
+from .config import CONFIG_FILE, DEFAULT_STYLE, get_example_configs, load_config, save_config, Config, LLMConfig
 from .hooks import check_hooks_status, install_hooks, uninstall_hooks
 from .server import ServerThread
 from .store import EventStore
@@ -17,14 +17,8 @@ console = Console()
 @click.group(invoke_without_command=True)
 @click.option("--port", "-p", default=5432, help="Port for the HTTP server")
 @click.option("--version", "-v", is_flag=True, help="Show version")
-@click.option(
-    "--style",
-    type=click.Choice(["rich", "claude-code"]),
-    default="rich",
-    help="UI style: rich (boxes with emojis) or claude-code (minimal)",
-)
 @click.pass_context
-def main(ctx: click.Context, port: int, version: bool, style: str) -> None:
+def main(ctx: click.Context, port: int, version: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -32,10 +26,11 @@ def main(ctx: click.Context, port: int, version: bool, style: str) -> None:
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
-        run_companion(port, style)
+        config = load_config()
+        run_companion(port, config.style)
 
 
-def run_companion(port: int, ui_style: str = "rich") -> None:
+def run_companion(port: int, ui_style: str = DEFAULT_STYLE) -> None:
     """Run the main companion TUI and server."""
     # Check if hooks are installed
     status = check_hooks_status(port)
@@ -147,23 +142,28 @@ def status(port: int) -> None:
 
 
 @main.command()
+@click.option("--style", type=click.Choice(["rich", "claude-code"]), help="UI style")
 @click.option("--url", help="LLM server base URL (e.g., http://localhost:1234/v1, for local only)")
 @click.option("--model", help="LLM model name (e.g., gpt-4o-mini)")
-@click.option("--preset", type=click.Choice(["vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset configuration")
+@click.option("--preset", type=click.Choice(["vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
 @click.option("--show", is_flag=True, help="Show current configuration")
-def config(url: str | None, model: str | None, preset: str | None, show: bool) -> None:
-    """Configure LLM provider for summarization.
+def config(style: str | None, url: str | None, model: str | None, preset: str | None, show: bool) -> None:
+    """Configure Claude Companion settings.
 
     Examples:
+      claude-companion config --style claude-code    # Set UI style
       claude-companion config --preset openrouter    # Use OpenRouter API
-      claude-companion config --preset anthropic     # Use Anthropic API
       claude-companion config --preset lm-studio     # Use LM Studio
       claude-companion config --show                 # Show current config
     """
     if show:
         # Show current configuration
         current_config = load_config()
-        console.print("\n[bold]Current LLM Configuration:[/bold]")
+
+        console.print("\n[bold]Current Configuration:[/bold]")
+        console.print(f"  Style:    [cyan]{current_config.style}[/cyan]")
+
+        console.print("\n[bold]LLM Configuration:[/bold]")
         console.print(f"  Provider: [cyan]{current_config.llm.provider}[/cyan]")
         if current_config.llm.provider == "local":
             console.print(f"  Base URL: [cyan]{current_config.llm.base_url}[/cyan]")
@@ -178,14 +178,20 @@ def config(url: str | None, model: str | None, preset: str | None, show: bool) -
 
         # Show environment variable overrides if set
         import os
+        if os.getenv("CLAUDE_COMPANION_STYLE"):
+            console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_STYLE is set: {os.getenv('CLAUDE_COMPANION_STYLE')}")
         if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
-            console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_PROVIDER is set: {os.getenv('CLAUDE_COMPANION_LLM_PROVIDER')}")
+            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_PROVIDER is set: {os.getenv('CLAUDE_COMPANION_LLM_PROVIDER')}")
         if os.getenv("CLAUDE_COMPANION_LLM_URL"):
             console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_URL is set: {os.getenv('CLAUDE_COMPANION_LLM_URL')}")
         if os.getenv("CLAUDE_COMPANION_LLM_MODEL"):
             console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_MODEL is set: {os.getenv('CLAUDE_COMPANION_LLM_MODEL')}")
 
         return
+
+    # Load current config to preserve values not being changed
+    current_config = load_config()
+    new_style = style if style else current_config.style
 
     if preset:
         # Use preset configuration
@@ -200,16 +206,20 @@ def config(url: str | None, model: str | None, preset: str | None, show: bool) -
         url = preset_config.get("base_url")  # Only for local providers
         console.print(f"Using [cyan]{preset_config['description']}[/cyan] preset")
 
-        # Create config from preset
-        new_config = Config(llm=LLMConfig(
-            provider=provider,
-            model=model,
-            base_url=url,
-        ))
+        # Create config from preset, preserving style
+        new_config = Config(
+            llm=LLMConfig(
+                provider=provider,
+                model=model,
+                base_url=url,
+            ),
+            style=new_style,
+        )
 
         save_config(new_config)
 
         console.print("\n[green]Configuration saved![/green]")
+        console.print(f"  Style:    [cyan]{new_style}[/cyan]")
         console.print(f"  Provider: [cyan]{provider}[/cyan]")
         if provider == "local":
             console.print(f"  Base URL: [cyan]{url}[/cyan]")
@@ -226,9 +236,26 @@ def config(url: str | None, model: str | None, preset: str | None, show: bool) -
         console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
         return
 
-    if not url and not model and not preset:
-        # Show available presets
-        console.print("\n[bold]Available Presets:[/bold]\n")
+    # Style-only change
+    if style and not url and not model:
+        new_config = Config(
+            llm=current_config.llm,
+            style=style,
+        )
+        save_config(new_config)
+
+        console.print("\n[green]Configuration saved![/green]")
+        console.print(f"  Style: [cyan]{style}[/cyan]")
+        console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
+        return
+
+    if not url and not model and not preset and not style:
+        # Show help
+        console.print("\n[bold]UI Styles:[/bold]")
+        console.print("  [cyan]rich[/cyan]        Boxes with emojis (default)")
+        console.print("  [cyan]claude-code[/cyan]  Minimal style matching Claude Code")
+
+        console.print("\n[bold]LLM Presets:[/bold]\n")
         examples = get_example_configs()
         for name, cfg in examples.items():
             console.print(f"  [cyan]{name:12}[/cyan] {cfg['description']}")
@@ -236,24 +263,28 @@ def config(url: str | None, model: str | None, preset: str | None, show: bool) -
                 console.print(f"               URL:   {cfg['base_url']}")
             console.print(f"               Model: {cfg['model']}\n")
 
-        console.print("Use --preset to apply a preset.")
+        console.print("Use --style to set UI style.")
+        console.print("Use --preset to apply an LLM preset.")
         console.print("Use --show to view current configuration.")
         return
 
-    # Custom configuration (advanced users)
-    current_config = load_config()
+    # Custom LLM configuration (advanced users)
     new_url = url if url else current_config.llm.base_url
     new_model = model if model else current_config.llm.model
 
-    new_config = Config(llm=LLMConfig(
-        provider="local",  # Assume local for custom config
-        base_url=new_url,
-        model=new_model,
-    ))
+    new_config = Config(
+        llm=LLMConfig(
+            provider="local",  # Assume local for custom config
+            base_url=new_url,
+            model=new_model,
+        ),
+        style=new_style,
+    )
 
     save_config(new_config)
 
     console.print("\n[green]Configuration saved![/green]")
+    console.print(f"  Style:    [cyan]{new_style}[/cyan]")
     console.print(f"  Provider: [cyan]local[/cyan]")
     console.print(f"  Base URL: [cyan]{new_config.llm.base_url}[/cyan]")
     console.print(f"  Model:    [cyan]{new_config.llm.model}[/cyan]")
