@@ -336,12 +336,12 @@ class EventStore:
         if not session:
             return 0
 
-        # Parse transcript and prepend historical turns
-        historical_turns, file_position = parse_transcript(path)
+        # Parse transcript - use as source of truth for all turns
+        transcript_turns, file_position = parse_transcript(path)
 
-        if historical_turns:
+        if transcript_turns:
             # Apply cached summaries or submit for summarization
-            for turn in historical_turns:
+            for turn in transcript_turns:
                 if turn.role == "assistant":
                     cached = self._summary_cache.get(turn.content_full)
                     if cached:
@@ -350,10 +350,8 @@ class EventStore:
                         # Submit for summarization (will be cached when done)
                         self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
 
-            # Prepend historical turns before any new turns
-            session.turns = historical_turns + session.turns
-            # Renumber all turns
-            for i, turn in enumerate(session.turns):
-                turn.turn_number = i + 1
+            # Replace session turns with transcript (source of truth)
+            # This ensures we have all turns even if some were missed
+            session.turns = transcript_turns
 
         return file_position
