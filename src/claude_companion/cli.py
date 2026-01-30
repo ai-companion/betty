@@ -141,30 +141,41 @@ def status(port: int) -> None:
 
 
 @main.command()
-@click.option("--url", help="LLM server base URL (e.g., http://localhost:1234/v1)")
-@click.option("--model", help="LLM model name (e.g., openai/gpt-oss-20b)")
-@click.option("--preset", type=click.Choice(["vllm", "lm-studio", "ollama"]), help="Use preset configuration")
+@click.option("--url", help="LLM server base URL (e.g., http://localhost:1234/v1, for local only)")
+@click.option("--model", help="LLM model name (e.g., gpt-4o-mini)")
+@click.option("--preset", type=click.Choice(["vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset configuration")
 @click.option("--show", is_flag=True, help="Show current configuration")
 def config(url: str | None, model: str | None, preset: str | None, show: bool) -> None:
-    """Configure LLM server for summarization.
+    """Configure LLM provider for summarization.
 
     Examples:
-      claude-companion config --preset lm-studio
-      claude-companion config --url http://localhost:1234/v1 --model openai/gpt-oss-20b
-      claude-companion config --show
+      claude-companion config --preset openrouter    # Use OpenRouter API
+      claude-companion config --preset anthropic     # Use Anthropic API
+      claude-companion config --preset lm-studio     # Use LM Studio
+      claude-companion config --show                 # Show current config
     """
     if show:
         # Show current configuration
         current_config = load_config()
         console.print("\n[bold]Current LLM Configuration:[/bold]")
-        console.print(f"  Base URL: [cyan]{current_config.llm.base_url}[/cyan]")
+        console.print(f"  Provider: [cyan]{current_config.llm.provider}[/cyan]")
+        if current_config.llm.provider == "local":
+            console.print(f"  Base URL: [cyan]{current_config.llm.base_url}[/cyan]")
         console.print(f"  Model:    [cyan]{current_config.llm.model}[/cyan]")
+
+        # Show API key status
+        if current_config.llm.provider in ("openai", "openrouter", "anthropic"):
+            has_key = "✓ set" if current_config.llm.api_key else "✗ not set"
+            console.print(f"  API Key:  [{'green' if current_config.llm.api_key else 'red'}]{has_key}[/]")
+
         console.print(f"\nConfig file: [dim]{CONFIG_FILE}[/dim]")
 
         # Show environment variable overrides if set
         import os
+        if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
+            console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_PROVIDER is set: {os.getenv('CLAUDE_COMPANION_LLM_PROVIDER')}")
         if os.getenv("CLAUDE_COMPANION_LLM_URL"):
-            console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_URL is set: {os.getenv('CLAUDE_COMPANION_LLM_URL')}")
+            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_URL is set: {os.getenv('CLAUDE_COMPANION_LLM_URL')}")
         if os.getenv("CLAUDE_COMPANION_LLM_MODEL"):
             console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_MODEL is set: {os.getenv('CLAUDE_COMPANION_LLM_MODEL')}")
 
@@ -178,36 +189,66 @@ def config(url: str | None, model: str | None, preset: str | None, show: bool) -
             return
 
         preset_config = examples[preset]
-        url = preset_config["base_url"]
+        provider = preset_config["provider"]
         model = preset_config["model"]
+        url = preset_config.get("base_url")  # Only for local providers
         console.print(f"Using [cyan]{preset_config['description']}[/cyan] preset")
 
-    if not url and not model:
+        # Create config from preset
+        new_config = Config(llm=LLMConfig(
+            provider=provider,
+            model=model,
+            base_url=url,
+        ))
+
+        save_config(new_config)
+
+        console.print("\n[green]Configuration saved![/green]")
+        console.print(f"  Provider: [cyan]{provider}[/cyan]")
+        if provider == "local":
+            console.print(f"  Base URL: [cyan]{url}[/cyan]")
+        console.print(f"  Model:    [cyan]{model}[/cyan]")
+
+        # Show API key reminder for API providers
+        if provider == "openai":
+            console.print("\n[yellow]Remember:[/yellow] Set OPENAI_API_KEY environment variable")
+        elif provider == "openrouter":
+            console.print("\n[yellow]Remember:[/yellow] Set OPENROUTER_API_KEY environment variable")
+        elif provider == "anthropic":
+            console.print("\n[yellow]Remember:[/yellow] Set ANTHROPIC_API_KEY environment variable")
+
+        console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
+        return
+
+    if not url and not model and not preset:
         # Show available presets
         console.print("\n[bold]Available Presets:[/bold]\n")
         examples = get_example_configs()
         for name, cfg in examples.items():
-            console.print(f"  [cyan]{name}[/cyan]: {cfg['description']}")
-            console.print(f"    URL:   {cfg['base_url']}")
-            console.print(f"    Model: {cfg['model']}\n")
+            console.print(f"  [cyan]{name:12}[/cyan] {cfg['description']}")
+            if cfg["provider"] == "local":
+                console.print(f"               URL:   {cfg['base_url']}")
+            console.print(f"               Model: {cfg['model']}\n")
 
-        console.print("Use --preset to apply a preset, or --url/--model to set custom values.")
+        console.print("Use --preset to apply a preset.")
         console.print("Use --show to view current configuration.")
         return
 
-    # Load current config
+    # Custom configuration (advanced users)
     current_config = load_config()
-
-    # Update with new values
     new_url = url if url else current_config.llm.base_url
     new_model = model if model else current_config.llm.model
 
-    new_config = Config(llm=LLMConfig(base_url=new_url, model=new_model))
+    new_config = Config(llm=LLMConfig(
+        provider="local",  # Assume local for custom config
+        base_url=new_url,
+        model=new_model,
+    ))
 
-    # Save configuration
     save_config(new_config)
 
     console.print("\n[green]Configuration saved![/green]")
+    console.print(f"  Provider: [cyan]local[/cyan]")
     console.print(f"  Base URL: [cyan]{new_config.llm.base_url}[/cyan]")
     console.print(f"  Model:    [cyan]{new_config.llm.model}[/cyan]")
     console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")

@@ -30,8 +30,10 @@ class EventStore:
         # Load config and initialize summarizer
         config = load_config()
         self._summarizer = Summarizer(
-            base_url=config.llm.base_url,
+            provider=config.llm.provider,
             model=config.llm.model,
+            base_url=config.llm.base_url,
+            api_key=config.llm.api_key,
         )
         self._summary_cache = SummaryCache()
 
