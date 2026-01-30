@@ -233,7 +233,7 @@ class TUI:
             border_style="dim",
         )
 
-    def _render_turn(self, turn: Turn, is_selected: bool = False) -> Text | Group:
+    def _render_turn(self, turn: Turn, is_selected: bool = False, conv_turn: int = 0) -> Text | Group:
         """Render a single turn matching Claude Code style."""
         # User turns: "> message" with dim background
         if turn.role == "user":
@@ -245,7 +245,7 @@ class TUI:
             else:
                 text.append("❯ ", style="dim on grey15")
                 text.append(content, style="on grey15")
-            return text
+            return Group(text, Text(""))
 
         # Assistant/tool turns: "⏺ [indicator] content"
         if turn.role == "assistant":
@@ -287,7 +287,14 @@ class TUI:
                 text.append(f"{indicator} ", style="dim")
             text.append(content)
 
-        return text
+        # Add status line for assistant turns, empty line for tool turns
+        if turn.role == "assistant" and conv_turn > 0:
+            status = f"── turn {conv_turn}, {turn.word_count} words ──"
+            status_text = Text(status, style="dim", justify="right")
+            return Group(text, status_text)
+
+        # Tool turns get an empty line after
+        return Group(text, Text(""))
 
     def _render_turns(self, session: Session | None) -> Group:
         """Render all turns for a session."""
@@ -306,11 +313,19 @@ class TUI:
         end_idx = min(start_idx + self._max_visible_turns, total_turns)
         visible_turns = filtered_turns[start_idx:end_idx]
 
+        # Compute conversation turn numbers (only counting user+assistant)
+        conv_turn_map: dict[int, int] = {}
+        conv_turn = 0
+        for turn in filtered_turns:
+            if turn.role in ("user", "assistant"):
+                conv_turn += 1
+                conv_turn_map[id(turn)] = conv_turn
+
         panels = []
         for i, turn in enumerate(visible_turns):
             global_idx = start_idx + i
             is_selected = self._selected_index == global_idx
-            panels.append(self._render_turn(turn, is_selected))
+            panels.append(self._render_turn(turn, is_selected, conv_turn_map.get(id(turn), 0)))
 
         if start_idx > 0:
             panels.insert(0, Text(f"  ↑ {start_idx} more above", style="dim"))
@@ -348,11 +363,18 @@ class TUI:
             padding=(0, 1),
         )
 
-    def _render_status_line(self) -> Text:
+    def _render_status_line(self) -> Panel:
         """Render the status line showing monitor instruction if set."""
         if self._monitor_text:
-            return Text.from_markup(f"[dim]monitoring:[/dim] {self._monitor_text}")
-        return Text.from_markup("[dim]Press \\[m] to set monitoring instruction[/dim]")
+            content = self._monitor_text
+        else:
+            content = "[dim]Press \\[m] to set[/dim]"
+        return Panel(
+            content,
+            title="[bold]Monitor[/bold]",
+            title_align="left",
+            border_style="dim",
+        )
 
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
