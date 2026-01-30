@@ -9,7 +9,7 @@ from .cache import SummaryCache
 from .config import load_config
 from .history import SessionRecord, save_session
 from .models import Event, Session, Turn
-from .summarizer import Summarizer
+from .summarizer import Summarizer, _get_turn_context
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher
 
@@ -186,11 +186,16 @@ class EventStore:
 
         # Submit assistant turns for summarization (check cache first)
         if turn.role == "assistant":
-            cached = self._summary_cache.get(turn.content_full)
-            if cached:
-                turn.summary = cached
-            else:
-                self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
+            # Get full context for summarization (user message + tools)
+            session = self._sessions.get(self._active_session_id)
+            if session:
+                user_turn, tool_turns = _get_turn_context(session, turn)
+                cache_key = self._make_cache_key(turn.content_full, user_turn, tool_turns)
+                cached = self._summary_cache.get(cache_key)
+                if cached:
+                    turn.summary = cached
+                else:
+                    self._summarizer.summarize_async(turn, user_turn, tool_turns, self._make_summary_callback(turn, cache_key))
 
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:
@@ -199,13 +204,39 @@ class EventStore:
             except Exception:
                 pass
 
-    def _make_summary_callback(self, turn: Turn) -> Callable[[str, bool], None]:
+    def _make_cache_key(self, content: str, user_turn: Turn | None, tool_context: list[Turn]) -> str:
+        """Create cache key from full context.
+
+        Args:
+            content: Assistant's text response
+            user_turn: User message that triggered this sequence
+            tool_context: Tool calls between user and assistant
+
+        Returns:
+            Cache key that uniquely identifies this context
+        """
+        parts = []
+
+        if user_turn:
+            # Include user message in key
+            parts.append(f"U:{user_turn.content_preview}")
+
+        if tool_context:
+            # Include tool sequence in key
+            tool_sig = "|".join(f"{t.tool_name}:{t.content_preview}" for t in tool_context)
+            parts.append(f"T:{tool_sig}")
+
+        parts.append(f"A:{content}")
+
+        return "::".join(parts)
+
+    def _make_summary_callback(self, turn: Turn, cache_key: str) -> Callable[[str, bool], None]:
         """Create a callback that updates turn summary and notifies listeners."""
         def callback(summary: str, success: bool) -> None:
             turn.summary = summary
             # Only cache successful summaries
             if success:
-                self._summary_cache.set(turn.content_full, summary)
+                self._summary_cache.set(cache_key, summary)
             # Notify turn listeners to refresh TUI
             for listener in self._turn_listeners:
                 try:
@@ -229,12 +260,15 @@ class EventStore:
 
             for turn in session.turns:
                 if turn.is_historical and turn.role == "assistant" and not turn.summary:
+                    # Get full context for summarization (user message + tools)
+                    user_turn, tool_turns = _get_turn_context(session, turn)
+                    cache_key = self._make_cache_key(turn.content_full, user_turn, tool_turns)
                     # Check cache first
-                    cached = self._summary_cache.get(turn.content_full)
+                    cached = self._summary_cache.get(cache_key)
                     if cached:
                         turn.summary = cached
                     else:
-                        self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
+                        self._summarizer.summarize_async(turn, user_turn, tool_turns, self._make_summary_callback(turn, cache_key))
                         count += 1
         return count
 
@@ -340,18 +374,21 @@ class EventStore:
         transcript_turns, file_position = parse_transcript(path)
 
         if transcript_turns:
+            # Replace session turns with transcript (source of truth)
+            # This ensures we have all turns even if some were missed
+            session.turns = transcript_turns
+
             # Apply cached summaries or submit for summarization
             for turn in transcript_turns:
                 if turn.role == "assistant":
-                    cached = self._summary_cache.get(turn.content_full)
+                    # Get full context for summarization (user message + tools)
+                    user_turn, tool_turns = _get_turn_context(session, turn)
+                    cache_key = self._make_cache_key(turn.content_full, user_turn, tool_turns)
+                    cached = self._summary_cache.get(cache_key)
                     if cached:
                         turn.summary = cached
                     else:
                         # Submit for summarization (will be cached when done)
-                        self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
-
-            # Replace session turns with transcript (source of truth)
-            # This ensures we have all turns even if some were missed
-            session.turns = transcript_turns
+                        self._summarizer.summarize_async(turn, user_turn, tool_turns, self._make_summary_callback(turn, cache_key))
 
         return file_position
