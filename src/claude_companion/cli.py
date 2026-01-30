@@ -6,6 +6,7 @@ from rich.table import Table
 
 from . import __version__
 from .config import CONFIG_FILE, DEFAULT_STYLE, get_example_configs, load_config, save_config, Config, LLMConfig
+from .history import get_history, get_most_recent
 from .hooks import check_hooks_status, install_hooks, uninstall_hooks
 from .server import ServerThread
 from .store import EventStore
@@ -17,8 +18,10 @@ console = Console()
 @click.group(invoke_without_command=True)
 @click.option("--port", "-p", default=5432, help="Port for the HTTP server")
 @click.option("--version", "-v", is_flag=True, help="Show version")
+@click.option("--continue", "-c", "continue_session", is_flag=True, help="Continue the most recent watched session")
+@click.option("--resume", "-r", is_flag=True, help="Select a session to resume from history")
 @click.pass_context
-def main(ctx: click.Context, port: int, version: bool) -> None:
+def main(ctx: click.Context, port: int, version: bool, continue_session: bool, resume: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -27,10 +30,73 @@ def main(ctx: click.Context, port: int, version: bool) -> None:
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
         config = load_config()
-        run_companion(port, config.style)
+
+        # Handle -c/--continue: load most recent session
+        initial_transcript = None
+        if continue_session:
+            recent = get_most_recent()
+            if recent:
+                initial_transcript = recent.transcript_path
+                console.print(f"[dim]Continuing session:[/dim] {recent.project_name}")
+            else:
+                console.print("[yellow]No session history found.[/yellow]")
+
+        # Handle -r/--resume: show session picker
+        elif resume:
+            initial_transcript = _pick_session()
+            if initial_transcript is None:
+                return  # User cancelled or no history
+
+        run_companion(port, config.style, initial_transcript)
 
 
-def run_companion(port: int, ui_style: str = DEFAULT_STYLE) -> None:
+def _pick_session() -> str | None:
+    """Show session picker for -r/--resume. Returns transcript path or None."""
+    from rich.prompt import Prompt
+
+    history = get_history(limit=20)
+    if not history:
+        console.print("[yellow]No session history found.[/yellow]")
+        return None
+
+    # Display session list
+    console.print("\n[bold]Recent sessions:[/bold]\n")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Project", style="cyan")
+    table.add_column("Session", style="dim", width=8)
+    table.add_column("Last Accessed", style="dim")
+
+    for i, record in enumerate(history, 1):
+        last_accessed = record.last_accessed_dt.strftime("%Y-%m-%d %H:%M")
+        session_short = record.session_id[:8]
+        table.add_row(str(i), record.project_name, session_short, last_accessed)
+
+    console.print(table)
+    console.print()
+
+    # Prompt for selection
+    choice = Prompt.ask(
+        "Select session",
+        default="1",
+        show_default=True,
+    )
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(history):
+            selected = history[idx]
+            console.print(f"[dim]Resuming session:[/dim] {selected.project_name}")
+            return selected.transcript_path
+        else:
+            console.print("[red]Invalid selection.[/red]")
+            return None
+    except ValueError:
+        console.print("[red]Invalid selection.[/red]")
+        return None
+
+
+def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: str | None = None) -> None:
     """Run the main companion TUI and server."""
     # Check if hooks are installed
     status = check_hooks_status(port)
@@ -46,6 +112,11 @@ def run_companion(port: int, ui_style: str = DEFAULT_STYLE) -> None:
     store = EventStore()
     server = ServerThread(store, port=port)
 
+    # Load initial session if provided (from -c or -r)
+    if initial_transcript:
+        if not store.load_session_from_transcript(initial_transcript):
+            console.print(f"[yellow]Warning:[/yellow] Could not load session from {initial_transcript}")
+
     console.print(f"[dim]Starting server on http://127.0.0.1:{port}[/dim]")
 
     # Start server in background
@@ -54,6 +125,9 @@ def run_companion(port: int, ui_style: str = DEFAULT_STYLE) -> None:
     try:
         # Run TUI in main thread
         tui = TUI(store, console, ui_style=ui_style)
+        # Scroll to bottom if resuming a session
+        if initial_transcript:
+            tui.scroll_to_bottom()
         tui.run()
     except KeyboardInterrupt:
         pass

@@ -7,6 +7,7 @@ from typing import Callable
 from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_alerts, send_system_notification
 from .cache import SummaryCache
 from .config import load_config
+from .history import SessionRecord, save_session
 from .models import Event, Session, Turn
 from .summarizer import Summarizer
 from .transcript import parse_transcript
@@ -64,6 +65,8 @@ class EventStore:
                 if event.transcript_path:
                     start_turn = len(self._sessions[session_id].turns)
                     self._watcher.watch(event.transcript_path, start_turn)
+                    # Save to session history for -c/-r resume features
+                    self._save_to_history(session_id, event.transcript_path)
 
         # Check for alerts
         alerts = check_event_for_alerts(event)
@@ -239,6 +242,72 @@ class EventStore:
         """Stop the watcher and summarizer."""
         self._watcher.stop()
         self._summarizer.shutdown()
+
+    def _save_to_history(self, session_id: str, transcript_path: str) -> None:
+        """Save session to history for -c/-r resume features."""
+        from datetime import datetime
+
+        # Extract project path from transcript path
+        project_path = ""
+        parts = transcript_path.split("/")
+        for i, part in enumerate(parts):
+            if part == "projects" and i + 1 < len(parts):
+                project_path = parts[i + 1]
+                break
+
+        now = datetime.now().isoformat()
+        record = SessionRecord(
+            session_id=session_id,
+            project_path=project_path,
+            transcript_path=transcript_path,
+            started_at=now,
+            last_accessed=now,
+        )
+        save_session(record)
+
+    def load_session_from_transcript(self, transcript_path: str) -> bool:
+        """Load a session from a transcript file (for -c/-r resume).
+
+        Returns True if successful, False otherwise.
+        """
+        from pathlib import Path
+
+        path = Path(transcript_path)
+        if not path.exists():
+            return False
+
+        # Extract session_id from filename (e.g., "abc123.jsonl" -> "abc123")
+        session_id = path.stem
+
+        # Extract project_path from transcript path
+        project_path = ""
+        parts = transcript_path.split("/")
+        for i, part in enumerate(parts):
+            if part == "projects" and i + 1 < len(parts):
+                project_path = parts[i + 1]
+                break
+
+        with self._lock:
+            # Create session
+            session = Session(
+                session_id=session_id,
+                project_path=project_path,
+            )
+            self._sessions[session_id] = session
+            self._active_session_id = session_id
+
+        # Load transcript history
+        self._load_transcript_history(session_id, transcript_path)
+
+        # Start watching for new content
+        with self._lock:
+            start_turn = len(self._sessions[session_id].turns)
+        self._watcher.watch(transcript_path, start_turn)
+
+        # Update history last_accessed
+        self._save_to_history(session_id, transcript_path)
+
+        return True
 
     def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> None:
         """Load historical turns from transcript file."""

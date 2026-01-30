@@ -366,10 +366,9 @@ class TUI:
 
         elif key.isdigit() and key != "0":
             self.store.set_active_session(int(key))
-            self._selected_index = None
-            self._scroll_offset = 0
             self._filter_index = 0
             self._auto_scroll = True
+            self.scroll_to_bottom()
             self._refresh_event.set()
 
         elif key == "k" or key == "\x1b[A":  # k or Up arrow
@@ -471,6 +470,16 @@ class TUI:
             self._refresh_event.set()
 
         return True
+
+    def scroll_to_bottom(self) -> None:
+        """Scroll to show the most recent turns."""
+        session = self.store.get_active_session()
+        if session:
+            filtered = self._get_filtered_turns(session)
+            total = len(filtered)
+            if total > self._max_visible_turns:
+                self._scroll_offset = total - self._max_visible_turns
+            self._selected_index = total - 1 if total > 0 else None
 
     def run(self) -> None:
         """Run the TUI."""
