@@ -9,7 +9,6 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
@@ -23,19 +22,6 @@ from .store import EventStore
 UI_STYLES = ["default", "claude-code"]
 
 # === Claude Code style constants ===
-STYLES_CLAUDE = {
-    "user": Style(color="white"),
-    "assistant": Style(color="cyan"),
-    "tool": Style(dim=True),
-    "tool_write": Style(color="yellow", dim=True),
-    "tool_edit": Style(color="yellow", dim=True),
-    "tool_bash": Style(dim=True),
-    "tool_error": Style(color="red"),
-    "stats": Style(dim=True),
-    "header": Style(bold=True),
-    "selected": Style(bold=True, reverse=True),
-}
-
 BULLET = "⏺"
 BULLET_STYLES = {
     "assistant": "white",
@@ -65,19 +51,6 @@ FILTERS_CLAUDE = [
 ]
 
 # === Default style constants (original with emojis/boxes) ===
-STYLES_DEFAULT = {
-    "user": Style(color="blue"),
-    "assistant": Style(color="green"),
-    "tool": Style(color="cyan", dim=True),
-    "tool_write": Style(color="yellow"),
-    "tool_edit": Style(color="yellow"),
-    "tool_bash": Style(color="magenta"),
-    "tool_error": Style(color="red"),
-    "stats": Style(dim=True),
-    "header": Style(bold=True),
-    "selected": Style(bold=True),
-}
-
 ROLE_ICONS = {
     "user": "👤",
     "assistant": "🤖",
@@ -104,17 +77,6 @@ FILTERS_DEFAULT = [
     ("Edit", "✏️ Edit"),
     ("Bash", "💻 Bash"),
 ]
-
-
-def get_tool_style(tool_name: str | None, styles: dict) -> Style:
-    """Get style for a tool."""
-    if not tool_name:
-        return styles["tool"]
-    if tool_name in ("Write", "Edit"):
-        return styles["tool_write"]
-    if tool_name == "Bash":
-        return styles["tool_bash"]
-    return styles["tool"]
 
 
 def get_tool_indicator(tool_name: str | None) -> str:
@@ -198,11 +160,6 @@ class TUI:
         store.add_listener(self._on_event)
         store.add_alert_listener(self._on_alert)
         store.add_turn_listener(self._on_turn)
-
-    @property
-    def _styles(self) -> dict:
-        """Get styles for current UI style."""
-        return STYLES_CLAUDE if self._ui_style == "claude-code" else STYLES_DEFAULT
 
     @property
     def _filters(self) -> list:
@@ -346,16 +303,16 @@ class TUI:
         if turn.role == "assistant":
             bullet_style = selected_text_style or BULLET_STYLES["assistant"]
             if turn.expanded:
-                indicator = "[-]"
+                indicator = "\\[-]"
                 content = turn.content_full
             elif self._use_summary and turn.summary:
-                indicator = "[tldr]"
+                indicator = "\\[tldr]"
                 content = turn.summary
             elif self._use_summary and not turn.summary:
-                indicator = "[+]"
+                indicator = "\\[+]"
                 content = f"{turn.content_preview} *summarizing...*"
             elif turn.content_full != turn.content_preview:
-                indicator = "[+]"
+                indicator = "\\[+]"
                 content = turn.content_preview
             else:
                 indicator = ""
@@ -376,25 +333,28 @@ class TUI:
                 parts.append(Text(status, style="dim", justify="right"))
             return Group(*parts)
 
-        # Tool turns: render as Markdown with colored bullet
+        # Tool turns: render as Text to preserve verbatim output
         bullet_style = selected_text_style or BULLET_STYLES["tool"]
         tool_indicator = get_tool_indicator(turn.tool_name)
-        indicator = f"[{tool_indicator}]"
         content = turn.content_full if turn.expanded else turn.content_preview
-        md_content = f"**{indicator}** {content}"
 
         row = Table.grid(padding=(0, 0))
         row.add_column(width=2)
         row.add_column()
+
+        # Build tool content with indicator prefix
+        tool_text = Text()
+        tool_text.append(f"[{tool_indicator}] ", style="bold" if not selected_text_style else selected_text_style)
+        tool_text.append(content, style=selected_text_style or "dim")
+
         row.add_row(
             Text(f"{BULLET} ", style=bullet_style),
-            Markdown(md_content, style=selected_text_style),
+            tool_text,
         )
         return Group(row, Text(""))
 
     def _render_turn_default(self, turn: Turn, is_selected: bool) -> Panel:
         """Render a turn in default style (boxes with emojis)."""
-        styles = self._styles
         history_prefix = "◷ " if turn.is_historical else ""
 
         if turn.role == "user":
@@ -408,8 +368,13 @@ class TUI:
         else:
             icon = get_tool_icon(turn.tool_name)
             title = f"{history_prefix}Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
-            base_style = get_tool_style(turn.tool_name, styles)
-            border_style = base_style if not turn.is_historical else f"dim {base_style}"
+            # Use string-based border styles for tools
+            if turn.tool_name in ("Write", "Edit"):
+                border_style = "yellow" if not turn.is_historical else "dim yellow"
+            elif turn.tool_name == "Bash":
+                border_style = "magenta" if not turn.is_historical else "dim magenta"
+            else:
+                border_style = "cyan" if not turn.is_historical else "dim cyan"
 
         if turn.expanded:
             content = turn.content_full
@@ -437,7 +402,8 @@ class TUI:
         if turn.role == "assistant":
             panel_content = Markdown(f"{expand_indicator}{content}")
         else:
-            panel_content = f"{expand_indicator}{content}"
+            # Use Text for user/tool content to avoid markup parsing issues
+            panel_content = Text(f"{expand_indicator}{content}")
 
         return Panel(
             panel_content,
@@ -501,10 +467,10 @@ class TUI:
         lines = []
         for alert in alerts:
             if alert.level == AlertLevel.DANGER:
-                indicator = "🚨" if self._ui_style == "default" else "[!]"
+                indicator = "🚨" if self._ui_style == "default" else "\\[!]"
                 style = "bold red"
             else:
-                indicator = "⚠️ " if self._ui_style == "default" else "[*]"
+                indicator = "⚠️ " if self._ui_style == "default" else "\\[*]"
                 style = "yellow"
             lines.append(f"[{style}]{indicator} {alert.title}[/{style}]: {alert.message}")
 
@@ -571,9 +537,9 @@ class TUI:
         if self._ui_style == "claude-code":
             alert_indicator = ""
             if danger_count > 0:
-                alert_indicator = f"[bold red][!{danger_count}][/bold red] "
+                alert_indicator = f"[bold red]\\[!{danger_count}][/bold red] "
             elif warn_count > 0:
-                alert_indicator = f"[yellow][*{warn_count}][/yellow] "
+                alert_indicator = f"[yellow]\\[*{warn_count}][/yellow] "
         else:
             alert_indicator = ""
             if danger_count > 0:
