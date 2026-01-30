@@ -17,8 +17,14 @@ console = Console()
 @click.group(invoke_without_command=True)
 @click.option("--port", "-p", default=5432, help="Port for the HTTP server")
 @click.option("--version", "-v", is_flag=True, help="Show version")
+@click.option(
+    "--style",
+    type=click.Choice(["default", "claude-code"]),
+    default="default",
+    help="UI style: default (boxes with emojis) or claude-code (minimal)",
+)
 @click.pass_context
-def main(ctx: click.Context, port: int, version: bool) -> None:
+def main(ctx: click.Context, port: int, version: bool, style: str) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -26,10 +32,10 @@ def main(ctx: click.Context, port: int, version: bool) -> None:
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
-        run_companion(port)
+        run_companion(port, style)
 
 
-def run_companion(port: int) -> None:
+def run_companion(port: int, ui_style: str = "default") -> None:
     """Run the main companion TUI and server."""
     # Check if hooks are installed
     status = check_hooks_status(port)
@@ -52,7 +58,7 @@ def run_companion(port: int) -> None:
 
     try:
         # Run TUI in main thread
-        tui = TUI(store, console)
+        tui = TUI(store, console, ui_style=ui_style)
         tui.run()
     except KeyboardInterrupt:
         pass
