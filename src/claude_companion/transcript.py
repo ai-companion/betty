@@ -23,16 +23,29 @@ def get_transcript_path(session_id: str, cwd: str) -> Path | None:
     return None
 
 
-def parse_transcript(transcript_path: Path) -> list[Turn]:
-    """Parse a JSONL transcript file and extract turns."""
+def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int]:
+    """Parse a JSONL transcript file and extract turns.
+
+    Returns:
+        Tuple of (turns list, file position after last successfully parsed line).
+        The file position can be passed to the watcher to avoid missing content.
+    """
     turns: list[Turn] = []
     turn_number = 0
+    last_good_position = 0
 
     try:
         with open(transcript_path, "r") as f:
-            for line in f:
+            while True:
+                line_start = f.tell()
+                line = f.readline()
+                if not line:
+                    break  # EOF
+
                 line = line.strip()
                 if not line:
+                    # Empty line - update position and continue
+                    last_good_position = f.tell()
                     continue
 
                 try:
@@ -43,12 +56,15 @@ def parse_transcript(transcript_path: Path) -> list[Turn]:
                         turn.turn_number = turn_number
                         turn.is_historical = True
                         turns.append(turn)
+                    # Successfully parsed - update position to after this line
+                    last_good_position = f.tell()
                 except json.JSONDecodeError:
+                    # Failed to parse - don't update position, watcher will retry
                     continue
     except IOError:
-        return []
+        return [], 0
 
-    return turns
+    return turns, last_good_position
 
 
 def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:

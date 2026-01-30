@@ -60,11 +60,11 @@ class EventStore:
             if event.event_type == "SessionStart":
                 self._active_session_id = session_id
                 # Load transcript history using transcript_path from hook
-                self._load_transcript_history(session_id, event.transcript_path)
-                # Start watching for new content
+                file_position = self._load_transcript_history(session_id, event.transcript_path)
+                # Start watching for new content from where we left off
                 if event.transcript_path:
                     start_turn = len(self._sessions[session_id].turns)
-                    self._watcher.watch(event.transcript_path, start_turn)
+                    self._watcher.watch(event.transcript_path, start_turn, start_position=file_position)
                     # Save to session history for -c/-r resume features
                     self._save_to_history(session_id, event.transcript_path)
 
@@ -296,23 +296,27 @@ class EventStore:
             self._sessions[session_id] = session
             self._active_session_id = session_id
 
-        # Load transcript history
-        self._load_transcript_history(session_id, transcript_path)
+        # Load transcript history and get file position
+        file_position = self._load_transcript_history(session_id, transcript_path)
 
-        # Start watching for new content
+        # Start watching for new content from where we left off
         with self._lock:
             start_turn = len(self._sessions[session_id].turns)
-        self._watcher.watch(transcript_path, start_turn)
+        self._watcher.watch(transcript_path, start_turn, start_position=file_position)
 
         # Update history last_accessed
         self._save_to_history(session_id, transcript_path)
 
         return True
 
-    def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> None:
-        """Load historical turns from transcript file."""
+    def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> int:
+        """Load historical turns from transcript file.
+
+        Returns:
+            File position after reading, to be passed to watcher.
+        """
         if not transcript_path:
-            return
+            return 0
 
         from pathlib import Path
         import time
@@ -326,18 +330,18 @@ class EventStore:
             time.sleep(0.1)
 
         if not path.exists():
-            return
+            return 0
 
         session = self._sessions.get(session_id)
         if not session:
-            return
+            return 0
 
-        # Parse transcript and prepend historical turns
-        historical_turns = parse_transcript(path)
+        # Parse transcript - use as source of truth for all turns
+        transcript_turns, file_position = parse_transcript(path)
 
-        if historical_turns:
+        if transcript_turns:
             # Apply cached summaries or submit for summarization
-            for turn in historical_turns:
+            for turn in transcript_turns:
                 if turn.role == "assistant":
                     cached = self._summary_cache.get(turn.content_full)
                     if cached:
@@ -346,8 +350,8 @@ class EventStore:
                         # Submit for summarization (will be cached when done)
                         self._summarizer.summarize_async(turn, self._make_summary_callback(turn))
 
-            # Prepend historical turns before any new turns
-            session.turns = historical_turns + session.turns
-            # Renumber all turns
-            for i, turn in enumerate(session.turns):
-                turn.turn_number = i + 1
+            # Replace session turns with transcript (source of truth)
+            # This ensures we have all turns even if some were missed
+            session.turns = transcript_turns
+
+        return file_position

@@ -349,6 +349,10 @@ class TUI:
         if key == "q" or key == "\x03":  # q or Ctrl+C
             return False
 
+        elif key == "\x1b":  # Esc - unselect
+            self._selected_index = None
+            self._refresh_event.set()
+
         elif key == "r":
             self._refresh_event.set()
 
@@ -479,7 +483,7 @@ class TUI:
             total = len(filtered)
             if total > self._max_visible_turns:
                 self._scroll_offset = total - self._max_visible_turns
-            self._selected_index = total - 1 if total > 0 else None
+            self._selected_index = None
 
     def run(self) -> None:
         """Run the TUI."""
