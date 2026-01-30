@@ -237,21 +237,26 @@ class TUI:
 
     def _render_turn(self, turn: Turn, is_selected: bool = False, conv_turn: int = 0) -> Text | Group:
         """Render a single turn matching Claude Code style."""
-        # User turns: "> message" with dim background
+        # Selection style: blue-ish text like Claude Code
+        selected_style = "light_steel_blue" if is_selected else ""
+
+        # User turns: "❯ message" with dim background
         if turn.role == "user":
             content = turn.content_full if turn.expanded else turn.content_preview
-            text = Text()
-            if is_selected:
-                text.append("❯ ", style="bold white on grey23")
-                text.append(content, style="on grey23")
-            else:
-                text.append("❯ ", style="dim on grey15")
-                text.append(content, style="on grey15")
-            return Group(text, Text(""))
+            indicator_style = selected_style or "dim"
+            content_style = selected_style or "on grey15"
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                Text("❯ ", style=indicator_style),
+                Text(content, style=content_style),
+            )
+            return Group(row, Text(""))
 
         # Assistant turns: render as Markdown with colored bullet
         if turn.role == "assistant":
-            bullet_style = BULLET_STYLES["assistant"]
+            bullet_style = selected_style or BULLET_STYLES["assistant"]
             if turn.expanded:
                 indicator = "[-]"
                 content = turn.content_full
@@ -275,10 +280,13 @@ class TUI:
                 md_content = content
 
             # Use table grid to combine styled bullet with markdown
-            row = Table.grid(padding=(0, 1))
-            row.add_column(width=1)
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
             row.add_column()
-            row.add_row(Text(BULLET, style=bullet_style), Markdown(md_content))
+            row.add_row(
+                Text(f"{BULLET} ", style=bullet_style),
+                Markdown(md_content, style=selected_style),
+            )
 
             parts = [row]
             if conv_turn > 0:
@@ -287,16 +295,19 @@ class TUI:
             return Group(*parts)
 
         # Tool turns: render as Markdown with colored bullet
-        bullet_style = BULLET_STYLES["tool"]
+        bullet_style = selected_style or BULLET_STYLES["tool"]
         tool_indicator = get_tool_indicator(turn.tool_name)
         indicator = f"[{tool_indicator}]"
         content = turn.content_full if turn.expanded else turn.content_preview
         md_content = f"**{indicator}** {content}"
 
-        row = Table.grid(padding=(0, 1))
-        row.add_column(width=1)
+        row = Table.grid(padding=(0, 0))
+        row.add_column(width=2)
         row.add_column()
-        row.add_row(Text(BULLET, style=bullet_style), Markdown(md_content))
+        row.add_row(
+            Text(f"{BULLET} ", style=bullet_style),
+            Markdown(md_content, style=selected_style),
+        )
 
         return Group(row, Text(""))
 
