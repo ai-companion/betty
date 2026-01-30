@@ -32,13 +32,7 @@ STYLES = {
     "selected": Style(bold=True, reverse=True),
 }
 
-# Text-based indicators (replacing emojis)
-ROLE_INDICATORS = {
-    "user": ">",
-    "assistant": "Claude",
-}
-
-# Left margin bullets (matching Claude Code)
+# Left margin indicators (matching Claude Code)
 BULLET = "⏺"
 BULLET_STYLES = {
     "assistant": "white",
@@ -247,10 +241,10 @@ class TUI:
             content = turn.content_full if turn.expanded else turn.content_preview
             text = Text()
             if is_selected:
-                text.append("> ", style="bold white on grey23")
+                text.append("❯ ", style="bold white on grey23")
                 text.append(content, style="on grey23")
             else:
-                text.append("> ", style="dim on grey15")
+                text.append("❯ ", style="dim on grey15")
                 text.append(content, style="on grey15")
             return text
 
