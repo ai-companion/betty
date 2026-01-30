@@ -10,7 +10,6 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.style import Style
-from rich.table import Table
 from rich.text import Text
 
 from .alerts import Alert, AlertLevel
@@ -39,11 +38,11 @@ ROLE_INDICATORS = {
     "assistant": "Claude",
 }
 
-# Left margin bullets
-BULLETS = {
-    "user": ("●", "white"),
-    "assistant": ("●", "cyan"),
-    "tool": ("○", "dim"),
+# Left margin bullets (matching Claude Code)
+BULLET = "⏺"
+BULLET_STYLES = {
+    "assistant": "white",
+    "tool": "green",
 }
 
 TOOL_INDICATORS = {
@@ -241,83 +240,64 @@ class TUI:
             border_style="dim",
         )
 
-    def _render_turn(self, turn: Turn, is_selected: bool = False) -> Table:
-        """Render a single turn with bullet indicator."""
-        # Historical indicator for turns loaded from transcript
-        history_suffix = " h" if turn.is_historical else ""
-
-        # Determine bullet style based on role
+    def _render_turn(self, turn: Turn, is_selected: bool = False) -> Text | Group:
+        """Render a single turn matching Claude Code style."""
+        # User turns: "> message" with dim background
         if turn.role == "user":
-            bullet_char, bullet_color = BULLETS["user"]
-            indicator = ROLE_INDICATORS["user"]
-            title = indicator
-            border_style = "dim"
-        elif turn.role == "assistant":
-            bullet_char, bullet_color = BULLETS["assistant"]
-            indicator = ROLE_INDICATORS["assistant"]
-            title = indicator
-            border_style = "cyan" if not turn.is_historical else "dim cyan"
-        else:
-            bullet_char, bullet_color = BULLETS["tool"]
-            indicator = get_tool_indicator(turn.tool_name)
-            title = indicator
-            border_style = "dim"
-
-        if turn.expanded:
-            content = turn.content_full
-            expand_indicator = "[-] "
-        else:
-            # For assistant turns, show summary if available and enabled
-            if turn.role == "assistant" and self._use_summary:
-                if turn.summary:
-                    content = turn.summary
-                    expand_indicator = "[tldr] "
-                else:
-                    # Summary pending - use Markdown italic to keep inline
-                    content = f"{turn.content_preview} *summarizing...*"
-                    expand_indicator = "[+] " if turn.content_full != turn.content_preview else ""
+            content = turn.content_full if turn.expanded else turn.content_preview
+            text = Text()
+            if is_selected:
+                text.append("> ", style="bold white on grey23")
+                text.append(content, style="on grey23")
             else:
-                content = turn.content_preview
-                if turn.content_full != turn.content_preview:
-                    expand_indicator = "[+] "
-                else:
-                    expand_indicator = ""
+                text.append("> ", style="dim on grey15")
+                text.append(content, style="on grey15")
+            return text
 
-        if is_selected:
-            title = f"> {title}"
-            border_style = "white"
-            bullet_color = "white bold"
-
-        # Build subtitle with turn number (and word count for user/assistant)
-        subtitle_parts = [f"Turn {turn.turn_number}{history_suffix}"]
-        if turn.role in ("user", "assistant"):
-            subtitle_parts.append(f"{turn.word_count:,} words")
-        subtitle = " | ".join(subtitle_parts)
-
-        # Render assistant content as Markdown for proper formatting
+        # Assistant/tool turns: "⏺ [indicator] content"
         if turn.role == "assistant":
-            # Prepend indicator to content for inline display
-            panel_content = Markdown(f"{expand_indicator}{content}")
+            bullet_style = BULLET_STYLES["assistant"]
+            if turn.expanded:
+                indicator = "[-]"
+                content = turn.content_full
+            elif self._use_summary and turn.summary:
+                indicator = "[tldr]"
+                content = turn.summary
+            elif self._use_summary and not turn.summary:
+                indicator = "[+]"
+                content = f"{turn.content_preview} *summarizing...*"
+            elif turn.content_full != turn.content_preview:
+                indicator = "[+]"
+                content = turn.content_preview
+            else:
+                indicator = ""
+                content = turn.content_preview
         else:
-            panel_content = f"{expand_indicator}{content}"
+            # Tool turns
+            bullet_style = BULLET_STYLES["tool"]
+            tool_indicator = get_tool_indicator(turn.tool_name)
+            indicator = f"[{tool_indicator}]"
+            content = turn.content_full if turn.expanded else turn.content_preview
 
-        panel = Panel(
-            panel_content,
-            title=title,
-            title_align="left",
-            subtitle=subtitle,
-            subtitle_align="right",
-            border_style=border_style,
-            padding=(0, 1),
-        )
+        # Build the line
+        text = Text()
+        if is_selected:
+            text.append(BULLET, style="bold white")
+            text.append(" ")
+            if indicator:
+                text.append(f"{indicator} ", style="bold white")
+        else:
+            text.append(BULLET, style=bullet_style)
+            text.append(" ")
+            if indicator:
+                text.append(f"{indicator} ", style="dim")
 
-        # Create table with bullet + panel
-        table = Table.grid(padding=(0, 1))
-        table.add_column(width=1)  # Bullet column
-        table.add_column(ratio=1)  # Panel column
-        table.add_row(Text(bullet_char, style=bullet_color), panel)
-
-        return table
+        # For assistant, render content as Markdown for formatting
+        if turn.role == "assistant":
+            return Group(text, Markdown(content))
+        else:
+            text.append(content)
+            return text
 
     def _render_turns(self, session: Session | None) -> Group:
         """Render all turns for a session."""
