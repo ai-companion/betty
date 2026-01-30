@@ -253,7 +253,7 @@ class ClaudeCodeStyle(StyleRenderer):
     BULLET = "⏺"
     BULLET_STYLES = {
         "assistant": "white",
-        "tool": "green",
+        "tool": "#5fd787",  # Matches Claude Code's green bullet
     }
 
     TOOL_INDICATORS = {
