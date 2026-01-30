@@ -77,7 +77,7 @@ def _pick_session(project_path: str | None = None) -> str | None:
     # Check for TTY - picker requires interactive terminal
     if not sys.stdin.isatty():
         console.print("[red]Error:[/red] Session picker requires an interactive terminal.")
-        return None
+        raise SystemExit(1)
 
     history = get_history(limit=20, project_path=project_path)
     if not history:
