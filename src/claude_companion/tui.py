@@ -10,6 +10,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.style import Style
+from rich.table import Table
 from rich.text import Text
 
 from .alerts import Alert, AlertLevel
@@ -36,6 +37,13 @@ STYLES = {
 ROLE_INDICATORS = {
     "user": ">",
     "assistant": "Claude",
+}
+
+# Left margin bullets
+BULLETS = {
+    "user": ("●", "white"),
+    "assistant": ("●", "cyan"),
+    "tool": ("○", "dim"),
 }
 
 TOOL_INDICATORS = {
@@ -233,20 +241,24 @@ class TUI:
             border_style="dim",
         )
 
-    def _render_turn(self, turn: Turn, is_selected: bool = False) -> Panel:
-        """Render a single turn."""
+    def _render_turn(self, turn: Turn, is_selected: bool = False) -> Table:
+        """Render a single turn with bullet indicator."""
         # Historical indicator for turns loaded from transcript
         history_suffix = " h" if turn.is_historical else ""
 
+        # Determine bullet style based on role
         if turn.role == "user":
+            bullet_char, bullet_color = BULLETS["user"]
             indicator = ROLE_INDICATORS["user"]
             title = indicator
             border_style = "dim"
         elif turn.role == "assistant":
+            bullet_char, bullet_color = BULLETS["assistant"]
             indicator = ROLE_INDICATORS["assistant"]
             title = indicator
             border_style = "cyan" if not turn.is_historical else "dim cyan"
         else:
+            bullet_char, bullet_color = BULLETS["tool"]
             indicator = get_tool_indicator(turn.tool_name)
             title = indicator
             border_style = "dim"
@@ -274,6 +286,7 @@ class TUI:
         if is_selected:
             title = f"> {title}"
             border_style = "white"
+            bullet_color = "white bold"
 
         # Build subtitle with turn number (and word count for user/assistant)
         subtitle_parts = [f"Turn {turn.turn_number}{history_suffix}"]
@@ -288,7 +301,7 @@ class TUI:
         else:
             panel_content = f"{expand_indicator}{content}"
 
-        return Panel(
+        panel = Panel(
             panel_content,
             title=title,
             title_align="left",
@@ -297,6 +310,14 @@ class TUI:
             border_style=border_style,
             padding=(0, 1),
         )
+
+        # Create table with bullet + panel
+        table = Table.grid(padding=(0, 1))
+        table.add_column(width=1)  # Bullet column
+        table.add_column(ratio=1)  # Panel column
+        table.add_row(Text(bullet_char, style=bullet_color), panel)
+
+        return table
 
     def _render_turns(self, session: Session | None) -> Group:
         """Render all turns for a session."""
