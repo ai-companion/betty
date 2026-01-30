@@ -117,8 +117,8 @@ def save_config(config: Config) -> None:
         "style": config.style,
     }
 
-    # Only save base_url for local providers
-    if config.llm.provider == "local" and config.llm.base_url:
+    # Save base_url for local providers and openrouter
+    if config.llm.provider in ("local", "openrouter") and config.llm.base_url:
         data["llm"]["base_url"] = config.llm.base_url
 
     with open(CONFIG_FILE, "w") as f:
