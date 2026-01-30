@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from .alerts import Alert, AlertLevel
+from .config import DEFAULT_STYLE
 from .export import export_session_markdown, get_export_filename
 from .models import Event, Session, Turn
 from .store import EventStore
@@ -59,7 +60,7 @@ class TUI:
         self,
         store: EventStore,
         console: Console | None = None,
-        ui_style: str = "default",
+        ui_style: str = DEFAULT_STYLE,
     ):
         self.store = store
         self.console = console or Console()
@@ -76,7 +77,7 @@ class TUI:
         self._use_summary = True  # Use LLM summary vs first few chars for assistant preview
 
         # Style renderer
-        self._style = get_style(ui_style if ui_style in STYLES else "default")
+        self._style = get_style(ui_style if ui_style in STYLES else DEFAULT_STYLE)
 
         # Monitor instruction text
         self._monitor_text = ""  # Monitoring instructions
