@@ -19,9 +19,9 @@ console = Console()
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.option(
     "--style",
-    type=click.Choice(["default", "claude-code"]),
-    default="default",
-    help="UI style: default (boxes with emojis) or claude-code (minimal)",
+    type=click.Choice(["rich", "claude-code"]),
+    default="rich",
+    help="UI style: rich (boxes with emojis) or claude-code (minimal)",
 )
 @click.pass_context
 def main(ctx: click.Context, port: int, version: bool, style: str) -> None:
@@ -35,7 +35,7 @@ def main(ctx: click.Context, port: int, version: bool, style: str) -> None:
         run_companion(port, style)
 
 
-def run_companion(port: int, ui_style: str = "default") -> None:
+def run_companion(port: int, ui_style: str = "rich") -> None:
     """Run the main companion TUI and server."""
     # Check if hooks are installed
     status = check_hooks_status(port)

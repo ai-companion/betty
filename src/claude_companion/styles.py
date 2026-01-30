@@ -53,10 +53,10 @@ class StyleRenderer(ABC):
         ...
 
 
-class DefaultStyle(StyleRenderer):
-    """Original style with boxes and emojis."""
+class RichStyle(StyleRenderer):
+    """Rich style with boxes and emojis."""
 
-    name = "default"
+    name = "rich"
     filters = [
         ("all", "All"),
         ("tool", "Tools only"),
@@ -417,12 +417,13 @@ class ClaudeCodeStyle(StyleRenderer):
 
 # Style registry
 STYLES: dict[str, type[StyleRenderer]] = {
-    "default": DefaultStyle,
+    "rich": RichStyle,
     "claude-code": ClaudeCodeStyle,
+    "default": RichStyle,  # Alias for backwards compatibility
 }
 
 
 def get_style(name: str) -> StyleRenderer:
     """Get a style renderer instance by name."""
-    style_class = STYLES.get(name, DefaultStyle)
+    style_class = STYLES.get(name, RichStyle)
     return style_class()
