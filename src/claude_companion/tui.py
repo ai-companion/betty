@@ -305,7 +305,7 @@ class TUI:
         if not filtered_turns:
             filter_key, filter_label = FILTERS[self._filter_index]
             if filter_key != "all" and session and session.turns:
-                msg = f"[dim]No {filter_label} turns. Press [f] to change filter.[/dim]"
+                msg = f"[dim]No {filter_label} turns. Press \\[f] to change filter.[/dim]"
             else:
                 msg = "[dim]Waiting for activity...[/dim]"
             return Group(Panel(msg, border_style="dim"))
@@ -361,7 +361,7 @@ class TUI:
         """Render the status line showing monitor instruction if set."""
         if self._monitor_text:
             return Text.from_markup(f"[dim]monitoring:[/dim] {self._monitor_text}")
-        return Text.from_markup("[dim]Press [m] to set monitoring instruction[/dim]")
+        return Text.from_markup("[dim]Press \\[m] to set monitoring instruction[/dim]")
 
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
