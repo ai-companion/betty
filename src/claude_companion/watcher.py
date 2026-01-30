@@ -21,8 +21,14 @@ class TranscriptWatcher:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-    def watch(self, transcript_path: str, start_turn: int = 0) -> None:
-        """Start watching a transcript file."""
+    def watch(self, transcript_path: str, start_turn: int = 0, start_position: int | None = None) -> None:
+        """Start watching a transcript file.
+
+        Args:
+            transcript_path: Path to the transcript file.
+            start_turn: Turn number to start counting from.
+            start_position: File position to start reading from. If None, starts from end of file.
+        """
         path = Path(transcript_path)
 
         # Wait for file to exist (up to 2 seconds)
@@ -33,8 +39,11 @@ class TranscriptWatcher:
 
         with self._lock:
             self._current_path = path
-            # Start from end if file exists, otherwise from 0
-            self._last_position = path.stat().st_size if path.exists() else 0
+            # Use provided position, or start from end of file
+            if start_position is not None:
+                self._last_position = start_position
+            else:
+                self._last_position = path.stat().st_size if path.exists() else 0
             self._turn_number = start_turn
 
         if not self._running:
