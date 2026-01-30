@@ -7,8 +7,10 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.style import Style
+from rich.table import Table
 from rich.text import Text
 
 from .alerts import Alert, AlertLevel
@@ -247,7 +249,7 @@ class TUI:
                 text.append(content, style="on grey15")
             return Group(text, Text(""))
 
-        # Assistant/tool turns: "⏺ [indicator] content"
+        # Assistant turns: render as Markdown with colored bullet
         if turn.role == "assistant":
             bullet_style = BULLET_STYLES["assistant"]
             if turn.expanded:
@@ -265,36 +267,38 @@ class TUI:
             else:
                 indicator = ""
                 content = turn.content_preview
-        else:
-            # Tool turns
-            bullet_style = BULLET_STYLES["tool"]
-            tool_indicator = get_tool_indicator(turn.tool_name)
-            indicator = f"[{tool_indicator}]"
-            content = turn.content_full if turn.expanded else turn.content_preview
 
-        # Build the line
-        text = Text()
-        if is_selected:
-            text.append(BULLET, style="bold white")
-            text.append(" ")
+            # Build markdown with indicator
             if indicator:
-                text.append(f"{indicator} ", style="bold white")
-            text.append(content)
-        else:
-            text.append(BULLET, style=bullet_style)
-            text.append(" ")
-            if indicator:
-                text.append(f"{indicator} ", style="dim")
-            text.append(content)
+                md_content = f"**{indicator}** {content}"
+            else:
+                md_content = content
 
-        # Add status line for assistant turns, empty line for tool turns
-        if turn.role == "assistant" and conv_turn > 0:
-            status = f"── turn {conv_turn}, {turn.word_count} words ──"
-            status_text = Text(status, style="dim", justify="right")
-            return Group(text, status_text)
+            # Use table grid to combine styled bullet with markdown
+            row = Table.grid(padding=(0, 1))
+            row.add_column(width=1)
+            row.add_column()
+            row.add_row(Text(BULLET, style=bullet_style), Markdown(md_content))
 
-        # Tool turns get an empty line after
-        return Group(text, Text(""))
+            parts = [row]
+            if conv_turn > 0:
+                status = f"── turn {conv_turn}, {turn.word_count} words ──"
+                parts.append(Text(status, style="dim", justify="right"))
+            return Group(*parts)
+
+        # Tool turns: render as Markdown with colored bullet
+        bullet_style = BULLET_STYLES["tool"]
+        tool_indicator = get_tool_indicator(turn.tool_name)
+        indicator = f"[{tool_indicator}]"
+        content = turn.content_full if turn.expanded else turn.content_preview
+        md_content = f"**{indicator}** {content}"
+
+        row = Table.grid(padding=(0, 1))
+        row.add_column(width=1)
+        row.add_column()
+        row.add_row(Text(BULLET, style=bullet_style), Markdown(md_content))
+
+        return Group(row, Text(""))
 
     def _render_turns(self, session: Session | None) -> Group:
         """Render all turns for a session."""
