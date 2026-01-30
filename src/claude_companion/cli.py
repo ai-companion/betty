@@ -51,49 +51,95 @@ def main(ctx: click.Context, port: int, version: bool, continue_session: bool, r
 
 
 def _pick_session() -> str | None:
-    """Show session picker for -r/--resume. Returns transcript path or None."""
-    from rich.prompt import Prompt
+    """Show interactive session picker for -r/--resume. Returns transcript path or None."""
+    import select
+    import sys
+    import termios
+    import tty
+
+    from rich.live import Live
+    from rich.text import Text
 
     history = get_history(limit=20)
     if not history:
         console.print("[yellow]No session history found.[/yellow]")
         return None
 
-    # Display session list
-    console.print("\n[bold]Recent sessions:[/bold]\n")
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Project", style="cyan")
-    table.add_column("Session", style="dim", width=8)
-    table.add_column("Last Accessed", style="dim")
+    selected_idx = 0
 
-    for i, record in enumerate(history, 1):
-        last_accessed = record.last_accessed_dt.strftime("%Y-%m-%d %H:%M")
-        session_short = record.session_id[:8]
-        table.add_row(str(i), record.project_name, session_short, last_accessed)
+    def render_picker() -> Table:
+        """Render the session picker table with current selection highlighted."""
+        table = Table(show_header=True, header_style="bold", highlight=False)
+        table.add_column("", width=2)  # Selection indicator
+        table.add_column("Project", style="cyan")
+        table.add_column("Session", style="dim", width=8)
+        table.add_column("Last Accessed", style="dim")
 
-    console.print(table)
-    console.print()
+        for i, record in enumerate(history):
+            last_accessed = record.last_accessed_dt.strftime("%Y-%m-%d %H:%M")
+            session_short = record.session_id[:8]
 
-    # Prompt for selection
-    choice = Prompt.ask(
-        "Select session",
-        default="1",
-        show_default=True,
-    )
+            if i == selected_idx:
+                # Highlighted row
+                table.add_row(
+                    "[bold cyan]>[/bold cyan]",
+                    f"[bold reverse] {record.project_name} [/bold reverse]",
+                    f"[reverse] {session_short} [/reverse]",
+                    f"[reverse] {last_accessed} [/reverse]",
+                )
+            else:
+                table.add_row("", record.project_name, session_short, last_accessed)
+
+        return table
+
+    def read_key() -> str | None:
+        """Read a key if available."""
+        if select.select([sys.stdin], [], [], 0.1)[0]:
+            char = sys.stdin.read(1)
+            # Handle escape sequences (arrow keys)
+            if char == "\x1b":
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    char += sys.stdin.read(2)
+            return char
+        return None
+
+    # Set up terminal for raw input
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
 
     try:
-        idx = int(choice) - 1
-        if 0 <= idx < len(history):
-            selected = history[idx]
-            console.print(f"[dim]Resuming session:[/dim] {selected.project_name}")
-            return selected.transcript_path
-        else:
-            console.print("[red]Invalid selection.[/red]")
-            return None
-    except ValueError:
-        console.print("[red]Invalid selection.[/red]")
-        return None
+        tty.setcbreak(fd)
+
+        with Live(render_picker(), console=console, refresh_per_second=10, screen=False) as live:
+            # Show header and footer
+            console.print("\n[bold]Select session:[/bold]")
+            console.print("[dim]j/k or ↑/↓: navigate | Enter: select | q/Esc: cancel[/dim]\n")
+
+            while True:
+                key = read_key()
+                if key is None:
+                    continue
+
+                if key in ("q", "\x1b", "\x03"):  # q, Esc, Ctrl+C
+                    return None
+
+                elif key in ("\n", "\r", " "):  # Enter or Space
+                    selected = history[selected_idx]
+                    console.print(f"\n[dim]Resuming session:[/dim] {selected.project_name}")
+                    return selected.transcript_path
+
+                elif key in ("k", "\x1b[A"):  # k or Up arrow
+                    if selected_idx > 0:
+                        selected_idx -= 1
+                        live.update(render_picker())
+
+                elif key in ("j", "\x1b[B"):  # j or Down arrow
+                    if selected_idx < len(history) - 1:
+                        selected_idx += 1
+                        live.update(render_picker())
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: str | None = None) -> None:
