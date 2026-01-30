@@ -28,3 +28,8 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Environment and secrets
+.env
+.env.local
+.claude/
