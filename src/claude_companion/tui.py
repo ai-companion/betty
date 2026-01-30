@@ -516,8 +516,34 @@ class TUI:
         if session:
             filtered = self._get_filtered_turns(session)
             total = len(filtered)
-            if total > self._last_visible_count:
-                self._scroll_offset = total - self._last_visible_count
+            if total == 0:
+                self._scroll_offset = 0
+                self._selected_index = None
+                return
+
+            # Calculate how many turns fit by measuring from the end
+            available_height = self._get_available_height_for_turns()
+            conv_turn_map: dict[int, int] = {}
+            conv_turn = 0
+            for turn in filtered:
+                if turn.role in ("user", "assistant"):
+                    conv_turn += 1
+                    conv_turn_map[id(turn)] = conv_turn
+
+            # Measure turns from the end backwards
+            used_height = 0
+            visible_count = 0
+            for i in range(total - 1, -1, -1):
+                turn = filtered[i]
+                panel = self._style.render_turn(turn, False, conv_turn_map.get(id(turn), 0), self._use_summary)
+                panel_height = self._measure_height(panel)
+                if used_height + panel_height > available_height and visible_count > 0:
+                    break
+                used_height += panel_height
+                visible_count += 1
+
+            self._last_visible_count = visible_count
+            self._scroll_offset = max(0, total - visible_count)
             self._selected_index = None
 
     def run(self) -> None:
