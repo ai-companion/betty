@@ -76,6 +76,7 @@ class TUI:
         self._auto_scroll = True  # Auto-scroll to bottom on new events
         self._use_summary = True  # Use LLM summary vs first few chars for assistant preview
         self._last_active_session_id: str | None = None  # Track session changes
+        self._pending_scroll_to_bottom = False  # Flag for deferred scroll computation
 
         # Style renderer
         self._style = get_style(ui_style if ui_style in STYLES else DEFAULT_STYLE)
@@ -135,13 +136,12 @@ class TUI:
             # Reset scroll state when session changes
             self._scroll_offset = 0
             self._selected_index = None
-            self._filter_index = 0
-            # Trigger scroll to bottom on next render
+            # Request scroll to bottom on next render (deferred to avoid cross-thread rendering)
             if session:
-                self.scroll_to_bottom()
+                self._pending_scroll_to_bottom = True
         elif self._auto_scroll:
             # Auto-scroll to show new content in current session
-            self.scroll_to_bottom()
+            self._pending_scroll_to_bottom = True
         self._refresh_event.set()
 
     def _on_alert(self, alert: Alert) -> None:
@@ -150,9 +150,9 @@ class TUI:
 
     def _on_turn(self, turn: Turn) -> None:
         """Called when a new turn arrives from transcript watcher."""
-        # Auto-scroll to show new content
+        # Auto-scroll to show new content (deferred to avoid cross-thread rendering)
         if self._auto_scroll:
-            self.scroll_to_bottom()
+            self._pending_scroll_to_bottom = True
         self._refresh_event.set()
 
     def _get_filtered_turns(self, session: Session | None) -> list[Turn]:
@@ -571,6 +571,11 @@ class TUI:
 
                     self._refresh_event.wait(timeout=0.2)
                     self._refresh_event.clear()
+
+                    # Handle pending scroll request (from listener threads)
+                    if self._pending_scroll_to_bottom:
+                        self._pending_scroll_to_bottom = False
+                        self.scroll_to_bottom()
 
                     live.update(self._render())
 
