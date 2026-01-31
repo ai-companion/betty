@@ -168,6 +168,30 @@ def _truncate(text: str, max_len: int) -> str:
 
 
 @dataclass
+class TurnGroup:
+    """A display group for turns that were summarized together.
+
+    Scope matches what the summarizer includes (see summarizer._get_turn_context):
+    - The assistant turn (with its summary)
+    - Tool turns that were part of the summarization context
+    """
+
+    assistant_turn: Turn  # The assistant turn with summary
+    tool_turns: list[Turn]  # Tool turns included in the summary scope
+    expanded: bool = False  # Group-level expand state
+
+    @property
+    def tool_count(self) -> int:
+        return len(self.tool_turns)
+
+    @property
+    def tool_names_preview(self) -> str:
+        """Get comma-separated tool names for preview."""
+        names = [t.tool_name or "tool" for t in self.tool_turns]
+        return ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
+
+
+@dataclass
 class Session:
     """A Claude Code session."""
 
