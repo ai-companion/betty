@@ -29,9 +29,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
 
+      - name: Check for WIP commit
+        id: check-wip
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          echo "Last commit message: $COMMIT_MSG"
+          if [[ "$COMMIT_MSG" == \[wip\]* ]] || [[ "$COMMIT_MSG" == \[WIP\]* ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping review: commit marked as work in progress"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run Claude Code Review
+        if: steps.check-wip.outputs.skip != 'true'
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
