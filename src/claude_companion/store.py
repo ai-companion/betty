@@ -84,10 +84,17 @@ class EventStore:
             sid, transcript_path = load_transcript_args
             file_position = self._load_transcript_history(sid, transcript_path)
             # Create transcript watcher with position from history load
+            # Re-check session exists (could have been deleted during history load)
             with self._lock:
                 session = self._sessions.get(sid)
-                start_turn = len(session.turns) if session else 0
-            self._create_transcript_watcher(sid, transcript_path, start_turn, file_position)
+                if session is None:
+                    # Session was deleted, bail out
+                    pass
+                else:
+                    start_turn = len(session.turns)
+                    # Create watcher outside lock (it acquires lock internally)
+            if session is not None:
+                self._create_transcript_watcher(sid, transcript_path, start_turn, file_position)
 
         # Start plan file watcher OUTSIDE lock to avoid blocking SessionStart hook
         if session_id_for_plan and project_path_for_plan:
@@ -557,7 +564,9 @@ class EventStore:
         if not path.exists():
             return 0
 
-        session = self._sessions.get(session_id)
+        # Acquire lock when reading from _sessions to avoid race with delete
+        with self._lock:
+            session = self._sessions.get(session_id)
         if not session:
             return 0
 
@@ -568,6 +577,9 @@ class EventStore:
             # Replace session turns with transcript (source of truth)
             # This ensures we have all turns even if some were missed
             with self._lock:
+                # Re-check session still exists (could have been deleted)
+                if session_id not in self._sessions:
+                    return file_position
                 session.turns = transcript_turns
 
                 # Process task operations from historical turns
