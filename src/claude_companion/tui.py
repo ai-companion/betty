@@ -58,16 +58,26 @@ class KeyReader:
 def group_turns_for_display(
     session: Session,
     turns: list[Turn],
-    use_summary: bool
+    use_summary: bool,
+    group_expanded_state: dict[int, bool] | None = None,
 ) -> list[Turn | TurnGroup]:
     """
     Group turns that were summarized together into collapsible groups.
     Uses the same scope as the summarizer (_get_turn_context).
 
+    Args:
+        session: The session containing the turns
+        turns: List of turns to potentially group
+        use_summary: Whether summary mode is enabled
+        group_expanded_state: Dict mapping assistant turn_number to expanded state
+
     Returns mixed list of Turn and TurnGroup objects.
     """
     if not use_summary:
         return turns
+
+    if group_expanded_state is None:
+        group_expanded_state = {}
 
     # First pass: identify which tool turns should be grouped
     skip_indices = set()  # Track turns that have been grouped
@@ -96,11 +106,12 @@ def group_turns_for_display(
             user_turn, tool_turns = _get_turn_context(session, turn)
 
             if tool_turns:
-                # Create group
+                # Create group, preserving expanded state if known
+                expanded = group_expanded_state.get(turn.turn_number, False)
                 result.append(TurnGroup(
                     assistant_turn=turn,
                     tool_turns=tool_turns,
-                    expanded=False
+                    expanded=expanded,
                 ))
             else:
                 # Assistant with summary but no tools
@@ -138,6 +149,7 @@ class TUI:
         self._pending_scroll_to_bottom = False  # Flag for deferred scroll computation
         self._show_tasks = False  # Whether to show task list view
         self._show_plan = False  # Whether to show plan view
+        self._group_expanded_state: dict[int, bool] = {}  # Track TurnGroup expanded state by turn_number
 
         # Style renderer
         self._style = get_style(ui_style if ui_style in STYLES else DEFAULT_STYLE)
@@ -197,6 +209,7 @@ class TUI:
             # Reset scroll state when session changes
             self._scroll_offset = 0
             self._selected_index = None
+            self._group_expanded_state.clear()  # Clear group expanded state for new session
             # Request scroll to bottom on next render (deferred to avoid cross-thread rendering)
             if session:
                 self._pending_scroll_to_bottom = True
@@ -226,7 +239,10 @@ class TUI:
         # Apply grouping BEFORE filtering if in summary mode and showing all turns
         # (Grouping only makes sense when viewing full conversation)
         if self._use_summary and filter_key == "all":
-            return group_turns_for_display(session, session.turns, use_summary=True)
+            return group_turns_for_display(
+                session, session.turns, use_summary=True,
+                group_expanded_state=self._group_expanded_state,
+            )
 
         # Otherwise, apply regular filtering without grouping
         if filter_key == "all":
@@ -615,6 +631,7 @@ class TUI:
             self.store.set_active_session(int(key))
             self._filter_index = 0
             self._auto_scroll = True
+            self._group_expanded_state.clear()  # Clear group expanded state for new session
             self.scroll_to_bottom()
             self._refresh_event.set()
 
@@ -649,18 +666,25 @@ class TUI:
             ):
                 item = turns[self._selected_index]
                 if isinstance(item, TurnGroup):
-                    item.expanded = not item.expanded
+                    # Toggle and persist in state dict
+                    new_state = not item.expanded
+                    self._group_expanded_state[item.assistant_turn.turn_number] = new_state
+                    item.expanded = new_state
                 else:
                     item.expanded = not item.expanded
                 self._refresh_event.set()
 
         elif key == "e":
             for item in turns:
+                if isinstance(item, TurnGroup):
+                    self._group_expanded_state[item.assistant_turn.turn_number] = True
                 item.expanded = True
             self._refresh_event.set()
 
         elif key == "c":
             for item in turns:
+                if isinstance(item, TurnGroup):
+                    self._group_expanded_state[item.assistant_turn.turn_number] = False
                 item.expanded = False
             self._refresh_event.set()
 
