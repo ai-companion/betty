@@ -104,9 +104,9 @@ class RichStyle(StyleRenderer):
         history_prefix = "◷ " if group.assistant_turn.is_historical else ""
         timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M:%S")
 
-        # Title with tools count
+        # Title with tools count (tools first)
         icon = self.ROLE_ICONS["assistant"]
-        title = f"{history_prefix}Turn {group.assistant_turn.turn_number} │ {icon} Assistant + {group.tool_count} tools │ {timestamp_str}"
+        title = f"{history_prefix}Turn {group.assistant_turn.turn_number} │ {group.tool_count} tools + {icon} │ {timestamp_str}"
 
         border_style = "green" if not group.assistant_turn.is_historical else "dim green"
         if is_selected:
@@ -127,7 +127,7 @@ class RichStyle(StyleRenderer):
                 content_parts.append(Text(f"  {icon} [{tool_turn.tool_name}] {tool_turn.content_preview}", style="dim"))
         else:
             # Show ONLY the summary (which covers both assistant text and tools)
-            content_parts = [Markdown(f"**\\[tldr;]** {group.assistant_turn.summary}")]
+            content_parts = [Markdown(f"**\\[tldr]** {group.assistant_turn.summary}")]
 
         subtitle = f"{group.assistant_turn.word_count:,} words"
 
@@ -342,11 +342,11 @@ class ClaudeCodeStyle(StyleRenderer):
             indicator = "[tldr]"
             content = group.assistant_turn.summary or group.assistant_turn.content_preview
 
-        # Tool count annotation
-        tools_annotation = f" + tools:{group.tool_count}"
+        # Tool count prefix + indicator
+        tools_prefix = f"tools:{group.tool_count} +"
 
-        # Main assistant line with tools annotation
-        md_content = f"**{indicator}**{tools_annotation} {content}"
+        # Main assistant line with tools prefix
+        md_content = f"{tools_prefix} **{indicator}** {content}"
         row = Table.grid(padding=(0, 0))
         row.add_column(width=2)
         row.add_column()
