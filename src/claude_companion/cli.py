@@ -16,7 +16,7 @@ console = Console()
 
 
 @click.group(invoke_without_command=True)
-@click.option("--port", "-p", default=5432, help="Port for the HTTP server")
+@click.option("--port", "-p", default=5433, help="Port for the HTTP server")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.option("--continue", "-c", "continue_session", is_flag=True, help="Continue the most recent session (current dir)")
 @click.option("--resume", "-r", is_flag=True, help="Select a session to resume (current dir)")
@@ -187,6 +187,10 @@ def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: 
     # Start server in background
     server.start()
 
+    # Wait for server to be ready
+    if not server.wait_ready(timeout=2.0):
+        console.print("[yellow]Warning:[/yellow] Server may not have started properly")
+
     try:
         # Run TUI in main thread
         tui = TUI(store, console, ui_style=ui_style)
@@ -203,7 +207,7 @@ def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: 
 
 
 @main.command()
-@click.option("--port", "-p", default=5432, help="Port for hooks to connect to")
+@click.option("--port", "-p", default=5433, help="Port for hooks to connect to")
 def install(port: int) -> None:
     """Install Claude Code hooks."""
     console.print(f"Installing hooks for port {port}...")
@@ -251,7 +255,7 @@ def uninstall() -> None:
 
 
 @main.command()
-@click.option("--port", "-p", default=5432, help="Port to check")
+@click.option("--port", "-p", default=5433, help="Port to check")
 def status(port: int) -> None:
     """Check hook installation status."""
     results = check_hooks_status(port)

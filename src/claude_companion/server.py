@@ -47,20 +47,27 @@ def create_app(store: "EventStore") -> Flask:
 class ServerThread(threading.Thread):
     """Background thread running the Flask server."""
 
-    def __init__(self, store: "EventStore", host: str = "127.0.0.1", port: int = 5432):
+    def __init__(self, store: "EventStore", host: str = "127.0.0.1", port: int = 5433):
         super().__init__(daemon=True)
         self.store = store
         self.host = host
         self.port = port
         self.app = create_app(store)
         self._server = None
+        self._ready = threading.Event()
 
     def run(self) -> None:
         """Run the Flask server."""
         from werkzeug.serving import make_server
 
         self._server = make_server(self.host, self.port, self.app, threaded=True)
+        # Signal that the server is ready
+        self._ready.set()
         self._server.serve_forever()
+
+    def wait_ready(self, timeout: float = 5.0) -> bool:
+        """Wait for the server to be ready. Returns True if ready, False if timeout."""
+        return self._ready.wait(timeout)
 
     def shutdown(self) -> None:
         """Shutdown the server."""

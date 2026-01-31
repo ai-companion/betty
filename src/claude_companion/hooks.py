@@ -62,7 +62,7 @@ def save_settings(settings: dict[str, Any]) -> None:
         json.dump(settings, f, indent=2)
 
 
-def install_hooks(port: int = 5432) -> dict[str, str]:
+def install_hooks(port: int = 5433) -> dict[str, str]:
     """Install Claude Companion hooks. Returns status for each event."""
     settings = load_settings()
     hooks = settings.get("hooks", {})
@@ -138,7 +138,7 @@ def uninstall_hooks() -> dict[str, str]:
     return results
 
 
-def check_hooks_status(port: int = 5432) -> dict[str, str]:
+def check_hooks_status(port: int = 5433) -> dict[str, str]:
     """Check installation status of hooks. Returns status for each event."""
     settings = load_settings()
     hooks = settings.get("hooks", {})
