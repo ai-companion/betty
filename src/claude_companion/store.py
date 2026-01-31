@@ -390,7 +390,11 @@ class EventStore:
         # Create watcher with session_id captured in callback
         watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
         # Register watcher BEFORE starting it to avoid race with stop()
+        # Also verify session still exists to avoid orphaned watchers
         with self._lock:
+            if session_id not in self._sessions:
+                # Session was deleted, don't register watcher
+                return
             self._transcript_watchers[session_id] = watcher
         # Start watching outside lock to avoid blocking
         watcher.watch(transcript_path, start_turn, start_position=start_position)
