@@ -47,23 +47,22 @@ class TranscriptWatcher:
                 self._last_position = path.stat().st_size if path.exists() else 0
             self._turn_number = start_turn
 
-        # Check cancelled flag before starting thread (set by cancel() if session was deleted)
-        if self._cancelled:
-            return
-
-        if not self._running:
+        # Check cancelled flag and set running atomically to prevent race with stop()
+        with self._lock:
+            if self._cancelled:
+                return
+            if self._running:
+                return
             self._running = True
-            self._thread = threading.Thread(target=self._watch_loop, daemon=True)
-            self._thread.start()
 
-    def cancel(self) -> None:
-        """Cancel watcher before it starts. Use when session is deleted during setup."""
-        self._cancelled = True
+        self._thread = threading.Thread(target=self._watch_loop, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         """Stop watching."""
-        self._cancelled = True  # Also set cancelled to prevent late starts
-        self._running = False
+        with self._lock:
+            self._cancelled = True  # Prevent late starts from watch()
+            self._running = False
         if self._thread:
             self._thread.join(timeout=1.0)
 
