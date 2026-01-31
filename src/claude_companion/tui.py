@@ -79,6 +79,9 @@ def group_turns_for_display(
     if group_expanded_state is None:
         group_expanded_state = {}
 
+    # Build identity-based index map to avoid issues with identical tool turns
+    turn_id_to_idx = {id(turn): i for i, turn in enumerate(turns)}
+
     # First pass: identify which tool turns should be grouped
     skip_indices = set()  # Track turns that have been grouped
 
@@ -87,13 +90,11 @@ def group_turns_for_display(
             # Use the same context logic as summarizer
             user_turn, tool_turns = _get_turn_context(session, turn)
 
-            # Mark these tool turns to be skipped in second pass
+            # Mark these tool turns to be skipped in second pass (using identity)
             for tool_turn in tool_turns:
-                try:
-                    tool_idx = turns.index(tool_turn)
+                tool_idx = turn_id_to_idx.get(id(tool_turn))
+                if tool_idx is not None:
                     skip_indices.add(tool_idx)
-                except ValueError:
-                    pass  # Tool turn not in list (shouldn't happen)
 
     # Second pass: build result with groups
     result = []

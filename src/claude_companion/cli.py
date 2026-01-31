@@ -345,7 +345,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         url = preset_config.get("base_url")  # Only for local providers
         console.print(f"Using [cyan]{preset_config['description']}[/cyan] preset")
 
-        # Create config from preset, preserving style
+        # Create config from preset, preserving style and collapse_tools
         new_config = Config(
             llm=LLMConfig(
                 provider=provider,
@@ -353,6 +353,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
                 base_url=url,
             ),
             style=new_style,
+            collapse_tools=current_config.collapse_tools,
         )
 
         save_config(new_config)
@@ -380,6 +381,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         new_config = Config(
             llm=current_config.llm,
             style=style,
+            collapse_tools=current_config.collapse_tools,
         )
         save_config(new_config)
 
@@ -418,6 +420,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             model=new_model,
         ),
         style=new_style,
+        collapse_tools=current_config.collapse_tools,
     )
 
     save_config(new_config)
