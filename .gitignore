@@ -33,3 +33,6 @@ htmlcov/
 .env
 .env.local
 .claude/
+
+# Plan files
+PLAN.md
