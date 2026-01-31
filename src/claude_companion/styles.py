@@ -115,16 +115,18 @@ class RichStyle(StyleRenderer):
 
         # Content
         if group.expanded:
-            # Show full text + tool list
+            # Show tools first, then full assistant text
             content_parts = [
-                Text("Full response:", style="dim"),
-                Markdown(group.assistant_turn.content_full),
-                Text(""),
                 Text(f"Tools used ({group.tool_count}):", style="dim"),
             ]
             for tool_turn in group.tool_turns:
                 icon = self._get_tool_icon(tool_turn.tool_name)
                 content_parts.append(Text(f"  {icon} [{tool_turn.tool_name}] {tool_turn.content_preview}", style="dim"))
+            content_parts.extend([
+                Text(""),
+                Text("Full response:", style="dim"),
+                Markdown(group.assistant_turn.content_full),
+            ])
         else:
             # Show ONLY the summary (which covers both assistant text and tools)
             content_parts = [Markdown(f"**\\[tldr]** {group.assistant_turn.summary}")]
@@ -334,37 +336,20 @@ class ClaudeCodeStyle(StyleRenderer):
         selected_style = "light_steel_blue" if is_selected else ""
         bullet_style = selected_style or self.BULLET_STYLES["assistant"]
 
-        # Determine indicator and content based on expand state
+        parts = []
+
         if group.expanded:
-            indicator = "[-]"
-            content = group.assistant_turn.content_full
-        else:
-            indicator = "[tldr]"
-            content = group.assistant_turn.summary or group.assistant_turn.content_preview
+            # Header line (bullet at top)
+            header_row = Table.grid(padding=(0, 0))
+            header_row.add_column(width=2)
+            header_row.add_column()
+            header_row.add_row(
+                Text(f"{self.BULLET} ", style=bullet_style),
+                Markdown(f"tools:{group.tool_count}", style=selected_style),
+            )
+            parts.append(header_row)
 
-        # Tool count prefix + indicator
-        tools_prefix = f"tools:{group.tool_count} +"
-
-        # Main assistant line with tools prefix
-        md_content = f"{tools_prefix} **{indicator}** {content}"
-        row = Table.grid(padding=(0, 0))
-        row.add_column(width=2)
-        row.add_column()
-        row.add_row(
-            Text(f"{self.BULLET} ", style=bullet_style),
-            Markdown(md_content, style=selected_style),
-        )
-
-        parts = [row]
-
-        # Add timestamp/metadata line
-        if conv_turn > 0:
-            timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M")
-            status = f"── turn {conv_turn}, {group.assistant_turn.word_count} words, {timestamp_str} ──"
-            parts.append(Text(status, style="dim", justify="right"))
-
-        # If expanded, show individual tool turns indented
-        if group.expanded:
+            # Tool turns (indented)
             for tool_turn in group.tool_turns:
                 tool_indicator = self._get_tool_indicator(tool_turn.tool_name)
                 tool_row = Table.grid(padding=(0, 0))
@@ -375,6 +360,34 @@ class ClaudeCodeStyle(StyleRenderer):
                 tool_text.append(tool_turn.content_preview, style=selected_style or "dim")
                 tool_row.add_row(Text("  "), tool_text)
                 parts.append(tool_row)
+
+            # Full assistant content with [-] indicator (in second column)
+            content_row = Table.grid(padding=(0, 0))
+            content_row.add_column(width=2)
+            content_row.add_column()
+            content_row.add_row(
+                Text(""),
+                Markdown(f"**[-]** {group.assistant_turn.content_full}", style=selected_style),
+            )
+            parts.append(content_row)
+        else:
+            # When collapsed: show summary only
+            content = group.assistant_turn.summary or group.assistant_turn.content_preview
+            md_content = f"tools:{group.tool_count} + **[tldr]** {content}"
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                Text(f"{self.BULLET} ", style=bullet_style),
+                Markdown(md_content, style=selected_style),
+            )
+            parts.append(row)
+
+        # Add timestamp/metadata line
+        if conv_turn > 0:
+            timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M")
+            status = f"── turn {conv_turn}, {group.assistant_turn.word_count} words, {timestamp_str} ──"
+            parts.append(Text(status, style="dim", justify="right"))
 
         return Group(*parts)
 
