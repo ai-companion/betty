@@ -177,7 +177,9 @@ class EventStore:
         operation, data = turn.task_operation
 
         if operation == "create":
-            task_id = str(len(session.tasks) + 1)  # Generate sequential ID
+            # Generate next available ID (more robust than len-based)
+            existing_ids = [int(tid) for tid in session.tasks.keys() if tid.isdigit()]
+            task_id = str(max(existing_ids, default=0) + 1)
             session.tasks[task_id] = TaskState(
                 task_id=task_id,
                 subject=data.get("subject", "Untitled task"),
@@ -433,11 +435,12 @@ class EventStore:
         if transcript_turns:
             # Replace session turns with transcript (source of truth)
             # This ensures we have all turns even if some were missed
-            session.turns = transcript_turns
+            with self._lock:
+                session.turns = transcript_turns
 
-            # Process task operations from historical turns
-            for turn in transcript_turns:
-                self._process_task_operation(session, turn)
+                # Process task operations from historical turns
+                for turn in transcript_turns:
+                    self._process_task_operation(session, turn)
 
             # Apply cached summaries or submit for summarization
             for turn in transcript_turns:

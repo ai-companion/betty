@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .models import Turn, count_words, _extract_tool_content, _truncate
+from .models import Turn, count_words, _extract_tool_content, _truncate, parse_task_operation
 
 
 def get_transcript_path(session_id: str, cwd: str) -> Path | None:
@@ -113,7 +113,6 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                     tool_input = block.get("input", {})
 
                     # Parse task operations
-                    from .models import parse_task_operation
                     task_op = parse_task_operation(tool_name, tool_input)
 
                     content_str = _extract_tool_content(tool_name, tool_input)
