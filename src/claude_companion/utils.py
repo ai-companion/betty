@@ -11,7 +11,7 @@ def decode_project_path(encoded_path: str) -> str:
 
     Claude encodes paths by replacing '/' with '-' and prepending '-'.
     Decoding is tricky because dashes in directory names must be preserved.
-    We build the path incrementally, checking what exists on filesystem.
+    We try simple decode first, then fall back to incremental matching.
 
     Args:
         encoded_path: Encoded path from Session.project_path
@@ -22,15 +22,23 @@ def decode_project_path(encoded_path: str) -> str:
     if not encoded_path or not encoded_path.startswith("-"):
         return ""
 
-    # Remove leading dash and split on remaining dashes
-    parts = encoded_path[1:].split("-")
+    # Fast path: Try simple decode first (works for 99% of paths without dashes)
+    simple_decode = "/" + encoded_path[1:].replace("-", "/")
+    if Path(simple_decode).exists():
+        return simple_decode
 
-    # Build path incrementally, trying to match filesystem
-    # Start from root and add parts, checking for existence
+    # Slow path: Only for paths with dashes in directory names
+    # Build path incrementally, checking what exists on filesystem
+    parts = encoded_path[1:].split("-")
     current = ""
     remaining = parts[:]
 
-    while remaining:
+    # Limit iterations to prevent infinite loops or excessive filesystem calls
+    max_iterations = len(parts) * 2  # Safety limit
+    iteration = 0
+
+    while remaining and iteration < max_iterations:
+        iteration += 1
         # Try combining next N parts with dashes
         for n in range(len(remaining), 0, -1):
             candidate = "/" + "/".join(current.split("/") + ["-".join(remaining[:n])])

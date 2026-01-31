@@ -7,6 +7,7 @@ from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
@@ -365,7 +366,6 @@ class TUI:
         header = f"[dim]File:[/dim] {file_path}\n[dim]Updated:[/dim] {updated_str}\n"
 
         # Render markdown content with Rich Markdown
-        from rich.markdown import Markdown
         content = Markdown(session.plan_content)
 
         return Panel(

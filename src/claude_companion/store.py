@@ -1,5 +1,6 @@
 """Thread-safe event store for Claude Companion."""
 
+import logging
 import threading
 from datetime import datetime
 from typing import Callable
@@ -85,15 +86,16 @@ class EventStore:
             project_dir = decode_project_path(project_path_for_plan)
 
             if project_dir:
+                # Use default argument to capture session_id by value (avoids closure bug)
                 plan_watcher = PlanFileWatcher(
                     project_dir,
-                    lambda content, path: self._on_plan_update(session_id_for_plan, content, path)
+                    lambda content, path, sid=session_id_for_plan: self._on_plan_update(sid, content, path)
                 )
-                # Only acquire lock to store the watcher reference
-                with self._lock:
-                    self._plan_watchers[session_id_for_plan] = plan_watcher
                 # Start watcher outside lock (does file I/O)
                 plan_watcher.start()
+                # Only acquire lock to store the watcher reference AFTER starting
+                with self._lock:
+                    self._plan_watchers[session_id_for_plan] = plan_watcher
 
         # Check for alerts
         alerts = check_event_for_alerts(event)
@@ -259,6 +261,7 @@ class EventStore:
         with self._lock:
             session = self._sessions.get(session_id)
             if not session:
+                logging.debug(f"Plan update ignored for unknown session: {session_id}")
                 return
 
             # Update plan state
