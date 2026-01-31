@@ -389,16 +389,16 @@ class EventStore:
         """
         # Create watcher with session_id captured in callback
         watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
-        # Register and start watcher atomically under lock to prevent race with delete_session().
-        # This ensures if delete_session() acquires the lock after us, the watcher is fully
-        # registered and started, so stop() will properly terminate it.
+        # Register watcher under lock, but start watching outside to avoid blocking.
+        # Use cancellation flag to handle race with delete_session().
         with self._lock:
             if session_id not in self._sessions:
                 # Session was deleted, don't register watcher
                 return
             self._transcript_watchers[session_id] = watcher
-            # Start watching inside lock to close race window with delete_session()
-            watcher.watch(transcript_path, start_turn, start_position=start_position)
+        # Start watching outside lock. If delete_session() runs between registration and here,
+        # it will call watcher.stop() which sets _cancelled, so watch() will be a no-op.
+        watcher.watch(transcript_path, start_turn, start_position=start_position)
 
     def _make_cache_key(self, content: str, user_turn: Turn | None, tool_context: list[Turn]) -> str:
         """Create cache key from full context.
