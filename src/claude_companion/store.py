@@ -27,7 +27,7 @@ class EventStore:
         self._turn_listeners: list[Callable[[Turn], None]] = []
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
-        self._watcher = TranscriptWatcher(self._on_watcher_turn)
+        self._transcript_watchers: dict[str, TranscriptWatcher] = {}  # session_id -> watcher
         self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
 
         # Load config and initialize summarizer
@@ -67,10 +67,13 @@ class EventStore:
                 self._active_session_id = session_id
                 # Load transcript history using transcript_path from hook
                 file_position = self._load_transcript_history(session_id, event.transcript_path)
-                # Start watching for new content from where we left off
+                # Create a new watcher for this session
                 if event.transcript_path:
                     start_turn = len(self._sessions[session_id].turns)
-                    self._watcher.watch(event.transcript_path, start_turn, start_position=file_position)
+                    # Create watcher with session_id captured in callback
+                    watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
+                    watcher.watch(event.transcript_path, start_turn, start_position=file_position)
+                    self._transcript_watchers[session_id] = watcher
                     # Save to session history for -c/-r resume features
                     self._save_to_history(session_id, event.transcript_path)
 
@@ -271,18 +274,22 @@ class EventStore:
 
         # Plan updates will be picked up on next render cycle (TUI polls every 0.2s)
 
-    def _on_watcher_turn(self, turn: Turn) -> None:
-        """Handle new turn from transcript watcher."""
-        with self._lock:
-            if self._active_session_id:
-                session = self._sessions.get(self._active_session_id)
-                if session:
-                    # Renumber turn based on current session turns
-                    turn.turn_number = len(session.turns) + 1
-                    session.turns.append(turn)
+    def _on_watcher_turn(self, turn: Turn, session_id: str) -> None:
+        """Handle new turn from transcript watcher.
 
-                    # Process task operations
-                    self._process_task_operation(session, turn)
+        Args:
+            turn: The turn to add
+            session_id: ID of the session this turn belongs to
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                # Renumber turn based on current session turns
+                turn.turn_number = len(session.turns) + 1
+                session.turns.append(turn)
+
+                # Process task operations
+                self._process_task_operation(session, turn)
 
         # Check for alerts on tool turns
         alerts = check_turn_for_alerts(turn)
@@ -292,7 +299,7 @@ class EventStore:
         # Submit assistant turns for summarization (check cache first)
         if turn.role == "assistant":
             # Get full context for summarization (user message + tools)
-            session = self._sessions.get(self._active_session_id)
+            session = self._sessions.get(session_id)
             if session:
                 user_turn, tool_turns = _get_turn_context(session, turn)
                 cache_key = self._make_cache_key(turn.content_full, user_turn, tool_turns)
@@ -378,13 +385,16 @@ class EventStore:
         return count
 
     def stop(self) -> None:
-        """Stop the watcher and summarizer."""
-        self._watcher.stop()
-        self._summarizer.shutdown()
+        """Stop all watchers and summarizer."""
+        # Stop all transcript watchers
+        for watcher in self._transcript_watchers.values():
+            watcher.stop()
+        self._transcript_watchers.clear()
         # Stop all plan watchers
         for watcher in self._plan_watchers.values():
             watcher.stop()
         self._plan_watchers.clear()
+        self._summarizer.shutdown()
 
     def _save_to_history(self, session_id: str, transcript_path: str) -> None:
         """Save session to history for -c/-r resume features."""
@@ -442,10 +452,13 @@ class EventStore:
         # Load transcript history and get file position
         file_position = self._load_transcript_history(session_id, transcript_path)
 
-        # Start watching for new content from where we left off
+        # Create a new watcher for this session and start watching
         with self._lock:
             start_turn = len(self._sessions[session_id].turns)
-        self._watcher.watch(transcript_path, start_turn, start_position=file_position)
+        # Create watcher with session_id captured in callback
+        watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
+        watcher.watch(transcript_path, start_turn, start_position=file_position)
+        self._transcript_watchers[session_id] = watcher
 
         # Update history last_accessed
         self._save_to_history(session_id, transcript_path)
