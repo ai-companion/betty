@@ -95,18 +95,19 @@ class RichStyle(StyleRenderer):
     ) -> Panel:
         """Render a turn in default style (boxes with emojis)."""
         history_prefix = "◷ " if turn.is_historical else ""
+        timestamp_str = turn.timestamp.strftime("%H:%M:%S")
 
         if turn.role == "user":
             icon = self.ROLE_ICONS["user"]
-            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} User"
+            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} User │ {timestamp_str}"
             border_style = "blue" if not turn.is_historical else "dim blue"
         elif turn.role == "assistant":
             icon = self.ROLE_ICONS["assistant"]
-            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} Assistant"
+            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} Assistant │ {timestamp_str}"
             border_style = "green" if not turn.is_historical else "dim green"
         else:
             icon = self._get_tool_icon(turn.tool_name)
-            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'}"
+            title = f"{history_prefix}Turn {turn.turn_number} │ {icon} {turn.tool_name or 'Tool'} │ {timestamp_str}"
             if turn.tool_name in ("Write", "Edit"):
                 border_style = "yellow" if not turn.is_historical else "dim yellow"
             elif turn.tool_name == "Bash":
@@ -325,7 +326,8 @@ class ClaudeCodeStyle(StyleRenderer):
 
             parts = [row]
             if conv_turn > 0:
-                status = f"── turn {conv_turn}, {turn.word_count} words ──"
+                timestamp_str = turn.timestamp.strftime("%H:%M")
+                status = f"── turn {conv_turn}, {turn.word_count} words, {timestamp_str} ──"
                 parts.append(Text(status, style="dim", justify="right"))
             return Group(*parts)
 
