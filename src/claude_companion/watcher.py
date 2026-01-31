@@ -18,6 +18,7 @@ class TranscriptWatcher:
         self._last_position: int = 0
         self._turn_number: int = 0
         self._running = False
+        self._cancelled = False  # Set by cancel() to prevent watch() from starting
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
@@ -46,14 +47,22 @@ class TranscriptWatcher:
                 self._last_position = path.stat().st_size if path.exists() else 0
             self._turn_number = start_turn
 
-        if not self._running:
+        # Check cancelled flag and set running atomically to prevent race with stop()
+        with self._lock:
+            if self._cancelled:
+                return
+            if self._running:
+                return
             self._running = True
-            self._thread = threading.Thread(target=self._watch_loop, daemon=True)
-            self._thread.start()
+
+        self._thread = threading.Thread(target=self._watch_loop, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         """Stop watching."""
-        self._running = False
+        with self._lock:
+            self._cancelled = True  # Prevent late starts from watch()
+            self._running = False
         if self._thread:
             self._thread.join(timeout=1.0)
 
