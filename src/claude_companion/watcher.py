@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .models import Turn, count_words, _truncate, _extract_tool_content
+from .models import Turn, count_words, _truncate, _extract_tool_content, parse_task_operation
 
 
 class TranscriptWatcher:
@@ -145,6 +145,10 @@ class TranscriptWatcher:
                     elif block_type == "tool_use":
                         tool_name = block.get("name", "")
                         tool_input = block.get("input", {})
+
+                        # Parse task operations
+                        task_op = parse_task_operation(tool_name, tool_input)
+
                         content_str = _extract_tool_content(tool_name, tool_input)
                         with self._lock:
                             self._turn_number += 1
@@ -156,6 +160,7 @@ class TranscriptWatcher:
                             content_full=content_str,
                             word_count=count_words(content_str),
                             tool_name=tool_name,
+                            task_operation=task_op,
                         ))
 
         return turns

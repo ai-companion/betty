@@ -8,7 +8,7 @@ from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_al
 from .cache import SummaryCache
 from .config import load_config
 from .history import SessionRecord, save_session
-from .models import Event, Session, Turn
+from .models import Event, Session, TaskState, Turn
 from .summarizer import Summarizer, _get_turn_context
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher
@@ -169,6 +169,62 @@ class EventStore:
         if listener in self._turn_listeners:
             self._turn_listeners.remove(listener)
 
+    def _process_task_operation(self, session: Session, turn: Turn) -> None:
+        """Process task operations from a turn."""
+        if not turn.task_operation:
+            return
+
+        operation, data = turn.task_operation
+
+        if operation == "create":
+            # Generate next available ID (more robust than len-based)
+            existing_ids = [int(tid) for tid in session.tasks.keys() if tid.isdigit()]
+            task_id = str(max(existing_ids, default=0) + 1)
+            session.tasks[task_id] = TaskState(
+                task_id=task_id,
+                subject=data.get("subject", "Untitled task"),
+                description=data.get("description", ""),
+                status="pending",
+                activeForm=data.get("activeForm"),
+            )
+
+        elif operation == "update":
+            task_id = data.get("taskId")
+            if not task_id:
+                return
+
+            # Create task if missing (defensive)
+            if task_id not in session.tasks:
+                session.tasks[task_id] = TaskState(
+                    task_id=task_id,
+                    subject=data.get("subject", "Untitled task"),
+                    description=data.get("description", ""),
+                    status="pending",
+                )
+
+            task = session.tasks[task_id]
+            task.updated_at = datetime.now()
+
+            # Update fields if provided
+            if data.get("status") is not None:
+                task.status = data["status"]
+            if data.get("subject") is not None:
+                task.subject = data["subject"]
+            if data.get("description") is not None:
+                task.description = data["description"]
+            if data.get("activeForm") is not None:
+                task.activeForm = data["activeForm"]
+            if data.get("owner") is not None:
+                task.owner = data["owner"]
+
+            # Handle blocking relationships
+            for block_id in data.get("addBlockedBy", []):
+                if block_id not in task.blockedBy:
+                    task.blockedBy.append(block_id)
+            for block_id in data.get("addBlocks", []):
+                if block_id not in task.blocks:
+                    task.blocks.append(block_id)
+
     def _on_watcher_turn(self, turn: Turn) -> None:
         """Handle new turn from transcript watcher."""
         with self._lock:
@@ -178,6 +234,9 @@ class EventStore:
                     # Renumber turn based on current session turns
                     turn.turn_number = len(session.turns) + 1
                     session.turns.append(turn)
+
+                    # Process task operations
+                    self._process_task_operation(session, turn)
 
         # Check for alerts on tool turns
         alerts = check_turn_for_alerts(turn)
@@ -376,7 +435,12 @@ class EventStore:
         if transcript_turns:
             # Replace session turns with transcript (source of truth)
             # This ensures we have all turns even if some were missed
-            session.turns = transcript_turns
+            with self._lock:
+                session.turns = transcript_turns
+
+                # Process task operations from historical turns
+                for turn in transcript_turns:
+                    self._process_task_operation(session, turn)
 
             # Apply cached summaries or submit for summarization
             for turn in transcript_turns:
