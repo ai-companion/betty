@@ -70,10 +70,7 @@ class EventStore:
                 # Create a new watcher for this session
                 if event.transcript_path:
                     start_turn = len(self._sessions[session_id].turns)
-                    # Create watcher with session_id captured in callback
-                    watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
-                    watcher.watch(event.transcript_path, start_turn, start_position=file_position)
-                    self._transcript_watchers[session_id] = watcher
+                    self._create_transcript_watcher(session_id, event.transcript_path, start_turn, file_position)
                     # Save to session history for -c/-r resume features
                     self._save_to_history(session_id, event.transcript_path)
 
@@ -173,6 +170,44 @@ class EventStore:
                 self._active_session_id = sessions[index - 1].session_id
                 return True
             return False
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session and clean up its watchers.
+
+        Args:
+            session_id: ID of the session to delete
+
+        Returns:
+            True if session was deleted, False if not found
+        """
+        with self._lock:
+            if session_id not in self._sessions:
+                return False
+
+            # Stop and remove transcript watcher if exists
+            transcript_watcher = self._transcript_watchers.pop(session_id, None)
+            if transcript_watcher:
+                transcript_watcher.stop()
+
+            # Stop and remove plan watcher if exists
+            plan_watcher = self._plan_watchers.pop(session_id, None)
+            if plan_watcher:
+                plan_watcher.stop()
+
+            # Remove session
+            del self._sessions[session_id]
+
+            # If this was the active session, switch to another one
+            if self._active_session_id == session_id:
+                # Get remaining sessions sorted by start time (most recent first)
+                remaining = sorted(
+                    self._sessions.values(),
+                    key=lambda s: s.started_at,
+                    reverse=True,
+                )
+                self._active_session_id = remaining[0].session_id if remaining else None
+
+            return True
 
     def add_listener(self, listener: Callable[[Event], None]) -> None:
         """Add a listener to be called on new events."""
@@ -316,6 +351,34 @@ class EventStore:
             except Exception:
                 pass
 
+    def _create_transcript_watcher(
+        self,
+        session_id: str,
+        transcript_path: str,
+        start_turn: int,
+        start_position: int = 0,
+    ) -> None:
+        """Create and register a transcript watcher for a session.
+
+        Args:
+            session_id: ID of the session to watch
+            transcript_path: Path to the transcript file
+            start_turn: Turn number to start from
+            start_position: File position to start reading from
+
+        Note:
+            This method handles thread-safe registration. The watcher is added
+            to _transcript_watchers dict before calling watch() to prevent race
+            conditions with stop().
+        """
+        # Create watcher with session_id captured in callback
+        watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
+        # Register watcher BEFORE starting it to avoid race with stop()
+        with self._lock:
+            self._transcript_watchers[session_id] = watcher
+        # Start watching outside lock to avoid blocking
+        watcher.watch(transcript_path, start_turn, start_position=start_position)
+
     def _make_cache_key(self, content: str, user_turn: Turn | None, tool_context: list[Turn]) -> str:
         """Create cache key from full context.
 
@@ -455,10 +518,7 @@ class EventStore:
         # Create a new watcher for this session and start watching
         with self._lock:
             start_turn = len(self._sessions[session_id].turns)
-        # Create watcher with session_id captured in callback
-        watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
-        watcher.watch(transcript_path, start_turn, start_position=file_position)
-        self._transcript_watchers[session_id] = watcher
+        self._create_transcript_watcher(session_id, transcript_path, start_turn, file_position)
 
         # Update history last_accessed
         self._save_to_history(session_id, transcript_path)

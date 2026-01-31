@@ -404,6 +404,7 @@ class TUI:
             "[dim]m[/dim]:monitor "
             "[dim]?[/dim]:ask "
             "[dim]x[/dim]:export "
+            "[dim]D[/dim]:delete "
             "[dim]q[/dim]:quit"
         )
 
@@ -638,6 +639,21 @@ class TUI:
             else:
                 self._show_status("No historical turns need summarization")
             self._refresh_event.set()
+
+        elif key == "D":  # Delete active session
+            session = self.store.get_active_session()
+            if session:
+                session_id = session.session_id
+                if self.store.delete_session(session_id):
+                    self._show_status(f"Deleted session {session_id[:8]}...")
+                    # Reset UI state
+                    self._selected_index = None
+                    self._scroll_offset = 0
+                    self._filter_index = 0
+                    self._auto_scroll = True
+                    self._refresh_event.set()
+            else:
+                self._show_status("No session to delete")
 
         return True
 
