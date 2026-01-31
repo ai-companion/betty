@@ -61,7 +61,7 @@ def main(ctx: click.Context, port: int, version: bool, continue_session: bool, r
             if initial_transcript is None:
                 return  # User cancelled or no history
 
-        run_companion(port, config.style, initial_transcript)
+        run_companion(port, config.style, initial_transcript, config.collapse_tools)
 
 
 def _pick_session(project_path: str | None = None) -> str | None:
@@ -161,7 +161,7 @@ def _pick_session(project_path: str | None = None) -> str | None:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: str | None = None) -> None:
+def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: str | None = None, collapse_tools: bool = True) -> None:
     """Run the main companion TUI and server."""
     # Check if hooks are installed
     status = check_hooks_status(port)
@@ -189,7 +189,7 @@ def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: 
 
     try:
         # Run TUI in main thread
-        tui = TUI(store, console, ui_style=ui_style)
+        tui = TUI(store, console, ui_style=ui_style, collapse_tools=collapse_tools)
         # Scroll to bottom if resuming a session
         if initial_transcript:
             tui.scroll_to_bottom()

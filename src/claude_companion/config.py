@@ -27,6 +27,7 @@ class Config:
 
     llm: LLMConfig
     style: str = field(default=DEFAULT_STYLE)
+    collapse_tools: bool = field(default=True)  # Collapse tool turns into groups
 
 
 # Default configuration
@@ -37,6 +38,7 @@ DEFAULT_CONFIG = Config(
         model="Qwen/Qwen3-30B-A3B-Instruct-2507",
     ),
     style=DEFAULT_STYLE,
+    collapse_tools=True,
 )
 
 # Config file path
@@ -61,6 +63,7 @@ def load_config() -> Config:
     llm_url = DEFAULT_CONFIG.llm.base_url
     llm_model = DEFAULT_CONFIG.llm.model
     style = DEFAULT_STYLE
+    collapse_tools = DEFAULT_CONFIG.collapse_tools
 
     # Try loading from config file
     if CONFIG_FILE.exists():
@@ -72,6 +75,7 @@ def load_config() -> Config:
                 llm_url = llm_data.get("base_url", llm_url)
                 llm_model = llm_data.get("model", llm_model)
                 style = data.get("style", style)
+                collapse_tools = data.get("collapse_tools", collapse_tools)
         except Exception:
             # Silently fall back to defaults if config file is malformed
             pass
@@ -81,6 +85,9 @@ def load_config() -> Config:
     llm_url = os.getenv("CLAUDE_COMPANION_LLM_URL", llm_url)
     llm_model = os.getenv("CLAUDE_COMPANION_LLM_MODEL", llm_model)
     style = os.getenv("CLAUDE_COMPANION_STYLE", style)
+    collapse_tools_env = os.getenv("CLAUDE_COMPANION_COLLAPSE_TOOLS")
+    if collapse_tools_env is not None:
+        collapse_tools = collapse_tools_env.lower() in ("true", "1", "yes")
 
     # Load API key from environment based on provider
     api_key = None
@@ -99,6 +106,7 @@ def load_config() -> Config:
             api_key=api_key,
         ),
         style=style,
+        collapse_tools=collapse_tools,
     )
 
 
@@ -115,6 +123,7 @@ def save_config(config: Config) -> None:
             "model": config.llm.model,
         },
         "style": config.style,
+        "collapse_tools": config.collapse_tools,
     }
 
     # Save base_url for local providers and openrouter

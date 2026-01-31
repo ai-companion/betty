@@ -131,6 +131,7 @@ class TUI:
         store: EventStore,
         console: Console | None = None,
         ui_style: str = DEFAULT_STYLE,
+        collapse_tools: bool = True,
     ):
         self.store = store
         self.console = console or Console()
@@ -145,6 +146,7 @@ class TUI:
         self._show_alerts = True  # Whether to show alerts panel
         self._auto_scroll = True  # Auto-scroll to bottom on new events
         self._use_summary = True  # Use LLM summary vs first few chars for assistant preview
+        self._collapse_tools = collapse_tools  # Collapse tool turns into groups
         self._last_active_session_id: str | None = None  # Track session changes
         self._pending_scroll_to_bottom = False  # Flag for deferred scroll computation
         self._show_tasks = False  # Whether to show task list view
@@ -236,9 +238,9 @@ class TUI:
 
         filter_key, _ = self._style.filters[self._filter_index]
 
-        # Apply grouping BEFORE filtering if in summary mode and showing all turns
-        # (Grouping only makes sense when viewing full conversation)
-        if self._use_summary and filter_key == "all":
+        # Apply grouping BEFORE filtering if collapse_tools is enabled, summary mode is on,
+        # and showing all turns (grouping only makes sense when viewing full conversation)
+        if self._collapse_tools and self._use_summary and filter_key == "all":
             return group_turns_for_display(
                 session, session.turns, use_summary=True,
                 group_expanded_state=self._group_expanded_state,
