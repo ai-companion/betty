@@ -77,6 +77,7 @@ class TUI:
         self._use_summary = True  # Use LLM summary vs first few chars for assistant preview
         self._last_active_session_id: str | None = None  # Track session changes
         self._pending_scroll_to_bottom = False  # Flag for deferred scroll computation
+        self._show_tasks = False  # Whether to show task list view
 
         # Style renderer
         self._style = get_style(ui_style if ui_style in STYLES else DEFAULT_STYLE)
@@ -275,6 +276,65 @@ class TUI:
             padding=(0, 1),
         )
 
+    def _render_task_list(self, session: Session | None) -> Panel:
+        """Render the task list panel."""
+        if not session or not session.tasks:
+            return Panel(
+                "[dim]No tasks yet. Claude will create tasks when working on complex projects.[/dim]",
+                title="[bold]Task List[/bold]",
+                border_style="cyan",
+                padding=(1, 2),
+            )
+
+        # Get non-deleted tasks sorted by ID
+        tasks = [t for t in session.tasks.values() if not t.is_deleted]
+        tasks.sort(key=lambda t: int(t.task_id) if t.task_id.isdigit() else 0)
+
+        lines = []
+        for task in tasks:
+            # Status indicator
+            if task.status == "completed":
+                indicator = "[green]✓[/green]"
+                status_style = "dim green"
+            elif task.status == "in_progress":
+                indicator = "[yellow]▶[/yellow]"
+                status_style = "yellow"
+            else:  # pending
+                indicator = "[dim]○[/dim]"
+                status_style = "dim"
+
+            # Task subject (truncate if too long)
+            subject = task.subject[:60] + "..." if len(task.subject) > 60 else task.subject
+
+            # Blocking info
+            blocking_info = ""
+            if task.blockedBy:
+                blocked_ids = ", ".join(f"#{bid}" for bid in task.blockedBy)
+                blocking_info = f" [dim](blocked by {blocked_ids})[/dim]"
+
+            # Format line
+            line = f"{indicator} [{task.task_id}] {subject}{blocking_info}"
+            if task.status != "pending":
+                lines.append(f"[{status_style}]{line}[/{status_style}]")
+            else:
+                lines.append(f"[dim]{line}[/dim]")
+
+        # Summary footer
+        completed = sum(1 for t in tasks if t.status == "completed")
+        in_progress = sum(1 for t in tasks if t.status == "in_progress")
+        pending = sum(1 for t in tasks if t.status == "pending")
+
+        lines.append(f"\n[dim]Total: {len(tasks)} ({completed} completed, {in_progress} in progress, {pending} pending)[/dim]")
+
+        return Panel(
+            "\n".join(lines),
+            title="[bold cyan]Task List[/bold cyan]",
+            subtitle="[dim]Press T or ESC to return to turns view[/dim]",
+            subtitle_align="right",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
         if self._status_message and time.time() < self._status_until:
@@ -295,6 +355,7 @@ class TUI:
             "[dim]j/k[/dim]:nav "
             "[dim]g/G[/dim]:end "
             "[dim]o[/dim]:open "
+            "[dim]T[/dim]:tasks "
             "[dim]s/S[/dim]:summary "
             "[dim]f[/dim]:filter "
             "[dim]m[/dim]:monitor "
@@ -314,7 +375,12 @@ class TUI:
         if alerts_panel:
             parts.append(alerts_panel)
 
-        parts.append(self._render_turns(active))
+        # Show task list OR turns (toggle view)
+        if self._show_tasks:
+            parts.append(self._render_task_list(active))
+        else:
+            parts.append(self._render_turns(active))
+
         parts.append(self._style.render_status_line(self._monitor_text))
         parts.append(self._render_footer())
 
@@ -390,6 +456,13 @@ class TUI:
 
         elif key == "\x1b":  # Esc - unselect
             self._selected_index = None
+            if self._show_tasks:
+                self._show_tasks = False
+            self._refresh_event.set()
+
+        elif key == "T":
+            self._show_tasks = not self._show_tasks
+            self._show_status("Showing task list" if self._show_tasks else "Showing conversation turns")
             self._refresh_event.set()
 
         elif key == "r":

@@ -111,6 +111,11 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                 elif block_type == "tool_use":
                     tool_name = block.get("name", "")
                     tool_input = block.get("input", {})
+
+                    # Parse task operations
+                    from .models import parse_task_operation
+                    task_op = parse_task_operation(tool_name, tool_input)
+
                     content_str = _extract_tool_content(tool_name, tool_input)
                     turns.append(Turn(
                         turn_number=current_turn,
@@ -120,6 +125,7 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                         word_count=count_words(content_str),
                         tool_name=tool_name,
                         timestamp=timestamp,
+                        task_operation=task_op,
                     ))
 
     return turns

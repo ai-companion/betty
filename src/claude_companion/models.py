@@ -58,6 +58,7 @@ class Turn:
     expanded: bool = False
     is_historical: bool = False  # True if loaded from transcript history
     summary: str | None = None  # LLM-generated summary for assistant turns
+    task_operation: tuple[str, dict[str, Any]] | None = None  # (operation_type, data) for task tools
 
     @classmethod
     def from_event(cls, event: Event, turn_number: int) -> "Turn | None":
@@ -74,6 +75,49 @@ class Turn:
                 timestamp=event.timestamp,
             )
         return None
+
+
+@dataclass
+class TaskState:
+    """State of a task from TaskCreate/TaskUpdate operations."""
+
+    task_id: str
+    subject: str
+    description: str
+    status: str  # "pending" | "in_progress" | "completed" | "deleted"
+    activeForm: str | None = None
+    owner: str | None = None
+    blockedBy: list[str] = field(default_factory=list)
+    blocks: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+    @property
+    def is_deleted(self) -> bool:
+        """Check if task is deleted."""
+        return self.status == "deleted"
+
+
+def parse_task_operation(tool_name: str, tool_input: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """Parse Task tool operations and return (operation_type, data)."""
+    if tool_name == "TaskCreate":
+        return ("create", {
+            "subject": tool_input.get("subject", ""),
+            "description": tool_input.get("description", ""),
+            "activeForm": tool_input.get("activeForm"),
+        })
+    elif tool_name == "TaskUpdate":
+        return ("update", {
+            "taskId": tool_input.get("taskId", ""),
+            "status": tool_input.get("status"),
+            "subject": tool_input.get("subject"),
+            "description": tool_input.get("description"),
+            "activeForm": tool_input.get("activeForm"),
+            "owner": tool_input.get("owner"),
+            "addBlockedBy": tool_input.get("addBlockedBy", []),
+            "addBlocks": tool_input.get("addBlocks", []),
+        })
+    return None  # TaskGet, TaskList are read-only
 
 
 def _extract_tool_content(tool_name: str | None, tool_input: dict[str, Any]) -> str:
@@ -103,7 +147,14 @@ def _extract_tool_content(tool_name: str | None, tool_input: dict[str, Any]) -> 
         pattern = tool_input.get("pattern", "")
         path = tool_input.get("path", ".")
         return f"/{pattern}/ in {path}"
-    elif tool_name == "Task":
+    elif tool_name == "TaskCreate":
+        subject = tool_input.get("subject", "")
+        return f"Create task: {subject}"
+    elif tool_name == "TaskUpdate":
+        task_id = tool_input.get("taskId", "")
+        status = tool_input.get("status", "")
+        return f"Update task {task_id}: {status}" if status else f"Update task {task_id}"
+    elif tool_name in ("Task", "TaskGet", "TaskList"):
         return tool_input.get("description", str(tool_input))
     else:
         return str(tool_input)[:200]
@@ -126,6 +177,7 @@ class Session:
     started_at: datetime = field(default_factory=datetime.now)
     events: list[Event] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
+    tasks: dict[str, TaskState] = field(default_factory=dict)
     active: bool = True
 
     @property
