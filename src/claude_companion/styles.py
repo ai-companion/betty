@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 if TYPE_CHECKING:
-    from .models import Session, Turn
+    from .models import Session, Turn, TurnGroup
 
 
 class StyleRenderer(ABC):
@@ -24,6 +24,13 @@ class StyleRenderer(ABC):
         self, turn: "Turn", is_selected: bool, conv_turn: int, use_summary: bool
     ) -> Text | Group | Panel:
         """Render a single turn."""
+        ...
+
+    @abstractmethod
+    def render_turn_group(
+        self, group: "TurnGroup", is_selected: bool, conv_turn: int
+    ) -> Panel | Group:
+        """Render a turn group (assistant + tools)."""
         ...
 
     @abstractmethod
@@ -89,6 +96,50 @@ class RichStyle(StyleRenderer):
         if not tool_name:
             return self.TOOL_ICONS["default"]
         return self.TOOL_ICONS.get(tool_name, self.TOOL_ICONS["default"])
+
+    def render_turn_group(
+        self, group: "TurnGroup", is_selected: bool, conv_turn: int
+    ) -> Panel:
+        """Render a turn group in rich boxed style."""
+        history_prefix = "◷ " if group.assistant_turn.is_historical else ""
+        timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M:%S")
+
+        # Title with tools count
+        icon = self.ROLE_ICONS["assistant"]
+        title = f"{history_prefix}Turn {group.assistant_turn.turn_number} │ {icon} Assistant + {group.tool_count} tools │ {timestamp_str}"
+
+        border_style = "green" if not group.assistant_turn.is_historical else "dim green"
+        if is_selected:
+            title = f"► {title}"
+            border_style = "white"
+
+        # Content
+        if group.expanded:
+            # Show full text + tool list
+            content_parts = [
+                Text("Full response:", style="dim"),
+                Markdown(group.assistant_turn.content_full),
+                Text(""),
+                Text(f"Tools used ({group.tool_count}):", style="dim"),
+            ]
+            for tool_turn in group.tool_turns:
+                icon = self._get_tool_icon(tool_turn.tool_name)
+                content_parts.append(Text(f"  {icon} [{tool_turn.tool_name}] {tool_turn.content_preview}", style="dim"))
+        else:
+            # Show ONLY the summary (which covers both assistant text and tools)
+            content_parts = [Markdown(f"**\\[tldr;]** {group.assistant_turn.summary}")]
+
+        subtitle = f"{group.assistant_turn.word_count:,} words"
+
+        return Panel(
+            Group(*content_parts),
+            title=title,
+            title_align="left",
+            subtitle=subtitle,
+            subtitle_align="right",
+            border_style=border_style,
+            padding=(0, 1),
+        )
 
     def render_turn(
         self, turn: "Turn", is_selected: bool, conv_turn: int, use_summary: bool
@@ -275,6 +326,57 @@ class ClaudeCodeStyle(StyleRenderer):
         if not tool_name:
             return self.TOOL_INDICATORS["default"]
         return self.TOOL_INDICATORS.get(tool_name, self.TOOL_INDICATORS["default"])
+
+    def render_turn_group(
+        self, group: "TurnGroup", is_selected: bool, conv_turn: int
+    ) -> Group:
+        """Render a turn group in minimal style."""
+        selected_style = "light_steel_blue" if is_selected else ""
+        bullet_style = selected_style or self.BULLET_STYLES["assistant"]
+
+        # Determine indicator and content based on expand state
+        if group.expanded:
+            indicator = "[-]"
+            content = group.assistant_turn.content_full
+        else:
+            indicator = "[tldr]"
+            content = group.assistant_turn.summary or group.assistant_turn.content_preview
+
+        # Tool count annotation
+        tools_annotation = f" + tools:{group.tool_count}"
+
+        # Main assistant line with tools annotation
+        md_content = f"**{indicator}**{tools_annotation} {content}"
+        row = Table.grid(padding=(0, 0))
+        row.add_column(width=2)
+        row.add_column()
+        row.add_row(
+            Text(f"{self.BULLET} ", style=bullet_style),
+            Markdown(md_content, style=selected_style),
+        )
+
+        parts = [row]
+
+        # Add timestamp/metadata line
+        if conv_turn > 0:
+            timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M")
+            status = f"── turn {conv_turn}, {group.assistant_turn.word_count} words, {timestamp_str} ──"
+            parts.append(Text(status, style="dim", justify="right"))
+
+        # If expanded, show individual tool turns indented
+        if group.expanded:
+            for tool_turn in group.tool_turns:
+                tool_indicator = self._get_tool_indicator(tool_turn.tool_name)
+                tool_row = Table.grid(padding=(0, 0))
+                tool_row.add_column(width=4)  # Extra indent
+                tool_row.add_column()
+                tool_text = Text()
+                tool_text.append(f"[{tool_indicator}] ", style="bold" if not selected_style else selected_style)
+                tool_text.append(tool_turn.content_preview, style=selected_style or "dim")
+                tool_row.add_row(Text("  "), tool_text)
+                parts.append(tool_row)
+
+        return Group(*parts)
 
     def render_turn(
         self, turn: "Turn", is_selected: bool, conv_turn: int, use_summary: bool
