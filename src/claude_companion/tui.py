@@ -331,7 +331,8 @@ class TUI:
                 )
             panel_height = self._measure_height(panel)
 
-            if used_height + panel_height > available_height and panels:
+            # Stop if would overflow, but always include the selected item
+            if used_height + panel_height > available_height and panels and not is_selected:
                 break  # Would overflow, stop here
 
             panels.append(panel)
