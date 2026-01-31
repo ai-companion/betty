@@ -126,13 +126,17 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
 
 
 def _parse_timestamp(ts: str | None) -> datetime:
-    """Parse ISO 8601 timestamp or return now."""
+    """Parse ISO 8601 timestamp and convert to local time."""
     if not ts:
         return datetime.now()
     try:
         # Handle ISO format with Z suffix
         if ts.endswith("Z"):
             ts = ts[:-1] + "+00:00"
-        return datetime.fromisoformat(ts)
+        dt = datetime.fromisoformat(ts)
+        # Convert to local time if timezone-aware
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
     except (ValueError, TypeError):
         return datetime.now()
