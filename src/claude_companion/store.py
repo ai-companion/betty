@@ -1,5 +1,6 @@
 """Thread-safe event store for Claude Companion."""
 
+import logging
 import threading
 from datetime import datetime
 from typing import Callable
@@ -11,7 +12,7 @@ from .history import SessionRecord, save_session
 from .models import Event, Session, TaskState, Turn
 from .summarizer import Summarizer, _get_turn_context
 from .transcript import parse_transcript
-from .watcher import TranscriptWatcher
+from .watcher import TranscriptWatcher, PlanFileWatcher
 
 
 class EventStore:
@@ -27,6 +28,7 @@ class EventStore:
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
         self._watcher = TranscriptWatcher(self._on_watcher_turn)
+        self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
 
         # Load config and initialize summarizer
         config = load_config()
@@ -40,6 +42,10 @@ class EventStore:
 
     def add_event(self, event: Event) -> None:
         """Add an event to the store."""
+        # Variables to start plan watcher outside lock
+        session_id_for_plan = None
+        project_path_for_plan = None
+
         with self._lock:
             session_id = event.session_id
 
@@ -67,6 +73,29 @@ class EventStore:
                     self._watcher.watch(event.transcript_path, start_turn, start_position=file_position)
                     # Save to session history for -c/-r resume features
                     self._save_to_history(session_id, event.transcript_path)
+
+                # Prepare data for plan watcher (start outside lock to avoid blocking)
+                session = self._sessions.get(session_id)
+                if session and event.transcript_path:
+                    session_id_for_plan = session_id
+                    project_path_for_plan = session.project_path
+
+        # Start plan file watcher OUTSIDE lock to avoid blocking SessionStart hook
+        if session_id_for_plan and project_path_for_plan:
+            from .utils import decode_project_path
+            project_dir = decode_project_path(project_path_for_plan)
+
+            if project_dir:
+                # Use default argument to capture session_id by value (avoids closure bug)
+                plan_watcher = PlanFileWatcher(
+                    project_dir,
+                    lambda content, path, sid=session_id_for_plan: self._on_plan_update(sid, content, path)
+                )
+                # Start watcher outside lock (does file I/O)
+                plan_watcher.start()
+                # Only acquire lock to store the watcher reference AFTER starting
+                with self._lock:
+                    self._plan_watchers[session_id_for_plan] = plan_watcher
 
         # Check for alerts
         alerts = check_event_for_alerts(event)
@@ -225,6 +254,23 @@ class EventStore:
                 if block_id not in task.blocks:
                     task.blocks.append(block_id)
 
+    def _on_plan_update(self, session_id: str, content: str, file_path: str) -> None:
+        """Handle plan file changes."""
+        from datetime import datetime
+
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                logging.debug(f"Plan update ignored for unknown session: {session_id}")
+                return
+
+            # Update plan state
+            session.plan_content = content if content else None
+            session.plan_file_path = file_path if file_path else None
+            session.plan_updated_at = datetime.now() if content else None
+
+        # Plan updates will be picked up on next render cycle (TUI polls every 0.2s)
+
     def _on_watcher_turn(self, turn: Turn) -> None:
         """Handle new turn from transcript watcher."""
         with self._lock:
@@ -335,6 +381,10 @@ class EventStore:
         """Stop the watcher and summarizer."""
         self._watcher.stop()
         self._summarizer.shutdown()
+        # Stop all plan watchers
+        for watcher in self._plan_watchers.values():
+            watcher.stop()
+        self._plan_watchers.clear()
 
     def _save_to_history(self, session_id: str, transcript_path: str) -> None:
         """Save session to history for -c/-r resume features."""

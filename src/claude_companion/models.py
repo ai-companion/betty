@@ -178,6 +178,9 @@ class Session:
     events: list[Event] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
     tasks: dict[str, TaskState] = field(default_factory=dict)
+    plan_content: str | None = None  # Full markdown content of plan
+    plan_file_path: str | None = None  # Absolute path to plan file
+    plan_updated_at: datetime | None = None  # Last modification time
     active: bool = True
 
     @property
