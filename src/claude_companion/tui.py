@@ -78,6 +78,7 @@ class TUI:
         self._last_active_session_id: str | None = None  # Track session changes
         self._pending_scroll_to_bottom = False  # Flag for deferred scroll computation
         self._show_tasks = False  # Whether to show task list view
+        self._show_plan = False  # Whether to show plan view
 
         # Style renderer
         self._style = get_style(ui_style if ui_style in STYLES else DEFAULT_STYLE)
@@ -335,6 +336,47 @@ class TUI:
             padding=(1, 2),
         )
 
+    def _render_plan(self, session: Session | None) -> Panel:
+        """Render the plan panel with markdown."""
+        if not session or not session.plan_content:
+            return Panel(
+                "[dim]No active plan detected. Claude will create a plan when you enter plan mode.[/dim]",
+                title="[bold]Plan[/bold]",
+                border_style="magenta",
+                padding=(1, 2),
+            )
+
+        # Format header with file path and update time
+        from datetime import datetime
+
+        file_path = session.plan_file_path or "Unknown"
+        updated_str = "Unknown"
+        if session.plan_updated_at:
+            delta = datetime.now() - session.plan_updated_at
+            if delta.total_seconds() < 60:
+                updated_str = "Just now"
+            elif delta.total_seconds() < 3600:
+                minutes = int(delta.total_seconds() / 60)
+                updated_str = f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            else:
+                hours = int(delta.total_seconds() / 3600)
+                updated_str = f"{hours} hour{'s' if hours != 1 else ''} ago"
+
+        header = f"[dim]File:[/dim] {file_path}\n[dim]Updated:[/dim] {updated_str}\n"
+
+        # Render markdown content with Rich Markdown
+        from rich.markdown import Markdown
+        content = Markdown(session.plan_content)
+
+        return Panel(
+            Group(Text.from_markup(header), Text(""), content),
+            title="[bold magenta]Plan[/bold magenta]",
+            subtitle="[dim]Press P or ESC to return to turns view[/dim]",
+            subtitle_align="right",
+            border_style="magenta",
+            padding=(1, 2),
+        )
+
     def _render_footer(self) -> Text:
         """Render the footer with keybindings."""
         if self._status_message and time.time() < self._status_until:
@@ -356,6 +398,7 @@ class TUI:
             "[dim]g/G[/dim]:end "
             "[dim]o[/dim]:open "
             "[dim]T[/dim]:tasks "
+            "[dim]P[/dim]:plan "
             "[dim]s/S[/dim]:summary "
             "[dim]f[/dim]:filter "
             "[dim]m[/dim]:monitor "
@@ -375,8 +418,10 @@ class TUI:
         if alerts_panel:
             parts.append(alerts_panel)
 
-        # Show task list OR turns (toggle view)
-        if self._show_tasks:
+        # Show plan, tasks, OR turns (mutually exclusive views)
+        if self._show_plan:
+            parts.append(self._render_plan(active))
+        elif self._show_tasks:
             parts.append(self._render_task_list(active))
         else:
             parts.append(self._render_turns(active))
@@ -458,11 +503,20 @@ class TUI:
             self._selected_index = None
             if self._show_tasks:
                 self._show_tasks = False
+            if self._show_plan:
+                self._show_plan = False
             self._refresh_event.set()
 
         elif key == "T":
             self._show_tasks = not self._show_tasks
+            self._show_plan = False
             self._show_status("Showing task list" if self._show_tasks else "Showing conversation turns")
+            self._refresh_event.set()
+
+        elif key == "P":
+            self._show_plan = not self._show_plan
+            self._show_tasks = False
+            self._show_status("Showing plan" if self._show_plan else "Showing conversation turns")
             self._refresh_event.set()
 
         elif key == "r":
