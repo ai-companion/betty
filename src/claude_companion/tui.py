@@ -14,10 +14,9 @@ from rich.text import Text
 from .alerts import Alert, AlertLevel
 from .config import DEFAULT_STYLE
 from .export import export_session_markdown, get_export_filename
-from .models import Event, Session, Turn, TurnGroup
+from .models import Event, Session, Turn, ToolGroup
 from .store import EventStore
 from .styles import STYLES, get_style
-from .summarizer import _get_turn_context
 
 
 class KeyReader:
@@ -60,18 +59,20 @@ def group_turns_for_display(
     turns: list[Turn],
     use_summary: bool,
     group_expanded_state: dict[int, bool] | None = None,
-) -> list[Turn | TurnGroup]:
+) -> list[Turn | ToolGroup]:
     """
-    Group turns that were summarized together into collapsible groups.
-    Uses the same scope as the summarizer (_get_turn_context).
+    Group consecutive tool turns into ToolGroup, keep assistant as separate Turn.
+
+    Tools are grouped together with their own summary (green bullet).
+    Assistant turns are displayed separately with their own summary (white bullet).
 
     Args:
         session: The session containing the turns
         turns: List of turns to potentially group
         use_summary: Whether summary mode is enabled
-        group_expanded_state: Dict mapping assistant turn_number to expanded state
+        group_expanded_state: Dict mapping first_turn_number to expanded state
 
-    Returns mixed list of Turn and TurnGroup objects.
+    Returns mixed list of Turn and ToolGroup objects.
     """
     if not use_summary:
         return turns
@@ -79,47 +80,35 @@ def group_turns_for_display(
     if group_expanded_state is None:
         group_expanded_state = {}
 
-    # Build identity-based index map to avoid issues with identical tool turns
-    turn_id_to_idx = {id(turn): i for i, turn in enumerate(turns)}
+    result: list[Turn | ToolGroup] = []
+    tool_buffer: list[Turn] = []  # Accumulate consecutive tools
 
-    # First pass: identify which tool turns should be grouped
-    skip_indices = set()  # Track turns that have been grouped
+    def flush_tool_buffer() -> None:
+        """Flush accumulated tool turns as a ToolGroup."""
+        nonlocal tool_buffer
+        if tool_buffer:
+            first_turn_num = tool_buffer[0].turn_number
+            expanded = group_expanded_state.get(first_turn_num, False)
+            # Summary is stored on first tool turn
+            summary = tool_buffer[0].summary
+            result.append(ToolGroup(
+                tool_turns=tool_buffer,
+                summary=summary,
+                expanded=expanded,
+            ))
+            tool_buffer = []
 
-    for i, turn in enumerate(turns):
-        if turn.role == "assistant" and turn.summary:
-            # Use the same context logic as summarizer
-            user_turn, tool_turns = _get_turn_context(session, turn)
-
-            # Mark these tool turns to be skipped in second pass (using identity)
-            for tool_turn in tool_turns:
-                tool_idx = turn_id_to_idx.get(id(tool_turn))
-                if tool_idx is not None:
-                    skip_indices.add(tool_idx)
-
-    # Second pass: build result with groups
-    result = []
-    for i, turn in enumerate(turns):
-        if i in skip_indices:
-            continue  # Already included in a group
-
-        if turn.role == "assistant" and turn.summary:
-            # Use the same context logic as summarizer
-            user_turn, tool_turns = _get_turn_context(session, turn)
-
-            if tool_turns:
-                # Create group, preserving expanded state if known
-                expanded = group_expanded_state.get(turn.turn_number, False)
-                result.append(TurnGroup(
-                    assistant_turn=turn,
-                    tool_turns=tool_turns,
-                    expanded=expanded,
-                ))
-            else:
-                # Assistant with summary but no tools
-                result.append(turn)
+    for turn in turns:
+        if turn.role == "tool":
+            tool_buffer.append(turn)
         else:
-            # User turn, assistant without summary, or non-grouped tool
+            # Flush tool buffer before non-tool turn
+            flush_tool_buffer()
+            # Add user/assistant turn directly
             result.append(turn)
+
+    # Flush remaining tools at end
+    flush_tool_buffer()
 
     return result
 
@@ -152,7 +141,7 @@ class TUI:
         self._pending_scroll_to_bottom = False  # Flag for deferred scroll computation
         self._show_tasks = False  # Whether to show task list view
         self._show_plan = False  # Whether to show plan view
-        self._group_expanded_state: dict[int, bool] = {}  # Track TurnGroup expanded state by turn_number
+        self._group_expanded_state: dict[int, bool] = {}  # Track ToolGroup expanded state by turn_number
 
         # Style renderer
         self._style = get_style(ui_style if ui_style in STYLES else DEFAULT_STYLE)
@@ -232,7 +221,7 @@ class TUI:
             self._pending_scroll_to_bottom = True
         self._refresh_event.set()
 
-    def _get_filtered_turns(self, session: Session | None) -> list[Turn | TurnGroup]:
+    def _get_filtered_turns(self, session: Session | None) -> list[Turn | ToolGroup]:
         """Get turns filtered by current filter, with optional grouping."""
         if not session:
             return []
@@ -295,13 +284,13 @@ class TUI:
         total_turns = len(filtered_turns)
         available_height = self._get_available_height_for_turns()
 
-        # Compute conversation turn numbers (only counting user+assistant)
+        # Compute conversation turn numbers (only counting user+assistant, not tool groups)
         conv_turn_map: dict[int, int] = {}
         conv_turn = 0
         for item in filtered_turns:
-            if isinstance(item, TurnGroup):
-                conv_turn += 1
-                conv_turn_map[id(item.assistant_turn)] = conv_turn
+            if isinstance(item, ToolGroup):
+                # Tool groups don't get conv turn numbers (they're rendered separately)
+                pass
             elif item.role in ("user", "assistant"):
                 conv_turn += 1
                 conv_turn_map[id(item)] = conv_turn
@@ -316,12 +305,11 @@ class TUI:
             item = filtered_turns[i]
             is_selected = self._selected_index == i
 
-            # Handle both TurnGroup and Turn
-            if isinstance(item, TurnGroup):
-                panel = self._style.render_turn_group(
+            # Handle both ToolGroup and Turn
+            if isinstance(item, ToolGroup):
+                panel = self._style.render_tool_group(
                     item,
                     is_selected,
-                    conv_turn_map.get(id(item.assistant_turn), 0),
                 )
             else:
                 panel = self._style.render_turn(
@@ -528,7 +516,7 @@ class TUI:
 
         return Group(*parts)
 
-    def _get_active_turns(self) -> list[Turn | TurnGroup]:
+    def _get_active_turns(self) -> list[Turn | ToolGroup]:
         """Get filtered turns from active session."""
         session = self.store.get_active_session()
         return self._get_filtered_turns(session)
@@ -669,10 +657,10 @@ class TUI:
                 and 0 <= self._selected_index < total_turns
             ):
                 item = turns[self._selected_index]
-                if isinstance(item, TurnGroup):
-                    # Toggle and persist in state dict
+                if isinstance(item, ToolGroup):
+                    # Toggle and persist in state dict (keyed by first tool turn number)
                     new_state = not item.expanded
-                    self._group_expanded_state[item.assistant_turn.turn_number] = new_state
+                    self._group_expanded_state[item.first_turn_number] = new_state
                     item.expanded = new_state
                 else:
                     item.expanded = not item.expanded
@@ -680,15 +668,15 @@ class TUI:
 
         elif key == "e":
             for item in turns:
-                if isinstance(item, TurnGroup):
-                    self._group_expanded_state[item.assistant_turn.turn_number] = True
+                if isinstance(item, ToolGroup):
+                    self._group_expanded_state[item.first_turn_number] = True
                 item.expanded = True
             self._refresh_event.set()
 
         elif key == "c":
             for item in turns:
-                if isinstance(item, TurnGroup):
-                    self._group_expanded_state[item.assistant_turn.turn_number] = False
+                if isinstance(item, ToolGroup):
+                    self._group_expanded_state[item.first_turn_number] = False
                 item.expanded = False
             self._refresh_event.set()
 
@@ -779,9 +767,9 @@ class TUI:
             conv_turn_map: dict[int, int] = {}
             conv_turn = 0
             for item in filtered:
-                if isinstance(item, TurnGroup):
-                    conv_turn += 1
-                    conv_turn_map[id(item.assistant_turn)] = conv_turn
+                if isinstance(item, ToolGroup):
+                    # Tool groups don't get conv turn numbers
+                    pass
                 elif item.role in ("user", "assistant"):
                     conv_turn += 1
                     conv_turn_map[id(item)] = conv_turn
@@ -791,8 +779,8 @@ class TUI:
             visible_count = 0
             for i in range(total - 1, -1, -1):
                 item = filtered[i]
-                if isinstance(item, TurnGroup):
-                    panel = self._style.render_turn_group(item, False, conv_turn_map.get(id(item.assistant_turn), 0))
+                if isinstance(item, ToolGroup):
+                    panel = self._style.render_tool_group(item, False)
                 else:
                     panel = self._style.render_turn(item, False, conv_turn_map.get(id(item), 0), self._use_summary)
                 panel_height = self._measure_height(panel)

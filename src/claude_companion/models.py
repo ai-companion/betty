@@ -168,21 +168,24 @@ def _truncate(text: str, max_len: int) -> str:
 
 
 @dataclass
-class TurnGroup:
-    """A display group for turns that were summarized together.
+class ToolGroup:
+    """A display group for consecutive tool turns with a summary.
 
-    Scope matches what the summarizer includes (see summarizer._get_turn_context):
-    - The assistant turn (with its summary)
-    - Tool turns that were part of the summarization context
+    Separate from assistant turns - tools have their own identity and summary.
     """
 
-    assistant_turn: Turn  # The assistant turn with summary
-    tool_turns: list[Turn]  # Tool turns included in the summary scope
+    tool_turns: list[Turn]  # Consecutive tool turns
+    summary: str | None = None  # LLM summary for these tools
     expanded: bool = False  # Group-level expand state
 
     @property
     def tool_count(self) -> int:
         return len(self.tool_turns)
+
+    @property
+    def first_turn_number(self) -> int:
+        """Get turn number of first tool (used for tracking expanded state)."""
+        return self.tool_turns[0].turn_number if self.tool_turns else 0
 
     @property
     def tool_names_preview(self) -> str:
