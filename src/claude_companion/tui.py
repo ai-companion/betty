@@ -14,7 +14,7 @@ from rich.text import Text
 from .alerts import Alert, AlertLevel
 from .config import DEFAULT_STYLE
 from .export import export_session_markdown, get_export_filename
-from .models import Event, Session, Turn, ToolGroup
+from .models import Session, Turn, ToolGroup
 from .store import EventStore
 from .styles import STYLES, get_style
 
@@ -152,8 +152,7 @@ class TUI:
         # Live display reference
         self._live: Live | None = None
 
-        # Register listener for store updates
-        store.add_listener(self._on_event)
+        # Register listeners for store updates
         store.add_alert_listener(self._on_alert)
         store.add_turn_listener(self._on_turn)
 
@@ -190,8 +189,12 @@ class TUI:
         # Placeholder - will be used for LLM integration later
         self._show_status(f"Query submitted: {query[:30]}...")
 
-    def _on_event(self, event: Event) -> None:
-        """Called when a new event arrives."""
+    def _on_alert(self, alert: Alert) -> None:
+        """Called when a new alert is triggered."""
+        self._refresh_event.set()
+
+    def _on_turn(self, turn: Turn) -> None:
+        """Called when a new turn arrives from transcript watcher."""
         session = self.store.get_active_session()
 
         # Detect session change and reset scroll state
@@ -201,24 +204,14 @@ class TUI:
             # Reset scroll state when session changes
             self._scroll_offset = 0
             self._selected_index = None
-            self._group_expanded_state.clear()  # Clear group expanded state for new session
-            # Request scroll to bottom on next render (deferred to avoid cross-thread rendering)
+            self._group_expanded_state.clear()
+            # Request scroll to bottom for new session
             if session:
                 self._pending_scroll_to_bottom = True
         elif self._auto_scroll:
             # Auto-scroll to show new content in current session
             self._pending_scroll_to_bottom = True
-        self._refresh_event.set()
 
-    def _on_alert(self, alert: Alert) -> None:
-        """Called when a new alert is triggered."""
-        self._refresh_event.set()
-
-    def _on_turn(self, turn: Turn) -> None:
-        """Called when a new turn arrives from transcript watcher."""
-        # Auto-scroll to show new content (deferred to avoid cross-thread rendering)
-        if self._auto_scroll:
-            self._pending_scroll_to_bottom = True
         self._refresh_event.set()
 
     def _get_filtered_turns(self, session: Session | None) -> list[Turn | ToolGroup]:

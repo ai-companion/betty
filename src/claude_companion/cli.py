@@ -1,29 +1,57 @@
 """CLI entry point for Claude Companion."""
 
+from pathlib import Path
+
 import click
 from rich.console import Console
 from rich.table import Table
 
 from . import __version__
 from .config import CONFIG_FILE, DEFAULT_STYLE, get_example_configs, load_config, save_config, Config, LLMConfig
-from .history import cwd_to_project_path, get_history, get_most_recent
-from .hooks import check_hooks_status, install_hooks, uninstall_hooks
-from .server import ServerThread
 from .store import EventStore
 from .tui import TUI
 
 console = Console()
 
 
+def cwd_to_project_path() -> str:
+    """Encode CWD to Claude's project directory name.
+
+    e.g., /Users/kai/src/foo -> -Users-kai-src-foo
+    """
+    return str(Path.cwd()).replace("/", "-")
+
+
+def get_project_paths(global_mode: bool) -> list[Path]:
+    """Get project directories to watch.
+
+    Args:
+        global_mode: If True, return all project directories. If False, return only current directory's project.
+
+    Returns:
+        List of project directories to watch
+    """
+    projects_dir = Path.home() / ".claude" / "projects"
+
+    if not projects_dir.exists():
+        return []
+
+    if global_mode:
+        # All project directories (those starting with "-")
+        return [p for p in projects_dir.iterdir()
+                if p.is_dir() and p.name.startswith("-")]
+    else:
+        # Current directory only
+        encoded = cwd_to_project_path()
+        project_path = projects_dir / encoded
+        return [project_path] if project_path.exists() else []
+
+
 @click.group(invoke_without_command=True)
-@click.option("--port", "-p", default=5432, help="Port for the HTTP server")
+@click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects (not just current directory)")
 @click.option("--version", "-v", is_flag=True, help="Show version")
-@click.option("--continue", "-c", "continue_session", is_flag=True, help="Continue the most recent session (current dir)")
-@click.option("--resume", "-r", is_flag=True, help="Select a session to resume (current dir)")
-@click.option("-C", "continue_global", is_flag=True, help="Continue the most recent session (global)")
-@click.option("-R", "resume_global", is_flag=True, help="Select a session to resume (global)")
 @click.pass_context
-def main(ctx: click.Context, port: int, version: bool, continue_session: bool, resume: bool, continue_global: bool, resume_global: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -31,253 +59,41 @@ def main(ctx: click.Context, port: int, version: bool, continue_session: bool, r
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
-        # Check for mutually exclusive options
-        resume_flags = sum([continue_session, resume, continue_global, resume_global])
-        if resume_flags > 1:
-            console.print("[red]Error:[/red] Options -c, -r, -C, -R are mutually exclusive.")
-            raise SystemExit(1)
-
         config = load_config()
-
-        # Determine project scope: -c/-r filter by current dir, -C/-R are global
-        project_path = None
-        if continue_session or resume:
-            project_path = cwd_to_project_path()
-
-        # Handle -c/--continue or -C: load most recent session
-        initial_transcript = None
-        if continue_session or continue_global:
-            recent = get_most_recent(project_path=project_path)
-            if recent:
-                initial_transcript = recent.transcript_path
-                console.print(f"[dim]Continuing session:[/dim] {recent.project_name}")
-            else:
-                scope = "current directory" if project_path else "global"
-                console.print(f"[yellow]No session history found ({scope}).[/yellow]")
-
-        # Handle -r/--resume or -R: show session picker
-        elif resume or resume_global:
-            initial_transcript = _pick_session(project_path=project_path)
-            if initial_transcript is None:
-                return  # User cancelled or no history
-
-        run_companion(port, config.style, initial_transcript, config.collapse_tools)
+        run_companion(global_mode=global_mode, ui_style=config.style, collapse_tools=config.collapse_tools)
 
 
-def _pick_session(project_path: str | None = None) -> str | None:
-    """Show interactive session picker for -r/--resume. Returns transcript path or None."""
-    import select
-    import sys
-    import termios
-    import tty
+def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, collapse_tools: bool = True) -> None:
+    """Run the main companion TUI with directory-based session discovery."""
+    project_paths = get_project_paths(global_mode)
 
-    from rich.live import Live
-    from rich.text import Text
+    if not project_paths:
+        if global_mode:
+            console.print("[yellow]No Claude sessions found.[/yellow]")
+            console.print("Run [bold]claude[/bold] in any directory to start a session.")
+        else:
+            console.print("[yellow]No Claude sessions for current directory.[/yellow]")
+            console.print("Run [bold]claude[/bold] here first, or use [bold]--global[/bold] to see all sessions.")
+        return
 
-    # Check for TTY - picker requires interactive terminal
-    if not sys.stdin.isatty():
-        console.print("[red]Error:[/red] Session picker requires an interactive terminal.")
-        raise SystemExit(1)
-
-    history = get_history(limit=20, project_path=project_path)
-    if not history:
-        console.print("[yellow]No session history found.[/yellow]")
-        return None
-
-    selected_idx = 0
-
-    def render_picker() -> Table:
-        """Render the session picker table with current selection highlighted."""
-        table = Table(show_header=True, header_style="bold", highlight=False)
-        table.add_column("", width=2)  # Selection indicator
-        table.add_column("Project", style="cyan")
-        table.add_column("Session", style="dim", width=8)
-        table.add_column("Last Accessed", style="dim")
-
-        for i, record in enumerate(history):
-            last_accessed = record.last_accessed_dt.strftime("%Y-%m-%d %H:%M")
-            session_short = record.session_id[:8]
-
-            if i == selected_idx:
-                # Highlighted row
-                table.add_row(
-                    "[bold cyan]>[/bold cyan]",
-                    f"[bold reverse] {record.project_name} [/bold reverse]",
-                    f"[reverse] {session_short} [/reverse]",
-                    f"[reverse] {last_accessed} [/reverse]",
-                )
-            else:
-                table.add_row("", record.project_name, session_short, last_accessed)
-
-        return table
-
-    def read_key() -> str | None:
-        """Read a key if available."""
-        if select.select([sys.stdin], [], [], 0.1)[0]:
-            char = sys.stdin.read(1)
-            # Handle escape sequences (arrow keys)
-            if char == "\x1b":
-                if select.select([sys.stdin], [], [], 0.05)[0]:
-                    char += sys.stdin.read(2)
-            return char
-        return None
-
-    # Set up terminal for raw input
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-
-    try:
-        tty.setcbreak(fd)
-
-        with Live(render_picker(), console=console, refresh_per_second=10, screen=False) as live:
-            # Show header and footer
-            console.print("\n[bold]Select session:[/bold]")
-            console.print("[dim]j/k or ↑/↓: navigate | Enter: select | q/Esc: cancel[/dim]\n")
-
-            while True:
-                key = read_key()
-                if key is None:
-                    continue
-
-                if key in ("q", "\x1b", "\x03"):  # q, Esc, Ctrl+C
-                    return None
-
-                elif key in ("\n", "\r", " "):  # Enter or Space
-                    selected = history[selected_idx]
-                    console.print(f"\n[dim]Resuming session:[/dim] {selected.project_name}")
-                    return selected.transcript_path
-
-                elif key in ("k", "\x1b[A"):  # k or Up arrow
-                    if selected_idx > 0:
-                        selected_idx -= 1
-                        live.update(render_picker())
-
-                elif key in ("j", "\x1b[B"):  # j or Down arrow
-                    if selected_idx < len(history) - 1:
-                        selected_idx += 1
-                        live.update(render_picker())
-
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-
-def run_companion(port: int, ui_style: str = DEFAULT_STYLE, initial_transcript: str | None = None, collapse_tools: bool = True) -> None:
-    """Run the main companion TUI and server."""
-    # Check if hooks are installed
-    status = check_hooks_status(port)
-    not_installed = [e for e, s in status.items() if s == "not installed"]
-
-    if not_installed:
-        console.print(
-            f"[yellow]Warning:[/yellow] Hooks not installed for: {', '.join(not_installed)}"
-        )
-        console.print("Run [bold]claude-companion install[/bold] to set up hooks.\n")
-
-    # Create store, server, and TUI
+    # Create store and start watching
+    # In global mode, limit to 9 most recent sessions (can be selected with keys 1-9)
+    max_sessions = 9 if global_mode else None
     store = EventStore()
-    server = ServerThread(store, port=port)
+    store.start_watching(project_paths, max_sessions=max_sessions)
 
-    # Load initial session if provided (from -c or -r)
-    if initial_transcript:
-        if not store.load_session_from_transcript(initial_transcript):
-            console.print(f"[yellow]Warning:[/yellow] Could not load session from {initial_transcript}")
-
-    console.print(f"[dim]Starting server on http://127.0.0.1:{port}[/dim]")
-
-    # Start server in background
-    server.start()
+    scope = "all projects (9 most recent)" if global_mode else "current directory"
+    console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
 
     try:
         # Run TUI in main thread
         tui = TUI(store, console, ui_style=ui_style, collapse_tools=collapse_tools)
-        # Scroll to bottom if resuming a session
-        if initial_transcript:
-            tui.scroll_to_bottom()
         tui.run()
     except KeyboardInterrupt:
         pass
     finally:
         store.stop()
-        server.shutdown()
         console.print("\n[dim]Goodbye![/dim]")
-
-
-@main.command()
-@click.option("--port", "-p", default=5432, help="Port for hooks to connect to")
-def install(port: int) -> None:
-    """Install Claude Code hooks."""
-    console.print(f"Installing hooks for port {port}...")
-
-    results = install_hooks(port)
-
-    table = Table(title="Hook Installation Results")
-    table.add_column("Event", style="cyan")
-    table.add_column("Status")
-
-    for event, status in results.items():
-        if status == "installed":
-            style = "green"
-        elif status == "already installed":
-            style = "yellow"
-        else:
-            style = "red"
-        table.add_row(event, f"[{style}]{status}[/{style}]")
-
-    console.print(table)
-    console.print("\n[green]Done![/green] Hooks will send events to Claude Companion.")
-    console.print("Run [bold]claude-companion[/bold] to start monitoring.")
-
-
-@main.command()
-def uninstall() -> None:
-    """Remove Claude Code hooks."""
-    console.print("Removing hooks...")
-
-    results = uninstall_hooks()
-
-    table = Table(title="Hook Removal Results")
-    table.add_column("Event", style="cyan")
-    table.add_column("Status")
-
-    for event, status in results.items():
-        if status == "removed":
-            style = "green"
-        else:
-            style = "dim"
-        table.add_row(event, f"[{style}]{status}[/{style}]")
-
-    console.print(table)
-    console.print("\n[green]Done![/green] Claude Companion hooks removed.")
-
-
-@main.command()
-@click.option("--port", "-p", default=5432, help="Port to check")
-def status(port: int) -> None:
-    """Check hook installation status."""
-    results = check_hooks_status(port)
-
-    table = Table(title=f"Hook Status (port {port})")
-    table.add_column("Event", style="cyan")
-    table.add_column("Status")
-
-    all_installed = True
-    for event, hook_status in results.items():
-        if hook_status == "installed":
-            style = "green"
-        elif hook_status == "installed (different port)":
-            style = "yellow"
-            all_installed = False
-        else:
-            style = "red"
-            all_installed = False
-        table.add_row(event, f"[{style}]{hook_status}[/{style}]")
-
-    console.print(table)
-
-    if all_installed:
-        console.print("\n[green]All hooks installed![/green]")
-    else:
-        console.print("\nRun [bold]claude-companion install[/bold] to install missing hooks.")
 
 
 @main.command()
@@ -310,7 +126,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
 
         # Show API key status
         if current_config.llm.provider in ("openai", "openrouter", "anthropic"):
-            has_key = "✓ set" if current_config.llm.api_key else "✗ not set"
+            has_key = "set" if current_config.llm.api_key else "not set"
             console.print(f"  API Key:  [{'green' if current_config.llm.api_key else 'red'}]{has_key}[/]")
 
         console.print(f"\nConfig file: [dim]{CONFIG_FILE}[/dim]")
