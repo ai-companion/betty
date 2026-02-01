@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 if TYPE_CHECKING:
-    from .models import Session, Turn, TurnGroup
+    from .models import Session, Turn, ToolGroup
 
 
 class StyleRenderer(ABC):
@@ -27,10 +27,10 @@ class StyleRenderer(ABC):
         ...
 
     @abstractmethod
-    def render_turn_group(
-        self, group: "TurnGroup", is_selected: bool, conv_turn: int
+    def render_tool_group(
+        self, group: "ToolGroup", is_selected: bool
     ) -> Panel | Group:
-        """Render a turn group (assistant + tools)."""
+        """Render a tool group (consecutive tools with their own summary)."""
         ...
 
     @abstractmethod
@@ -97,48 +97,52 @@ class RichStyle(StyleRenderer):
             return self.TOOL_ICONS["default"]
         return self.TOOL_ICONS.get(tool_name, self.TOOL_ICONS["default"])
 
-    def render_turn_group(
-        self, group: "TurnGroup", is_selected: bool, conv_turn: int
-    ) -> Panel:
-        """Render a turn group in rich boxed style."""
-        history_prefix = "◷ " if group.assistant_turn.is_historical else ""
-        timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M:%S")
+    def render_tool_group(
+        self, group: "ToolGroup", is_selected: bool
+    ) -> Panel | Group:
+        """Render a tool group in rich boxed style (green border, separate from assistant)."""
+        first_tool = group.tool_turns[0] if group.tool_turns else None
 
-        # Title with tools count (tools first)
-        icon = self.ROLE_ICONS["assistant"]
-        title = f"{history_prefix}Turn {group.assistant_turn.turn_number} │ {group.tool_count} tools + {icon} │ {timestamp_str}"
+        # If collapsed and has summary, show as a single panel with summary
+        if not group.expanded and group.summary:
+            history_prefix = "◷ " if (first_tool and first_tool.is_historical) else ""
+            timestamp_str = first_tool.timestamp.strftime("%H:%M:%S") if first_tool else ""
 
-        border_style = "green" if not group.assistant_turn.is_historical else "dim green"
+            title = f"{history_prefix}{group.tool_count} tools │ {timestamp_str}"
+            border_style = "#5fd787" if not (first_tool and first_tool.is_historical) else "dim green"
+            if is_selected:
+                title = f"► {title}"
+                border_style = "white"
+
+            return Panel(
+                Markdown(f"**tools:{group.tool_count}** {group.summary}"),
+                title=title,
+                title_align="left",
+                border_style=border_style,
+                padding=(0, 1),
+            )
+
+        # Otherwise (expanded or no summary yet), show individual tools in one panel
+        content_parts = []
+        for i, tool_turn in enumerate(group.tool_turns):
+            icon = self._get_tool_icon(tool_turn.tool_name)
+            content = tool_turn.content_full if tool_turn.expanded else tool_turn.content_preview
+            content_parts.append(Text(f"{icon} [{tool_turn.tool_name}] {content}", style="dim"))
+            if i < len(group.tool_turns) - 1:
+                content_parts.append(Text(""))  # Blank line between tools
+
+        history_prefix = "◷ " if (first_tool and first_tool.is_historical) else ""
+        timestamp_str = first_tool.timestamp.strftime("%H:%M:%S") if first_tool else ""
+        title = f"{history_prefix}{group.tool_count} tools │ {timestamp_str}"
+        border_style = "#5fd787" if not (first_tool and first_tool.is_historical) else "dim green"
         if is_selected:
             title = f"► {title}"
             border_style = "white"
-
-        # Content
-        if group.expanded:
-            # Show tools first, then full assistant text
-            content_parts = [
-                Text(f"Tools used ({group.tool_count}):", style="dim"),
-            ]
-            for tool_turn in group.tool_turns:
-                icon = self._get_tool_icon(tool_turn.tool_name)
-                content_parts.append(Text(f"  {icon} [{tool_turn.tool_name}] {tool_turn.content_preview}", style="dim"))
-            content_parts.extend([
-                Text(""),
-                Text("Full response:", style="dim"),
-                Markdown(group.assistant_turn.content_full),
-            ])
-        else:
-            # Show ONLY the summary (which covers both assistant text and tools)
-            content_parts = [Markdown(f"**\\[tldr]** {group.assistant_turn.summary}")]
-
-        subtitle = f"{group.assistant_turn.word_count:,} words"
 
         return Panel(
             Group(*content_parts),
             title=title,
             title_align="left",
-            subtitle=subtitle,
-            subtitle_align="right",
             border_style=border_style,
             padding=(0, 1),
         )
@@ -175,7 +179,7 @@ class RichStyle(StyleRenderer):
             if turn.role == "assistant" and use_summary:
                 if turn.summary:
                     content = turn.summary
-                    expand_indicator = "\\[tldr;] "
+                    expand_indicator = "\\[+] "
                 else:
                     content = f"{turn.content_preview} *\\[summarizing...]*"
                     expand_indicator = (
@@ -329,51 +333,16 @@ class ClaudeCodeStyle(StyleRenderer):
             return self.TOOL_INDICATORS["default"]
         return self.TOOL_INDICATORS.get(tool_name, self.TOOL_INDICATORS["default"])
 
-    def render_turn_group(
-        self, group: "TurnGroup", is_selected: bool, conv_turn: int
+    def render_tool_group(
+        self, group: "ToolGroup", is_selected: bool
     ) -> Group:
-        """Render a turn group in minimal style."""
+        """Render a tool group in minimal style (green bullet, separate from assistant)."""
         selected_style = "light_steel_blue" if is_selected else ""
-        bullet_style = selected_style or self.BULLET_STYLES["assistant"]
+        bullet_style = selected_style or self.BULLET_STYLES["tool"]
 
-        parts = []
-
-        if group.expanded:
-            # Header line (bullet at top)
-            header_row = Table.grid(padding=(0, 0))
-            header_row.add_column(width=2)
-            header_row.add_column()
-            header_row.add_row(
-                Text(f"{self.BULLET} ", style=bullet_style),
-                Markdown(f"tools:{group.tool_count}", style=selected_style),
-            )
-            parts.append(header_row)
-
-            # Tool turns (indented)
-            for tool_turn in group.tool_turns:
-                tool_indicator = self._get_tool_indicator(tool_turn.tool_name)
-                tool_row = Table.grid(padding=(0, 0))
-                tool_row.add_column(width=4)  # Extra indent
-                tool_row.add_column()
-                tool_text = Text()
-                tool_text.append(f"[{tool_indicator}] ", style="bold" if not selected_style else selected_style)
-                tool_text.append(tool_turn.content_preview, style=selected_style or "dim")
-                tool_row.add_row(Text("  "), tool_text)
-                parts.append(tool_row)
-
-            # Full assistant content with [-] indicator (in second column)
-            content_row = Table.grid(padding=(0, 0))
-            content_row.add_column(width=2)
-            content_row.add_column()
-            content_row.add_row(
-                Text(""),
-                Markdown(f"**[-]** {group.assistant_turn.content_full}", style=selected_style),
-            )
-            parts.append(content_row)
-        else:
-            # When collapsed: show summary only
-            content = group.assistant_turn.summary or group.assistant_turn.content_preview
-            md_content = f"tools:{group.tool_count} + **[tldr]** {content}"
+        # If collapsed and has summary, show as single line with summary
+        if not group.expanded and group.summary:
+            md_content = f"**tools:{group.tool_count}** {group.summary}"
             row = Table.grid(padding=(0, 0))
             row.add_column(width=2)
             row.add_column()
@@ -381,13 +350,26 @@ class ClaudeCodeStyle(StyleRenderer):
                 Text(f"{self.BULLET} ", style=bullet_style),
                 Markdown(md_content, style=selected_style),
             )
-            parts.append(row)
+            return Group(row, Text(""))
 
-        # Add timestamp/metadata line
-        if conv_turn > 0:
-            timestamp_str = group.assistant_turn.timestamp.strftime("%H:%M")
-            status = f"── turn {conv_turn}, {group.assistant_turn.word_count} words, {timestamp_str} ──"
-            parts.append(Text(status, style="dim", justify="right"))
+        # Otherwise (expanded or no summary yet), show individual tools with spacing
+        parts = []
+        for tool_turn in group.tool_turns:
+            tool_indicator = self._get_tool_indicator(tool_turn.tool_name)
+            content = tool_turn.content_full if tool_turn.expanded else tool_turn.content_preview
+
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            tool_text = Text()
+            tool_text.append(f"[{tool_indicator}] ", style="bold" if not selected_style else selected_style)
+            tool_text.append(content, style=selected_style or "dim")
+            row.add_row(
+                Text(f"{self.BULLET} ", style=bullet_style),
+                tool_text,
+            )
+            parts.append(row)
+            parts.append(Text(""))  # Blank line after each tool
 
         return Group(*parts)
 
@@ -418,7 +400,7 @@ class ClaudeCodeStyle(StyleRenderer):
                 indicator = "\\[-]"
                 content = turn.content_full
             elif use_summary and turn.summary:
-                indicator = "\\[tldr]"
+                indicator = "\\[+]"
                 content = turn.summary
             elif use_summary and not turn.summary:
                 indicator = "\\[+]"
