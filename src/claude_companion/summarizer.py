@@ -312,5 +312,5 @@ class Summarizer:
         return response.content[0].text.strip()
 
     def shutdown(self) -> None:
-        """Shutdown the executor."""
-        self._executor.shutdown(wait=False)
+        """Shutdown the executor, cancelling pending tasks."""
+        self._executor.shutdown(wait=False, cancel_futures=True)

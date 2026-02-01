@@ -1,34 +1,35 @@
-"""Thread-safe event store for Claude Companion."""
+"""Thread-safe session store for Claude Companion."""
 
 import logging
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
-from .alerts import Alert, AlertLevel, check_event_for_alerts, check_turn_for_alerts, send_system_notification
+from .alerts import Alert, AlertLevel, check_turn_for_alerts, send_system_notification
 from .cache import SummaryCache
 from .config import load_config
-from .history import SessionRecord, save_session
-from .models import Event, Session, TaskState, Turn
+from .models import Session, TaskState, Turn
+from .project_watcher import ProjectWatcher
 from .summarizer import Summarizer, _get_turn_context, make_tool_cache_key
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher, PlanFileWatcher
 
 
 class EventStore:
-    """Thread-safe store for session events."""
+    """Thread-safe store for Claude Code sessions."""
 
     def __init__(self, enable_notifications: bool = True) -> None:
         self._sessions: dict[str, Session] = {}
         self._alerts: list[Alert] = []
         self._lock = threading.Lock()
-        self._listeners: list[Callable[[Event], None]] = []
         self._alert_listeners: list[Callable[[Alert], None]] = []
         self._turn_listeners: list[Callable[[Turn], None]] = []
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
         self._transcript_watchers: dict[str, TranscriptWatcher] = {}  # session_id -> watcher
         self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
+        self._project_watcher: ProjectWatcher | None = None
 
         # Load config and initialize summarizer
         config = load_config()
@@ -40,90 +41,76 @@ class EventStore:
         )
         self._summary_cache = SummaryCache()  # single cache for both assistant and tool summaries
 
-    def add_event(self, event: Event) -> None:
-        """Add an event to the store."""
-        # Variables to start watchers outside lock (avoids deadlock)
-        session_id_for_plan = None
-        project_path_for_plan = None
-        load_transcript_args = None  # (session_id, transcript_path)
+    def start_watching(self, project_paths: list[Path], max_sessions: int | None = None) -> None:
+        """Start watching project directories for sessions.
+
+        Args:
+            project_paths: List of project directories to watch for .jsonl session files
+            max_sessions: Maximum number of sessions to load on initial scan.
+                If None, all sessions are loaded. New sessions are always detected.
+        """
+        self._project_watcher = ProjectWatcher(
+            project_paths,
+            on_session_discovered=self._on_session_discovered,
+            max_sessions=max_sessions,
+        )
+        self._project_watcher.start()
+
+    def _on_session_discovered(self, session_id: str, transcript_path: Path) -> None:
+        """Handle discovery of a new session file.
+
+        Args:
+            session_id: The session ID (stem of the .jsonl file)
+            transcript_path: Path to the transcript .jsonl file
+        """
+        # Extract project_path from transcript path
+        project_path = ""
+        parts = str(transcript_path).split("/")
+        for i, part in enumerate(parts):
+            if part == "projects" and i + 1 < len(parts):
+                project_path = parts[i + 1]
+                break
 
         with self._lock:
-            session_id = event.session_id
+            # Skip if session already exists
+            if session_id in self._sessions:
+                return
 
-            # Create session if it doesn't exist
-            if session_id not in self._sessions:
-                self._sessions[session_id] = Session(
-                    session_id=session_id,
-                    started_at=event.timestamp,
-                )
-                # Auto-select first session or new session
-                if self._active_session_id is None:
-                    self._active_session_id = session_id
+            # Create session
+            session = Session(
+                session_id=session_id,
+                project_path=project_path,
+            )
+            self._sessions[session_id] = session
 
-            # Add event to session
-            self._sessions[session_id].add_event(event)
-
-            # Auto-switch to new session on SessionStart
-            if event.event_type == "SessionStart":
+            # Auto-select first session
+            if self._active_session_id is None:
                 self._active_session_id = session_id
-                # Prepare data for loading transcript history (done outside lock to avoid deadlock)
-                if event.transcript_path:
-                    load_transcript_args = (session_id, event.transcript_path)
-                    # Save to session history for -c/-r resume features
-                    self._save_to_history(session_id, event.transcript_path)
 
-                # Prepare data for plan watcher (start outside lock to avoid blocking)
-                session = self._sessions.get(session_id)
-                if session and event.transcript_path:
-                    session_id_for_plan = session_id
-                    project_path_for_plan = session.project_path
+        # Load transcript history and start watcher (outside lock)
+        file_position = self._load_transcript_history(session_id, str(transcript_path))
 
-        # Load transcript history OUTSIDE lock to avoid deadlock
-        # (_load_transcript_history acquires lock internally when needed)
-        if load_transcript_args:
-            sid, transcript_path = load_transcript_args
-            file_position = self._load_transcript_history(sid, transcript_path)
-            # Create transcript watcher with position from history load
-            # Re-check session exists (could have been deleted during history load)
-            with self._lock:
-                session = self._sessions.get(sid)
-                if session is None:
-                    # Session was deleted, bail out
-                    pass
-                else:
-                    start_turn = len(session.turns)
-                    # Create watcher outside lock (it acquires lock internally)
-            if session is not None:
-                self._create_transcript_watcher(sid, transcript_path, start_turn, file_position)
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+            start_turn = len(session.turns)
 
-        # Start plan file watcher OUTSIDE lock to avoid blocking SessionStart hook
-        if session_id_for_plan and project_path_for_plan:
+        self._create_transcript_watcher(session_id, str(transcript_path), start_turn, file_position)
+
+        # Start plan file watcher
+        if project_path:
             from .utils import decode_project_path
-            project_dir = decode_project_path(project_path_for_plan)
+            project_dir = decode_project_path(project_path)
 
             if project_dir:
-                # Use default argument to capture session_id by value (avoids closure bug)
                 plan_watcher = PlanFileWatcher(
                     project_dir,
-                    lambda content, path, sid=session_id_for_plan: self._on_plan_update(sid, content, path)
+                    lambda content, path, sid=session_id: self._on_plan_update(sid, content, path)
                 )
-                # Start watcher outside lock (does file I/O)
                 plan_watcher.start()
-                # Only acquire lock to store the watcher reference AFTER starting
                 with self._lock:
-                    self._plan_watchers[session_id_for_plan] = plan_watcher
-
-        # Check for alerts
-        alerts = check_event_for_alerts(event)
-        for alert in alerts:
-            self._add_alert(alert)
-
-        # Notify listeners (outside lock to avoid deadlock)
-        for listener in self._listeners:
-            try:
-                listener(event)
-            except Exception:
-                pass  # Don't let listener errors break the store
+                    self._plan_watchers[session_id] = plan_watcher
 
     def _add_alert(self, alert: Alert) -> None:
         """Add an alert and notify listeners."""
@@ -225,15 +212,6 @@ class EventStore:
 
             return True
 
-    def add_listener(self, listener: Callable[[Event], None]) -> None:
-        """Add a listener to be called on new events."""
-        self._listeners.append(listener)
-
-    def remove_listener(self, listener: Callable[[Event], None]) -> None:
-        """Remove a listener."""
-        if listener in self._listeners:
-            self._listeners.remove(listener)
-
     def add_alert_listener(self, listener: Callable[[Alert], None]) -> None:
         """Add a listener to be called on new alerts."""
         self._alert_listeners.append(listener)
@@ -310,8 +288,6 @@ class EventStore:
 
     def _on_plan_update(self, session_id: str, content: str, file_path: str) -> None:
         """Handle plan file changes."""
-        from datetime import datetime
-
         with self._lock:
             session = self._sessions.get(session_id)
             if not session:
@@ -516,81 +492,26 @@ class EventStore:
 
     def stop(self) -> None:
         """Stop all watchers and summarizer."""
-        # Stop all transcript watchers
-        for watcher in self._transcript_watchers.values():
+        # Stop project watcher first (prevents new sessions from being discovered)
+        if self._project_watcher:
+            self._project_watcher.stop()
+            self._project_watcher = None
+
+        # Stop all transcript watchers (copy to avoid race condition)
+        with self._lock:
+            transcript_watchers = list(self._transcript_watchers.values())
+            self._transcript_watchers.clear()
+        for watcher in transcript_watchers:
             watcher.stop()
-        self._transcript_watchers.clear()
-        # Stop all plan watchers
-        for watcher in self._plan_watchers.values():
+
+        # Stop all plan watchers (copy to avoid race condition)
+        with self._lock:
+            plan_watchers = list(self._plan_watchers.values())
+            self._plan_watchers.clear()
+        for watcher in plan_watchers:
             watcher.stop()
-        self._plan_watchers.clear()
+
         self._summarizer.shutdown()
-
-    def _save_to_history(self, session_id: str, transcript_path: str) -> None:
-        """Save session to history for -c/-r resume features."""
-        from datetime import datetime
-
-        # Extract project path from transcript path
-        project_path = ""
-        parts = transcript_path.split("/")
-        for i, part in enumerate(parts):
-            if part == "projects" and i + 1 < len(parts):
-                project_path = parts[i + 1]
-                break
-
-        now = datetime.now().isoformat()
-        record = SessionRecord(
-            session_id=session_id,
-            project_path=project_path,
-            transcript_path=transcript_path,
-            started_at=now,
-            last_accessed=now,
-        )
-        save_session(record)
-
-    def load_session_from_transcript(self, transcript_path: str) -> bool:
-        """Load a session from a transcript file (for -c/-r resume).
-
-        Returns True if successful, False otherwise.
-        """
-        from pathlib import Path
-
-        path = Path(transcript_path)
-        if not path.exists():
-            return False
-
-        # Extract session_id from filename (e.g., "abc123.jsonl" -> "abc123")
-        session_id = path.stem
-
-        # Extract project_path from transcript path
-        project_path = ""
-        parts = transcript_path.split("/")
-        for i, part in enumerate(parts):
-            if part == "projects" and i + 1 < len(parts):
-                project_path = parts[i + 1]
-                break
-
-        with self._lock:
-            # Create session
-            session = Session(
-                session_id=session_id,
-                project_path=project_path,
-            )
-            self._sessions[session_id] = session
-            self._active_session_id = session_id
-
-        # Load transcript history and get file position
-        file_position = self._load_transcript_history(session_id, transcript_path)
-
-        # Create a new watcher for this session and start watching
-        with self._lock:
-            start_turn = len(self._sessions[session_id].turns)
-        self._create_transcript_watcher(session_id, transcript_path, start_turn, file_position)
-
-        # Update history last_accessed
-        self._save_to_history(session_id, transcript_path)
-
-        return True
 
     def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> int:
         """Load historical turns from transcript file.
@@ -601,7 +522,6 @@ class EventStore:
         if not transcript_path:
             return 0
 
-        from pathlib import Path
         import time
 
         path = Path(transcript_path)

@@ -13,38 +13,6 @@ def count_words(text: str) -> int:
 
 
 @dataclass
-class Event:
-    """Raw event from Claude Code hooks."""
-
-    session_id: str
-    timestamp: datetime
-    event_type: str  # SessionStart, PreToolUse, PostToolUse, Stop, SessionEnd
-    tool_name: str | None = None
-    tool_input: dict[str, Any] | None = None
-    tool_output: dict[str, Any] | None = None
-    model: str | None = None
-    cwd: str | None = None
-    transcript_path: str | None = None
-    raw_data: dict[str, Any] | None = None
-
-    @classmethod
-    def from_hook_data(cls, data: dict[str, Any]) -> "Event":
-        """Create Event from raw hook JSON data."""
-        return cls(
-            session_id=data.get("session_id", "unknown"),
-            timestamp=datetime.now(),
-            event_type=data.get("hook_event_name", "unknown"),
-            tool_name=data.get("tool_name"),
-            tool_input=data.get("tool_input"),
-            tool_output=data.get("tool_output"),
-            model=data.get("model"),
-            cwd=data.get("cwd"),
-            transcript_path=data.get("transcript_path"),
-            raw_data=data,
-        )
-
-
-@dataclass
 class Turn:
     """A turn in the conversation (user message, assistant response, or tool use)."""
 
@@ -59,22 +27,6 @@ class Turn:
     is_historical: bool = False  # True if loaded from transcript history
     summary: str | None = None  # LLM-generated summary for assistant turns
     task_operation: tuple[str, dict[str, Any]] | None = None  # (operation_type, data) for task tools
-
-    @classmethod
-    def from_event(cls, event: Event, turn_number: int) -> "Turn | None":
-        """Create Turn from an Event."""
-        if event.event_type == "PreToolUse" and event.tool_input:
-            content = _extract_tool_content(event.tool_name, event.tool_input)
-            return cls(
-                turn_number=turn_number,
-                role="tool",
-                content_preview=_truncate(content, 100),
-                content_full=content,
-                word_count=count_words(content),
-                tool_name=event.tool_name,
-                timestamp=event.timestamp,
-            )
-        return None
 
 
 @dataclass
@@ -202,7 +154,6 @@ class Session:
     project_path: str = ""
     model: str = "unknown"
     started_at: datetime = field(default_factory=datetime.now)
-    events: list[Event] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
     tasks: dict[str, TaskState] = field(default_factory=dict)
     plan_content: str | None = None  # Full markdown content of plan
@@ -233,20 +184,3 @@ class Session:
     def total_tool_calls(self) -> int:
         """Total tool calls."""
         return sum(1 for t in self.turns if t.role == "tool")
-
-    def add_event(self, event: Event) -> None:
-        """Add an event and update turns."""
-        self.events.append(event)
-
-        # Update session metadata from SessionStart
-        if event.event_type == "SessionStart":
-            if event.model:
-                self.model = event.model
-            if event.transcript_path:
-                # Extract project path from transcript path
-                # e.g., ~/.claude/projects/-Users-kai-src-foo/session.jsonl
-                parts = event.transcript_path.split("/")
-                for i, part in enumerate(parts):
-                    if part == "projects" and i + 1 < len(parts):
-                        self.project_path = parts[i + 1]
-                        break

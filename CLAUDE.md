@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Claude Companion is a real-time TUI monitor for Claude Code sessions. It uses Claude Code's hook system to detect session starts, then watches the transcript file directly for all conversation activity.
+Claude Companion is a real-time TUI monitor for Claude Code sessions. It watches project directories for session files and monitors transcript files directly for all conversation activity. No hooks required - just run `claude-companion`.
 
 ## Development Commands
 
@@ -13,15 +13,11 @@ Claude Companion is a real-time TUI monitor for Claude Code sessions. It uses Cl
 pip install -e .
 
 # Run the companion
-claude-companion
+claude-companion                # Watch current directory's sessions
+claude-companion --global       # Watch all projects
 
 # Run with uv (no install needed)
 uv run claude-companion
-
-# Hook management
-claude-companion install        # Install hooks to ~/.claude/settings.json
-claude-companion uninstall      # Remove hooks
-claude-companion status         # Check hook installation
 
 # LLM configuration (for summarization)
 claude-companion config --show                    # Show current config
@@ -37,37 +33,37 @@ uv run python -c "from claude_companion import tui, store, models; print('OK')"
 
 ### Data Flow
 
-1. **SessionStart hook** (`hooks.py`) fires when Claude Code starts/resumes a session
-2. Hook sends HTTP POST to Flask server (`server.py`) with `transcript_path`
-3. `EventStore` (`store.py`) receives event and starts `TranscriptWatcher`
-4. `TranscriptWatcher` (`watcher.py`) polls the transcript JSONL file for new entries
-5. New turns are parsed and added to the session, triggering TUI updates
+1. **ProjectWatcher** (`project_watcher.py`) scans `~/.claude/projects/<encoded-cwd>/` for `.jsonl` session files
+2. When a session file is discovered, `EventStore` creates a new `Session` and starts a `TranscriptWatcher`
+3. `TranscriptWatcher` (`watcher.py`) polls the transcript JSONL file for new entries
+4. New turns are parsed and added to the session, triggering TUI updates
 
 ### Key Components
 
-- **`store.py`** - Central `EventStore` class: thread-safe session/turn storage, listener pattern for updates, coordinates watcher/alerts/summarizer
+- **`store.py`** - Central `EventStore` class: thread-safe session/turn storage, coordinates watchers/alerts/summarizer
+- **`project_watcher.py`** - `ProjectWatcher`: scans project directories for session files, notifies on new sessions
 - **`watcher.py`** - `TranscriptWatcher`: polls transcript file, parses JSONL entries into `Turn` objects
 - **`transcript.py`** - Parses `session.jsonl` files to load conversation history on session start
-- **`models.py`** - Data classes: `Event` (raw hook data), `Turn` (conversation turn), `Session` (groups turns)
+- **`models.py`** - Data classes: `Turn` (conversation turn), `Session` (groups turns), `TaskState`
 - **`tui.py`** - Rich-based TUI: renders sessions, turns, handles keyboard input
-- **`hooks.py`** - Installs/uninstalls curl hooks in `~/.claude/settings.json`
 - **`alerts.py`** - Pattern matching for dangerous operations (force push, rm -rf, etc.)
 - **`summarizer.py`** - Optional LLM summarization of assistant turns via OpenAI-compatible server
 - **`cache.py`** - Persistent disk cache for summaries (`~/.cache/claude-companion/summaries.json`)
 - **`config.py`** - Configuration management for LLM server settings (supports env vars, config file, defaults)
 - **`export.py`** - Export session data to Markdown or JSON formats
-- **`server.py`** - Flask HTTP server that receives hook events
-- **`cli.py`** - Click-based CLI with commands: `install`, `uninstall`, `status`, `config`
+- **`cli.py`** - Click-based CLI with commands: `config`
 
-### Hook Design
+### Session Discovery
 
-Only `SessionStart` hook is needed. All conversation content (user messages, assistant text, tool calls) comes from watching the transcript file at `~/.claude/projects/<project>/session.jsonl`.
+Sessions are discovered by watching `~/.claude/projects/<encoded-cwd>/` where `<encoded-cwd>` is the current directory with `/` replaced by `-` (e.g., `/Users/kai/src/foo` becomes `-Users-kai-src-foo`).
+
+By default, only sessions for the current directory are shown. Use `--global` to watch all projects.
 
 ### Threading Model
 
 - Main thread: TUI rendering loop
-- Server thread: Flask HTTP server (daemon)
-- Watcher thread: Transcript file polling (daemon)
+- Project watcher thread: Directory scanning (daemon)
+- Watcher threads: Transcript file polling (daemon, one per session)
 - Summarizer threads: ThreadPoolExecutor for async LLM calls (2 workers)
 - All shared state in `EventStore` protected by `threading.Lock`
 
