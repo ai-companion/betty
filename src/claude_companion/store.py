@@ -347,11 +347,12 @@ class EventStore:
         for alert in alerts:
             self._add_alert(alert)
 
-        # When assistant turn arrives, summarize both the tool group and the assistant
-        if turn.role == "assistant":
+        # Summarize preceding tools when a user or assistant turn arrives
+        if turn.role in ("user", "assistant"):
             session = self._sessions.get(session_id)
             if session:
-                user_turn, tool_turns = _get_turn_context(session, turn)
+                # Get preceding tool turns
+                _, tool_turns = _get_turn_context(session, turn)
 
                 # Summarize tool group (if there are tools)
                 if tool_turns:
@@ -366,16 +367,17 @@ class EventStore:
                             self._make_tool_summary_callback(tool_turns, tool_cache_key)
                         )
 
-                # Summarize assistant (no tool context now)
-                asst_cache_key = self._make_assistant_cache_key(turn.content_full)
-                cached_asst = self._summary_cache.get(asst_cache_key)
-                if cached_asst:
-                    turn.summary = cached_asst
-                else:
-                    self._summarizer.summarize_async(
-                        turn,
-                        self._make_summary_callback(turn, asst_cache_key)
-                    )
+                # Summarize assistant text (only for assistant turns)
+                if turn.role == "assistant":
+                    asst_cache_key = self._make_assistant_cache_key(turn.content_full)
+                    cached_asst = self._summary_cache.get(asst_cache_key)
+                    if cached_asst:
+                        turn.summary = cached_asst
+                    else:
+                        self._summarizer.summarize_async(
+                            turn,
+                            self._make_summary_callback(turn, asst_cache_key)
+                        )
 
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:
@@ -463,9 +465,9 @@ class EventStore:
         return callback
 
     def summarize_historical_turns(self) -> int:
-        """Submit all historical assistant turns without summaries for summarization.
+        """Submit all historical turns without summaries for summarization.
 
-        Also submits tool groups for summarization.
+        Submits tool groups (before user or assistant turns) and assistant text.
         Returns the count of items submitted.
         """
         count = 0
@@ -477,11 +479,13 @@ class EventStore:
                 return 0
 
             for turn in session.turns:
-                if turn.is_historical and turn.role == "assistant" and not turn.summary:
-                    # Get context
-                    user_turn, tool_turns = _get_turn_context(session, turn)
+                if not turn.is_historical:
+                    continue
 
-                    # Summarize tool group (if there are tools)
+                # Summarize tools before user or assistant turns
+                if turn.role in ("user", "assistant"):
+                    _, tool_turns = _get_turn_context(session, turn)
+
                     if tool_turns and (not tool_turns[0].summary):
                         tool_cache_key = make_tool_cache_key(tool_turns)
                         cached_tool = self._summary_cache.get(tool_cache_key)
@@ -493,6 +497,9 @@ class EventStore:
                                 self._make_tool_summary_callback(tool_turns, tool_cache_key)
                             )
                             count += 1
+
+                # Summarize assistant text
+                if turn.role == "assistant" and not turn.summary:
 
                     # Summarize assistant
                     asst_cache_key = self._make_assistant_cache_key(turn.content_full)
@@ -632,11 +639,10 @@ class EventStore:
 
             # Apply cached summaries or submit for summarization
             for turn in transcript_turns:
-                if turn.role == "assistant":
-                    # Get context
-                    user_turn, tool_turns = _get_turn_context(session, turn)
+                # Summarize tools before user or assistant turns
+                if turn.role in ("user", "assistant"):
+                    _, tool_turns = _get_turn_context(session, turn)
 
-                    # Summarize tool group (if there are tools)
                     if tool_turns:
                         tool_cache_key = make_tool_cache_key(tool_turns)
                         cached_tool = self._summary_cache.get(tool_cache_key)
@@ -648,7 +654,8 @@ class EventStore:
                                 self._make_tool_summary_callback(tool_turns, tool_cache_key)
                             )
 
-                    # Summarize assistant (no tool context)
+                # Summarize assistant text
+                if turn.role == "assistant":
                     asst_cache_key = self._make_assistant_cache_key(turn.content_full)
                     cached = self._summary_cache.get(asst_cache_key)
                     if cached:

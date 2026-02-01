@@ -122,12 +122,14 @@ class RichStyle(StyleRenderer):
                 padding=(0, 1),
             )
 
-        # Otherwise (expanded or no summary yet), show individual tools compactly in one panel
+        # Otherwise (expanded or no summary yet), show individual tools in one panel
         content_parts = []
-        for tool_turn in group.tool_turns:
+        for i, tool_turn in enumerate(group.tool_turns):
             icon = self._get_tool_icon(tool_turn.tool_name)
             content = tool_turn.content_full if tool_turn.expanded else tool_turn.content_preview
             content_parts.append(Text(f"{icon} [{tool_turn.tool_name}] {content}", style="dim"))
+            if i < len(group.tool_turns) - 1:
+                content_parts.append(Text(""))  # Blank line between tools
 
         history_prefix = "◷ " if (first_tool and first_tool.is_historical) else ""
         timestamp_str = first_tool.timestamp.strftime("%H:%M:%S") if first_tool else ""
@@ -350,7 +352,7 @@ class ClaudeCodeStyle(StyleRenderer):
             )
             return Group(row, Text(""))
 
-        # Otherwise (expanded or no summary yet), show individual tools compactly
+        # Otherwise (expanded or no summary yet), show individual tools with spacing
         parts = []
         for tool_turn in group.tool_turns:
             tool_indicator = self._get_tool_indicator(tool_turn.tool_name)
@@ -367,9 +369,8 @@ class ClaudeCodeStyle(StyleRenderer):
                 tool_text,
             )
             parts.append(row)
+            parts.append(Text(""))  # Blank line after each tool
 
-        # Single blank line after the group
-        parts.append(Text(""))
         return Group(*parts)
 
     def render_turn(
