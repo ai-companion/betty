@@ -38,7 +38,7 @@ class EventStore:
             base_url=config.llm.base_url,
             api_key=config.llm.api_key,
         )
-        self._summary_cache = SummaryCache()  # Single cache for both assistant and tool summaries
+        self._summary_cache = SummaryCache()  # single cache for both assistant and tool summaries
 
     def add_event(self, event: Event) -> None:
         """Add an event to the store."""

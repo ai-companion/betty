@@ -41,7 +41,12 @@ def make_tool_cache_key(tool_turns: list[Turn]) -> str:
     Returns:
         Cache key that uniquely identifies this tool sequence
     """
-    tool_sig = "|".join(f"{t.tool_name}:{t.content_preview}" for t in tool_turns)
+    import hashlib
+    # use hash of full content to avoid collisions from truncated previews
+    tool_sig = "|".join(
+        f"{t.tool_name}:{hashlib.sha256(t.content_full.encode()).hexdigest()[:12]}"
+        for t in tool_turns
+    )
     return f"TOOLS::{tool_sig}"
 
 
@@ -140,8 +145,14 @@ class Summarizer:
                 callback("[no tools]", False)
                 return
 
-            # Build tool actions prompt
-            tool_lines = [f"- {t.tool_name}: {t.content_full}" for t in tool_turns]
+            # Build tool actions prompt (truncate each tool to avoid huge prompts)
+            max_tool_len = 500
+            tool_lines = []
+            for t in tool_turns:
+                content = t.content_full
+                if len(content) > max_tool_len:
+                    content = content[:max_tool_len] + "..."
+                tool_lines.append(f"- {t.tool_name}: {content}")
             prompt = "Actions taken:\n" + "\n".join(tool_lines) + "\n\nSummarize these actions."
 
             # Route to appropriate provider
