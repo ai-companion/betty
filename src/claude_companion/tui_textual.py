@@ -334,10 +334,21 @@ class TurnWidget(Static):
 
             header = f"{select_prefix}{history_prefix}Turn {turn.turn_number} │ {icon} Assistant │ {timestamp_str}"
             word_info = f"{turn.word_count:,} words"
-            return RichGroup(
+
+            # Build parts: header, content, optionally critic
+            parts = [
                 RichText.from_markup(f"[bold green]{header}[/bold green] [dim]{word_info}[/dim]"),
                 Markdown(f"{indicator} {content}" if indicator else content),
-            )
+            ]
+
+            # Add critic if available and not expanded
+            if turn.critic and not self.expanded:
+                critic_color = "#5fd787" if turn.critic_sentiment == "progress" else (
+                    "#ffaf00" if turn.critic_sentiment == "concern" else "#ff5f5f"
+                )
+                parts.append(RichText.from_markup(f"[{critic_color}]{turn.critic}[/{critic_color}]"))
+
+            return RichGroup(*parts)
         else:
             # Tool turn
             tool_name = turn.tool_name or "Tool"
@@ -394,9 +405,28 @@ class TurnWidget(Static):
                 RichText(f"{self.BULLET} ", style=bullet_style),
                 Markdown(md_content),
             )
+
+            # Build parts: row, status, optionally critic
+            parts = [row]
             if status:
-                return RichGroup(row, RichText(status, style="dim"))
-            return row
+                parts.append(RichText(status, style="dim"))
+
+            # Add critic if available and not expanded
+            if turn.critic and not self.expanded:
+                critic_color = "#5fd787" if turn.critic_sentiment == "progress" else (
+                    "#ffaf00" if turn.critic_sentiment == "concern" else "#ff5f5f"
+                )
+                # Indent critic slightly
+                critic_row = Table.grid(padding=(0, 0))
+                critic_row.add_column(width=2)
+                critic_row.add_column()
+                critic_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[{critic_color}]{turn.critic}[/{critic_color}]"),
+                )
+                parts.append(critic_row)
+
+            return RichGroup(*parts) if len(parts) > 1 else parts[0]
         else:
             # Tool turn - use green bullet
             tool_name = turn.tool_name or "Tool"

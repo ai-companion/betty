@@ -26,6 +26,8 @@ class Turn:
     expanded: bool = False
     is_historical: bool = False  # True if loaded from transcript history
     summary: str | None = None  # LLM-generated summary for assistant turns
+    critic: str | None = None  # LLM-generated critique for assistant turns
+    critic_sentiment: str | None = None  # "progress" | "concern" | "critical"
     task_operation: tuple[str, dict[str, Any]] | None = None  # (operation_type, data) for task tools
 
 

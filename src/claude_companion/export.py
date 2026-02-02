@@ -36,6 +36,12 @@ def export_session_markdown(session: Session, output_path: Path | None = None) -
             lines.append(f"### Turn {turn.turn_number} - Tool: {turn.tool_name}")
 
         lines.append("")
+        if turn.summary:
+            lines.append(f"**Summary**: {turn.summary}")
+            lines.append("")
+        if turn.critic:
+            lines.append(f"**Critic**: {turn.critic}")
+            lines.append("")
         lines.append(turn.content_full)
         lines.append("")
 
@@ -66,6 +72,9 @@ def export_session_json(session: Session, output_path: Path | None = None) -> st
                 "role": turn.role,
                 "tool_name": turn.tool_name,
                 "content": turn.content_full,
+                "summary": turn.summary,
+                "critic": turn.critic,
+                "critic_sentiment": turn.critic_sentiment,
                 "word_count": turn.word_count,
                 "timestamp": turn.timestamp.isoformat(),
             }
