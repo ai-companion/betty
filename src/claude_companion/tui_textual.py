@@ -416,10 +416,6 @@ class TurnWidget(Static):
             )
             return row
 
-    def on_click(self) -> None:
-        """Toggle expanded state on click."""
-        self.expanded = not self.expanded
-
 
 class ToolGroupWidget(Static):
     """Widget for displaying a group of tool turns."""
@@ -546,10 +542,6 @@ class ToolGroupWidget(Static):
                 )
                 parts.append(row)
             return RichGroup(*parts)
-
-    def on_click(self) -> None:
-        """Toggle expanded state on click."""
-        self.expanded = not self.expanded
 
 
 class HeaderPanel(Static):
