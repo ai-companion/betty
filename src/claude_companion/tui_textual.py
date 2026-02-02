@@ -854,6 +854,7 @@ class CompanionApp(App):
         Binding("g", "go_top", "Top", show=False),
         Binding("G", "go_bottom", "Bottom", show=False),
         Binding("o", "toggle_expand", "Expand", show=False),
+        Binding("space", "toggle_expand", "Expand", show=False),
         Binding("enter", "toggle_expand", "Expand", show=False),
         Binding("e", "expand_all", "Expand All", show=False),
         Binding("c", "collapse_all", "Collapse All", show=False),
