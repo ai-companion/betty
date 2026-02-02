@@ -11,7 +11,13 @@ from .cache import SummaryCache
 from .config import load_config
 from .models import Session, TaskState, Turn
 from .project_watcher import ProjectWatcher
-from .summarizer import Summarizer, _get_turn_context, make_tool_cache_key
+from .summarizer import (
+    Summarizer,
+    _get_turn_context,
+    _get_critic_context,
+    make_tool_cache_key,
+    make_critic_cache_key,
+)
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher, PlanFileWatcher
 
@@ -355,6 +361,27 @@ class EventStore:
                             self._make_summary_callback(turn, asst_cache_key)
                         )
 
+                    # Critique assistant turn (only for non-historical)
+                    if not turn.is_historical:
+                        critic_context = _get_critic_context(session, turn)
+                        critic_cache_key = make_critic_cache_key(turn, critic_context)
+                        cached_critic = self._summary_cache.get(critic_cache_key)
+                        if cached_critic:
+                            turn.critic = cached_critic
+                            # Extract sentiment from cached critic
+                            if cached_critic.startswith("✓"):
+                                turn.critic_sentiment = "progress"
+                            elif cached_critic.startswith("⚠"):
+                                turn.critic_sentiment = "concern"
+                            elif cached_critic.startswith("✗"):
+                                turn.critic_sentiment = "critical"
+                        else:
+                            self._summarizer.critique_async(
+                                turn,
+                                critic_context,
+                                self._make_critic_callback(turn, critic_cache_key)
+                            )
+
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:
             try:
@@ -436,6 +463,21 @@ class EventStore:
                     # Notify with first tool turn so TUI knows to refresh
                     if tool_turns:
                         listener(tool_turns[0])
+                except Exception:
+                    pass
+        return callback
+
+    def _make_critic_callback(self, turn: Turn, cache_key: str) -> Callable[[str, str, bool], None]:
+        """Create callback that updates turn critic and notifies listeners."""
+        def callback(critique: str, sentiment: str, success: bool) -> None:
+            turn.critic = critique
+            turn.critic_sentiment = sentiment
+            if success:
+                self._summary_cache.set(cache_key, critique)
+            # Notify listeners
+            for listener in self._turn_listeners:
+                try:
+                    listener(turn)
                 except Exception:
                     pass
         return callback

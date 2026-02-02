@@ -31,6 +31,16 @@ TOOL_SYSTEM_PROMPT = (
     "Be concise and action-oriented."
 )
 
+# System prompt for critic evaluation
+CRITIC_SYSTEM_PROMPT = (
+    "You are a supervisor evaluating an AI coding assistant's response. "
+    "Assess whether the assistant is making progress toward the user's request "
+    "and if any critical issues were introduced. "
+    "Provide a 1-2 sentence evaluation. Start with one of these indicators: "
+    "✓ (making progress, no issues), ⚠ (some concerns or partial progress), or "
+    "✗ (critical issues or off-track). Be constructive and specific."
+)
+
 
 def make_tool_cache_key(tool_turns: list[Turn]) -> str:
     """Create cache key for a sequence of tool turns.
@@ -48,6 +58,23 @@ def make_tool_cache_key(tool_turns: list[Turn]) -> str:
         for t in tool_turns
     )
     return f"TOOLS::{tool_sig}"
+
+
+def make_critic_cache_key(assistant_turn: Turn, context: dict) -> str:
+    """Create cache key for critic evaluation.
+
+    Args:
+        assistant_turn: The assistant turn being critiqued
+        context: Context dictionary with user_message and active_tasks
+
+    Returns:
+        Cache key that uniquely identifies this critique
+    """
+    import hashlib
+    content_sig = hashlib.sha256(assistant_turn.content_full.encode()).hexdigest()[:12]
+    context_str = f"{context['user_message']}|{context['active_tasks']}"
+    context_sig = hashlib.sha256(context_str.encode()).hexdigest()[:8]
+    return f"CRITIC::{content_sig}::{context_sig}"
 
 
 def _get_turn_context(session: "Session", assistant_turn: Turn, max_tools: int = 10) -> tuple[Turn | None, list[Turn]]:
@@ -96,6 +123,37 @@ def _get_turn_context(session: "Session", assistant_turn: Turn, max_tools: int =
     return user_turn, tools
 
 
+def _get_critic_context(session: "Session", assistant_turn: Turn) -> dict:
+    """Get context for critiquing an assistant turn.
+
+    Args:
+        session: The session containing all turns
+        assistant_turn: The assistant turn being critiqued
+
+    Returns:
+        Dictionary with user_message, assistant_response, active_tasks, turn_number, total_turns
+    """
+    # Find preceding user message
+    user_turn, _ = _get_turn_context(session, assistant_turn)
+    user_message = user_turn.content_full if user_turn else "[No user message]"
+
+    # Get active tasks
+    active_tasks = [
+        f"- [{task.status}] {task.subject}"
+        for task in session.tasks.values()
+        if not task.is_deleted
+    ]
+    tasks_summary = "\n".join(active_tasks) if active_tasks else "[No active tasks]"
+
+    return {
+        "user_message": user_message,
+        "assistant_response": assistant_turn.content_full,
+        "active_tasks": tasks_summary,
+        "turn_number": assistant_turn.turn_number,
+        "total_turns": len(session.turns),
+    }
+
+
 class Summarizer:
     """Summarizes assistant turns using local server or API providers (OpenAI, OpenRouter, Anthropic)."""
 
@@ -133,6 +191,15 @@ class Summarizer:
     ) -> None:
         """Submit tool summarization job, calls callback with (result, success)."""
         self._executor.submit(self._summarize_tools, tool_turns, callback)
+
+    def critique_async(
+        self,
+        turn: Turn,
+        context: dict,
+        callback: Callable[[str, str, bool], None]
+    ) -> None:
+        """Submit critique job, calls callback with (critique, sentiment, success)."""
+        self._executor.submit(self._critique, turn, context, callback)
 
     def _summarize_tools(
         self,
@@ -178,6 +245,70 @@ class Summarizer:
         except Exception as e:
             logger.debug(f"Summarizer error ({self.provider}): {e}")
             callback(f"[error: {type(e).__name__}]", False)
+
+    def _critique(
+        self,
+        turn: Turn,
+        context: dict,
+        callback: Callable[[str, str, bool], None]
+    ) -> None:
+        """Call LLM to critique assistant turn."""
+        try:
+            # Truncate content to avoid token limits
+            max_content_len = 6000
+            assistant_response = context["assistant_response"]
+            if len(assistant_response) > max_content_len:
+                assistant_response = assistant_response[:max_content_len] + "..."
+
+            max_user_len = 2000
+            user_message = context["user_message"]
+            if len(user_message) > max_user_len:
+                user_message = user_message[:max_user_len] + "..."
+
+            # Build prompt
+            prompt = f"""Context:
+- User's request: {user_message}
+- Turn {context['turn_number']} of {context['total_turns']}
+- Active tasks:
+{context['active_tasks']}
+
+Assistant's response:
+{assistant_response}
+
+Evaluate: Is the assistant making progress toward the user's request? Were any critical issues introduced?"""
+
+            # Route to provider
+            if self.provider == "local":
+                critique = self._summarize_local(prompt, CRITIC_SYSTEM_PROMPT)
+            elif self.provider == "openai":
+                critique = self._summarize_openai(prompt, CRITIC_SYSTEM_PROMPT)
+            elif self.provider == "openrouter":
+                critique = self._summarize_openrouter(prompt, CRITIC_SYSTEM_PROMPT)
+            elif self.provider == "anthropic":
+                critique = self._summarize_anthropic(prompt, CRITIC_SYSTEM_PROMPT)
+            else:
+                raise ValueError(f"Unknown provider: {self.provider}")
+
+            # Extract sentiment
+            sentiment = "progress"
+            if critique.startswith("✓"):
+                sentiment = "progress"
+            elif critique.startswith("⚠"):
+                sentiment = "concern"
+            elif critique.startswith("✗"):
+                sentiment = "critical"
+
+            callback(critique, sentiment, True)
+
+        except requests.exceptions.ConnectionError:
+            logger.debug(f"Critic: {self.provider} server not available")
+            callback("[critic unavailable]", "progress", False)
+        except requests.exceptions.Timeout:
+            logger.debug(f"Critic: {self.provider} request timed out")
+            callback("[critic timeout]", "progress", False)
+        except Exception as e:
+            logger.debug(f"Critic error ({self.provider}): {e}")
+            callback(f"[critic error: {type(e).__name__}]", "progress", False)
 
     def _summarize(
         self,
