@@ -9,7 +9,7 @@ from rich.table import Table
 from . import __version__
 from .config import CONFIG_FILE, DEFAULT_STYLE, get_example_configs, load_config, save_config, Config, LLMConfig
 from .store import EventStore
-from .tui import TUI
+from .tui_textual import CompanionApp
 
 console = Console()
 
@@ -86,9 +86,9 @@ def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, coll
     console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
 
     try:
-        # Run TUI in main thread
-        tui = TUI(store, console, ui_style=ui_style, collapse_tools=collapse_tools)
-        tui.run()
+        # Run Textual TUI
+        app = CompanionApp(store, collapse_tools=collapse_tools, ui_style=ui_style)
+        app.run()
     except KeyboardInterrupt:
         pass
     finally:
