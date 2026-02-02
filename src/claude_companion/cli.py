@@ -77,12 +77,12 @@ def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, coll
         return
 
     # Create store and start watching
-    # In global mode, limit to 9 most recent sessions (can be selected with keys 1-9)
-    max_sessions = 9 if global_mode else None
+    # Load only most recent session by default; new sessions auto-detected while running
+    max_sessions = 1
     store = EventStore()
     store.start_watching(project_paths, max_sessions=max_sessions)
 
-    scope = "all projects (9 most recent)" if global_mode else "current directory"
+    scope = "all projects" if global_mode else "current directory"
     console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
 
     try:
