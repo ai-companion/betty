@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from rich.console import Group as RichGroup
 from rich.markdown import Markdown
+from rich.table import Table
 from rich.text import Text as RichText
 from textual import on
 from textual.app import App, ComposeResult
@@ -163,23 +164,18 @@ Screen {
 }
 
 .turn-user {
-    background: $surface;
-    border-left: thick $primary;
     margin-bottom: 1;
 }
 
 .turn-assistant {
-    border-left: thick $success;
     margin-bottom: 1;
 }
 
 .turn-tool {
-    border-left: thick $warning;
     margin-bottom: 1;
 }
 
 .turn-group {
-    border-left: thick $success;
     margin-bottom: 1;
 }
 
@@ -253,6 +249,7 @@ class TurnWidget(Static):
 
     def watch_selected(self, value: bool) -> None:
         self._update_classes()
+        self._update_content()  # Re-render to update bullet color
 
     def _update_classes(self) -> None:
         self.remove_class("selected", "turn-user", "turn-assistant", "turn-tool")
@@ -329,27 +326,35 @@ class TurnWidget(Static):
             )
 
     def _render_claude_code_style(self):
-        """Render turn in minimal claude-code style with bullets."""
+        """Render turn in minimal claude-code style with bullets in first column."""
         turn = self.turn
         timestamp_str = turn.timestamp.strftime("%H:%M")
+        selected_style = "light_steel_blue" if self.selected else ""
 
         if turn.role == "user":
             content = turn.content_full if self.expanded else turn.content_preview
-            style = "on grey15" if not self.selected else "light_steel_blue"
-            return RichText.from_markup(f"[dim]❯[/dim] [{style}]{content}[/{style}]")
+            content_style = selected_style or "on grey15"
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                RichText("❯ ", style=selected_style or "dim"),
+                RichText(content, style=content_style),
+            )
+            return row
         elif turn.role == "assistant":
-            bullet_style = "light_steel_blue" if self.selected else "white"
+            bullet_style = selected_style or "white"
             if self.expanded:
-                indicator = "\\[-]"
+                indicator = "[-]"
                 content = turn.content_full
             elif self.use_summary and turn.summary:
-                indicator = "\\[+]"
+                indicator = "[+]"
                 content = turn.summary
             elif self.use_summary and not turn.summary:
-                indicator = "\\[+]"
+                indicator = "[+]"
                 content = f"{turn.content_preview} *summarizing...*"
             elif turn.content_full != turn.content_preview:
-                indicator = "\\[+]"
+                indicator = "[+]"
                 content = turn.content_preview
             else:
                 indicator = ""
@@ -357,21 +362,35 @@ class TurnWidget(Static):
 
             md_content = f"**{indicator}** {content}" if indicator else content
             status = f"── turn {self.conv_turn}, {turn.word_count} words, {timestamp_str} ──" if self.conv_turn > 0 else ""
-            # Can't add Text + Markdown directly, so just use the Markdown with bullet prefix
-            bullet_prefix = f"{self.BULLET} "
-            return RichGroup(
-                Markdown(f"{bullet_prefix}{md_content}"),
-                RichText.from_markup(f"[dim]{status}[/dim]") if status else RichText(""),
+
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                RichText(f"{self.BULLET} ", style=bullet_style),
+                Markdown(md_content),
             )
+            if status:
+                return RichGroup(row, RichText(status, style="dim"))
+            return row
         else:
-            # Tool turn
+            # Tool turn - use green bullet
             tool_name = turn.tool_name or "Tool"
             indicator = self.TOOL_INDICATORS.get(tool_name, self.TOOL_INDICATORS["default"])
-            bullet_style = "light_steel_blue" if self.selected else "#5fd787"
+            bullet_style = selected_style or "#5fd787"
             content = turn.content_full if self.expanded else turn.content_preview
-            return RichText.from_markup(
-                f"[{bullet_style}]{self.BULLET}[/{bullet_style}] [bold]\\[{indicator}][/bold] [dim]{content}[/dim]"
+
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            tool_text = RichText()
+            tool_text.append(f"[{indicator}] ", style="bold" if not selected_style else selected_style)
+            tool_text.append(content, style=selected_style or "dim")
+            row.add_row(
+                RichText(f"{self.BULLET} ", style=bullet_style),
+                tool_text,
             )
+            return row
 
     def on_click(self) -> None:
         """Toggle expanded state on click."""
@@ -386,7 +405,6 @@ class ToolGroupWidget(Static):
         height: auto;
         padding: 0 1;
         margin-bottom: 1;
-        border-left: thick $success;
     }
     """
 
@@ -416,6 +434,7 @@ class ToolGroupWidget(Static):
 
     def watch_selected(self, value: bool) -> None:
         self._update_classes()
+        self._update_content()  # Re-render to update bullet color
 
     def _update_classes(self) -> None:
         self.remove_class("selected")
@@ -460,24 +479,40 @@ class ToolGroupWidget(Static):
             return RichGroup(*parts)
 
     def _render_claude_code_style(self):
-        """Render tool group in minimal claude-code style."""
+        """Render tool group in minimal claude-code style with two-column layout."""
         group = self.group
-        bullet_style = "light_steel_blue" if self.selected else "#5fd787"
+        selected_style = "light_steel_blue" if self.selected else ""
+        bullet_style = selected_style or "#5fd787"
 
         if not self.expanded and group.summary:
-            # Collapsed with summary
-            md_content = f"{self.BULLET} **tools:{group.tool_count}** {group.summary}"
-            return Markdown(md_content)
+            # Collapsed with summary - two column layout
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                RichText(f"{self.BULLET} ", style=bullet_style),
+                Markdown(f"**tools:{group.tool_count}** {group.summary}"),
+            )
+            return row
         else:
-            # Expanded or no summary
+            # Expanded or no summary - each tool in two columns
             parts = []
             for tool_turn in group.tool_turns:
                 tool_name = tool_turn.tool_name or "Tool"
                 indicator = self.TOOL_INDICATORS.get(tool_name, self.TOOL_INDICATORS["default"])
                 content = tool_turn.content_full if tool_turn.expanded else tool_turn.content_preview
-                parts.append(RichText.from_markup(
-                    f"[{bullet_style}]{self.BULLET}[/{bullet_style}] [bold]\\[{indicator}][/bold] [dim]{content}[/dim]"
-                ))
+
+                row = Table.grid(padding=(0, 0))
+                row.add_column(width=2)
+                row.add_column()
+                tool_text = RichText()
+                tool_text.append(f"[{indicator}] ", style="bold" if not selected_style else selected_style)
+                tool_text.append(content, style=selected_style or "dim")
+                row.add_row(
+                    RichText(f"{self.BULLET} ", style=bullet_style),
+                    tool_text,
+                )
+                parts.append(row)
             return RichGroup(*parts)
 
     def on_click(self) -> None:
