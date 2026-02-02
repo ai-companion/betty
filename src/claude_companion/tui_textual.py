@@ -179,6 +179,28 @@ Screen {
     margin-bottom: 1;
 }
 
+/* Rich style - boxes around turns with reduced spacing */
+.rich-style {
+    margin-bottom: 0;
+}
+
+.rich-style.turn-user {
+    background: $surface;
+    border: solid $primary;
+}
+
+.rich-style.turn-assistant {
+    border: solid $success;
+}
+
+.rich-style.turn-tool {
+    border: solid $warning;
+}
+
+.rich-style.turn-group {
+    border: solid $success;
+}
+
 /* Selection highlighting - only change background, no border to avoid layout shift */
 TurnWidget.selected, ToolGroupWidget.selected {
     background: $primary 30%;
@@ -252,9 +274,11 @@ class TurnWidget(Static):
         self._update_content()  # Re-render to update bullet color
 
     def _update_classes(self) -> None:
-        self.remove_class("selected", "turn-user", "turn-assistant", "turn-tool")
+        self.remove_class("selected", "turn-user", "turn-assistant", "turn-tool", "rich-style")
         if self.selected:
             self.add_class("selected")
+        if self.ui_style == "rich":
+            self.add_class("rich-style")
         if self.turn.role == "user":
             self.add_class("turn-user")
         elif self.turn.role == "assistant":
@@ -437,9 +461,12 @@ class ToolGroupWidget(Static):
         self._update_content()  # Re-render to update bullet color
 
     def _update_classes(self) -> None:
-        self.remove_class("selected")
+        self.remove_class("selected", "rich-style", "turn-group")
         if self.selected:
             self.add_class("selected")
+        if self.ui_style == "rich":
+            self.add_class("rich-style")
+            self.add_class("turn-group")
 
     def _update_content(self) -> None:
         """Update the rendered content based on current state and style."""
