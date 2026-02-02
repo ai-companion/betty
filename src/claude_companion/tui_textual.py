@@ -346,7 +346,7 @@ class TurnWidget(Static):
             header = f"{select_prefix}{history_prefix}Turn {turn.turn_number} │ {icon} {tool_name} │ {timestamp_str}"
             return RichGroup(
                 RichText.from_markup(f"[bold yellow]{header}[/bold yellow]"),
-                RichText.from_markup(f"[dim]{content}[/dim]"),
+                RichText(content, style="dim"),  # Use plain Text to preserve verbatim output
             )
 
     def _render_claude_code_style(self):
@@ -502,7 +502,12 @@ class ToolGroupWidget(Static):
                 tool_name = tool_turn.tool_name or "Tool"
                 icon = self.TOOL_ICONS.get(tool_name, self.TOOL_ICONS["default"])
                 content = tool_turn.content_full if tool_turn.expanded else tool_turn.content_preview
-                parts.append(RichText.from_markup(f"  {icon} [bold yellow]\\[{tool_name}][/bold yellow] [dim]{content}[/dim]"))
+                # Build text without from_markup for content to preserve verbatim output
+                tool_text = RichText(f"  {icon} ")
+                tool_text.append(f"[{tool_name}]", style="bold yellow")
+                tool_text.append(" ")
+                tool_text.append(content, style="dim")
+                parts.append(tool_text)
             return RichGroup(*parts)
 
     def _render_claude_code_style(self):
@@ -993,8 +998,9 @@ class CompanionApp(App):
         self._refresh_alerts()
 
     def _check_for_updates(self) -> None:
-        """Periodic check for updates (summaries, etc.)."""
+        """Periodic check for updates (summaries, plan changes, etc.)."""
         self._refresh_header()
+        self._refresh_views()  # Refresh plan/tasks in case they changed
 
     def _refresh_all(self) -> None:
         """Refresh all UI components."""
