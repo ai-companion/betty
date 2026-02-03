@@ -310,10 +310,14 @@ class TurnWidget(Static):
             icon = self.ROLE_ICONS["user"]
             content = turn.content_full if self.expanded else turn.content_preview
             header = f"{select_prefix}{history_prefix}Turn {turn.turn_number} │ {icon} User │ {timestamp_str}"
-            return RichGroup(
+            parts = [
                 RichText.from_markup(f"[bold blue]{header}[/bold blue]"),
                 RichText(content),
-            )
+            ]
+            # Add annotation if available
+            if turn.annotation:
+                parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
+            return RichGroup(*parts)
         elif turn.role == "assistant":
             icon = self.ROLE_ICONS["assistant"]
             if self.expanded:
@@ -348,6 +352,10 @@ class TurnWidget(Static):
                 )
                 parts.append(RichText.from_markup(f"[{critic_color}]{turn.critic}[/{critic_color}]"))
 
+            # Add annotation if available
+            if turn.annotation:
+                parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
+
             return RichGroup(*parts)
         else:
             # Tool turn
@@ -355,10 +363,14 @@ class TurnWidget(Static):
             icon = self.TOOL_ICONS.get(tool_name, self.TOOL_ICONS["default"])
             content = turn.content_full if self.expanded else turn.content_preview
             header = f"{select_prefix}{history_prefix}Turn {turn.turn_number} │ {icon} {tool_name} │ {timestamp_str}"
-            return RichGroup(
+            parts = [
                 RichText.from_markup(f"[bold yellow]{header}[/bold yellow]"),
                 RichText(content, style="dim"),  # Use plain Text to preserve verbatim output
-            )
+            ]
+            # Add annotation if available
+            if turn.annotation:
+                parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
+            return RichGroup(*parts)
 
     def _render_claude_code_style(self):
         """Render turn in minimal claude-code style with bullets in first column."""
@@ -376,7 +388,18 @@ class TurnWidget(Static):
                 RichText("❯ ", style=selected_style or "dim"),
                 RichText(content, style=content_style),
             )
-            return row
+            parts = [row]
+            # Add annotation if available
+            if turn.annotation:
+                annotation_row = Table.grid(padding=(0, 0))
+                annotation_row.add_column(width=2)
+                annotation_row.add_column()
+                annotation_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"),
+                )
+                parts.append(annotation_row)
+            return RichGroup(*parts) if len(parts) > 1 else parts[0]
         elif turn.role == "assistant":
             bullet_style = selected_style or "white"
             if self.expanded:
@@ -426,6 +449,17 @@ class TurnWidget(Static):
                 )
                 parts.append(critic_row)
 
+            # Add annotation if available
+            if turn.annotation:
+                annotation_row = Table.grid(padding=(0, 0))
+                annotation_row.add_column(width=2)
+                annotation_row.add_column()
+                annotation_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"),
+                )
+                parts.append(annotation_row)
+
             return RichGroup(*parts) if len(parts) > 1 else parts[0]
         else:
             # Tool turn - use green bullet
@@ -444,7 +478,20 @@ class TurnWidget(Static):
                 RichText(f"{self.BULLET} ", style=bullet_style),
                 tool_text,
             )
-            return row
+
+            parts = [row]
+            # Add annotation if available
+            if turn.annotation:
+                annotation_row = Table.grid(padding=(0, 0))
+                annotation_row.add_column(width=2)
+                annotation_row.add_column()
+                annotation_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"),
+                )
+                parts.append(annotation_row)
+
+            return RichGroup(*parts) if len(parts) > 1 else parts[0]
 
 
 class ToolGroupWidget(Static):
@@ -519,7 +566,11 @@ class ToolGroupWidget(Static):
             # Collapsed with summary
             header = f"{select_prefix}{history_prefix}{group.tool_count} tools │ {timestamp_str}"
             md_content = Markdown(f"**tools:{group.tool_count}** {group.summary}")
-            return RichGroup(RichText.from_markup(f"[bold #5fd787]{header}[/bold #5fd787]"), md_content)
+            parts = [RichText.from_markup(f"[bold #5fd787]{header}[/bold #5fd787]"), md_content]
+            # Add annotation if available (stored on first tool)
+            if first_tool and first_tool.annotation:
+                parts.append(RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"))
+            return RichGroup(*parts)
         else:
             # Expanded or no summary
             header = f"{select_prefix}{history_prefix}{group.tool_count} tools │ {timestamp_str}"
@@ -534,11 +585,15 @@ class ToolGroupWidget(Static):
                 tool_text.append(" ")
                 tool_text.append(content, style="dim")
                 parts.append(tool_text)
+            # Add annotation if available (stored on first tool)
+            if first_tool and first_tool.annotation:
+                parts.append(RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"))
             return RichGroup(*parts)
 
     def _render_claude_code_style(self):
         """Render tool group in minimal claude-code style with two-column layout."""
         group = self.group
+        first_tool = group.tool_turns[0] if group.tool_turns else None
         selected_style = "light_steel_blue" if self.selected else ""
         bullet_style = selected_style or "#5fd787"
 
@@ -551,7 +606,18 @@ class ToolGroupWidget(Static):
                 RichText(f"{self.BULLET} ", style=bullet_style),
                 Markdown(f"**tools:{group.tool_count}** {group.summary}"),
             )
-            return row
+            parts = [row]
+            # Add annotation if available (stored on first tool)
+            if first_tool and first_tool.annotation:
+                annotation_row = Table.grid(padding=(0, 0))
+                annotation_row.add_column(width=2)
+                annotation_row.add_column()
+                annotation_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"),
+                )
+                parts.append(annotation_row)
+            return RichGroup(*parts) if len(parts) > 1 else parts[0]
         else:
             # Expanded or no summary - each tool in two columns
             parts = []
@@ -571,6 +637,16 @@ class ToolGroupWidget(Static):
                     tool_text,
                 )
                 parts.append(row)
+            # Add annotation if available (stored on first tool)
+            if first_tool and first_tool.annotation:
+                annotation_row = Table.grid(padding=(0, 0))
+                annotation_row.add_column(width=2)
+                annotation_row.add_column()
+                annotation_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"),
+                )
+                parts.append(annotation_row)
             return RichGroup(*parts)
 
 
@@ -867,6 +943,9 @@ class InputPanel(Horizontal):
         with Vertical(classes="input-box", id="ask-box"):
             yield Label("[magenta]Ask[/magenta]", classes="input-label")
             yield Input(placeholder="Press [?] to ask about trace", id="ask-input")
+        with Vertical(classes="input-box", id="annotate-box"):
+            yield Label("[yellow]Annotate[/yellow]", classes="input-label")
+            yield Input(placeholder="Press [n] to annotate selected turn", id="annotate-input")
 
     @property
     def monitor_text(self) -> str:
@@ -893,6 +972,32 @@ class InputPanel(Horizontal):
         except NoMatches:
             pass
 
+    def focus_annotate(self) -> None:
+        try:
+            self.query_one("#annotate-input", Input).focus()
+        except NoMatches:
+            pass
+
+    def set_annotate_placeholder(self, text: str) -> None:
+        try:
+            self.query_one("#annotate-input", Input).placeholder = text
+        except NoMatches:
+            pass
+
+    def set_annotate_value(self, value: str) -> None:
+        try:
+            self.query_one("#annotate-input", Input).value = value
+        except NoMatches:
+            pass
+
+    def clear_annotate(self) -> None:
+        try:
+            inp = self.query_one("#annotate-input", Input)
+            inp.value = ""
+            inp.placeholder = "Press [n] to annotate selected turn"
+        except NoMatches:
+            pass
+
 
 class CompanionApp(App):
     """Textual TUI for Claude Companion."""
@@ -916,6 +1021,7 @@ class CompanionApp(App):
         Binding("T", "toggle_tasks", "Tasks", show=False),
         Binding("P", "toggle_plan", "Plan", show=False),
         Binding("x", "export", "Export", show=False),
+        Binding("n", "annotate", "Annotate", show=False),
         Binding("a", "toggle_alerts", "Alerts", show=False),
         Binding("s", "toggle_summary", "Summary", show=False),
         Binding("S", "summarize_all", "Summarize All", show=False),
@@ -980,6 +1086,8 @@ class CompanionApp(App):
         self._group_expanded_state: dict[int, bool] = {}
         self._status_message: str | None = None
         self._refresh_counter: int = 0  # Used to generate unique widget IDs
+        self._annotating_turn_number: int | None = None  # Turn being annotated
+        self._annotating_scroll_y: float = 0  # Scroll position before annotating
 
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
@@ -1272,6 +1380,46 @@ class CompanionApp(App):
         else:
             self._show_status("No session to export")
 
+    def action_annotate(self) -> None:
+        """Annotate the selected turn."""
+        conversation = self.query_one("#conversation", ConversationView)
+
+        # Save scroll position before annotating
+        self._annotating_scroll_y = conversation.scroll_y
+
+        index = conversation.get_selected_index()
+        if index is None:
+            self._show_status("Select a turn first (j/k to navigate)")
+            return
+
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        if not (0 <= index < len(widgets)):
+            return
+
+        widget = widgets[index]
+        # Get the turn from the widget
+        if isinstance(widget, TurnWidget):
+            turn = widget.turn
+        elif isinstance(widget, ToolGroupWidget):
+            # For tool groups, annotate the first tool turn
+            turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+        else:
+            turn = None
+
+        if not turn:
+            self._show_status("Cannot annotate this item")
+            return
+
+        # Store the turn number we're annotating
+        self._annotating_turn_number = turn.turn_number
+
+        # Set up the annotation input
+        inputs = self.query_one("#inputs", InputPanel)
+        existing = turn.annotation or ""
+        inputs.set_annotate_value(existing)
+        inputs.set_annotate_placeholder(f"Annotate turn {turn.turn_number} (Enter to save, empty to clear)")
+        inputs.focus_annotate()
+
     def action_toggle_alerts(self) -> None:
         """Toggle alerts panel or clear alerts."""
         alerts = self.store.get_alerts()
@@ -1390,6 +1538,32 @@ class CompanionApp(App):
             # TODO: Integrate with LLM for actual query handling
         # Clear and blur
         event.input.value = ""
+        self.set_focus(None)
+
+    @on(Input.Submitted, "#annotate-input")
+    def handle_annotate_submit(self, event: Input.Submitted) -> None:
+        """Handle annotation input submission."""
+        if self._annotating_turn_number is not None:
+            annotation = event.value.strip()
+            if self.store.set_annotation(self._annotating_turn_number, annotation):
+                if annotation:
+                    self._show_status(f"Annotation saved for turn {self._annotating_turn_number}")
+                else:
+                    self._show_status(f"Annotation cleared for turn {self._annotating_turn_number}")
+                # Disable auto-scroll to preserve position
+                self._auto_scroll = False
+                self._refresh_conversation()
+                # Restore scroll position from before annotation started
+                conversation = self.query_one("#conversation", ConversationView)
+                saved_y = self._annotating_scroll_y
+                conversation.call_after_refresh(lambda: conversation.scroll_to(y=saved_y, animate=False))
+            else:
+                self._show_status("Failed to save annotation")
+            self._annotating_turn_number = None
+
+        # Clear and blur
+        inputs = self.query_one("#inputs", InputPanel)
+        inputs.clear_annotate()
         self.set_focus(None)
 
     @property

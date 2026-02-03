@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_turn_for_alerts, send_system_notification
-from .cache import SummaryCache
+from .cache import AnnotationCache, SummaryCache
 from .config import load_config
 from .models import Session, TaskState, Turn
 from .project_watcher import ProjectWatcher
@@ -46,6 +46,7 @@ class EventStore:
             api_key=config.llm.api_key,
         )
         self._summary_cache = SummaryCache()  # single cache for both assistant and tool summaries
+        self._annotation_cache = AnnotationCache()  # user annotations
 
     def start_watching(self, project_paths: list[Path], max_sessions: int | None = None) -> None:
         """Start watching project directories for sessions.
@@ -95,6 +96,9 @@ class EventStore:
 
         # Load transcript history and start watcher (outside lock)
         file_position = self._load_transcript_history(session_id, str(transcript_path))
+
+        # Load cached annotations for this session
+        self.load_annotations_for_session(session_id)
 
         with self._lock:
             session = self._sessions.get(session_id)
@@ -531,6 +535,45 @@ class EventStore:
                         )
                         count += 1
         return count
+
+    def set_annotation(self, turn_number: int, annotation: str) -> bool:
+        """Set annotation on a turn in the active session.
+
+        Args:
+            turn_number: The turn number to annotate
+            annotation: The annotation text (empty string to clear)
+
+        Returns:
+            True if annotation was set, False if turn not found
+        """
+        with self._lock:
+            if not self._active_session_id:
+                return False
+            session = self._sessions.get(self._active_session_id)
+            if not session:
+                return False
+
+            # Find turn by number
+            for turn in session.turns:
+                if turn.turn_number == turn_number:
+                    turn.annotation = annotation if annotation else None
+                    # Persist to cache
+                    self._annotation_cache.set(
+                        self._active_session_id, turn_number, annotation
+                    )
+                    return True
+            return False
+
+    def load_annotations_for_session(self, session_id: str) -> None:
+        """Load cached annotations for a session's turns."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                return
+            for turn in session.turns:
+                cached = self._annotation_cache.get(session_id, turn.turn_number)
+                if cached:
+                    turn.annotation = cached
 
     def stop(self) -> None:
         """Stop all watchers and summarizer."""
