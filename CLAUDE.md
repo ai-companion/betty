@@ -77,7 +77,7 @@ By default, only sessions for the current directory are shown. Use `--global` to
 
 Configuration priority:
 1. Environment variables: `CLAUDE_COMPANION_LLM_URL`, `CLAUDE_COMPANION_LLM_MODEL`
-2. Config file: `~/.claude-companion/config.json`
+2. Config file: `~/.claude-companion/config.toml`
 3. Hardcoded defaults (vLLM)
 
 Use `claude-companion config` to set up your LLM server. Summaries are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
