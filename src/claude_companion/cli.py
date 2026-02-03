@@ -36,9 +36,9 @@ def get_project_paths(global_mode: bool) -> list[Path]:
     if global_mode:
         # All project directories (those starting with "-")
         if not projects_dir.exists():
-            return [projects_dir]  # Watch the parent dir for new projects
+            return []
         return [p for p in projects_dir.iterdir()
-                if p.is_dir() and p.name.startswith("-")] or [projects_dir]
+                if p.is_dir() and p.name.startswith("-")]
     else:
         # Current directory only - return path even if it doesn't exist yet
         # The watcher will poll until sessions appear
