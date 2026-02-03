@@ -252,7 +252,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
 @main.command()
 @click.option("--demo", is_flag=True, help="Auto-play a sample conversation")
 @click.option("--project", "-p", help="Simulated project path (default: /tmp/mock-project)")
-@click.option("--delay", "-d", type=float, default=1.5, help="Delay between messages in demo mode (default: 1.5s)")
+@click.option("--delay", "-d", type=click.FloatRange(min=0.0, min_open=True), default=1.5, help="Delay between messages in demo mode (default: 1.5s)")
 def mock(demo: bool, project: str | None, delay: float) -> None:
     """Generate mock Claude Code sessions for development.
 

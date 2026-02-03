@@ -4,8 +4,8 @@ This module creates fake Claude Code sessions for testing and development,
 particularly useful in cloud-based environments without access to Claude Code.
 """
 
+import copy
 import json
-import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -146,9 +146,7 @@ class MockSession:
         self._entry_count = 0
 
         # Encode project path like Claude Code does
-        encoded_path = self.project_path.replace("/", "-")
-        if not encoded_path.startswith("-"):
-            encoded_path = "-" + encoded_path.lstrip("-")
+        encoded_path = "-" + self.project_path.lstrip("/").replace("/", "-")
 
         self.project_dir = Path.home() / ".claude" / "projects" / encoded_path
         self.session_file = self.project_dir / f"{self.session_id}.jsonl"
@@ -213,15 +211,17 @@ class MockSession:
         """Add a raw entry (from DEMO_CONVERSATION format).
 
         Handles both user and assistant message formats.
+        Makes a deep copy to avoid mutating the input data.
         """
         entry = {"timestamp": self._timestamp()}
 
         if entry_data.get("type") == "user":
             entry["type"] = "user"
-            entry["message"] = entry_data.get("message", {})
+            entry["message"] = copy.deepcopy(entry_data.get("message", {}))
         elif entry_data.get("type") == "assistant":
             entry["type"] = "assistant"
-            content = entry_data.get("content", [])
+            # Deep copy content to avoid mutating DEMO_CONVERSATION
+            content = copy.deepcopy(entry_data.get("content", []))
             # Add IDs to tool_use blocks
             for block in content:
                 if block.get("type") == "tool_use" and "id" not in block:
@@ -255,7 +255,7 @@ def run_interactive(project_path: str | None = None) -> None:
 
     try:
         while True:
-            cmd = input(f"[{message_index}] > ").strip().lower()
+            cmd = input(f"[{message_index}] (Enter/u/a/q) > ").strip().lower()
 
             if cmd == 'q':
                 break
@@ -292,6 +292,7 @@ def run_interactive(project_path: str | None = None) -> None:
                 print("  (end of demo conversation, use 'u' or 'a' to add custom messages)")
 
     except (KeyboardInterrupt, EOFError):
+        # Allow user to exit the interactive session gracefully with Ctrl+C / Ctrl+D
         pass
 
     print(f"\nSession file: {session_file}")
@@ -303,9 +304,15 @@ def run_demo(project_path: str | None = None, delay: float = 1.5, on_entry: Call
 
     Args:
         project_path: Simulated project path
-        delay: Seconds between messages
+        delay: Seconds between messages (must be positive)
         on_entry: Optional callback after each entry is added
+
+    Raises:
+        ValueError: If delay is not positive
     """
+    if delay <= 0:
+        raise ValueError("Delay must be positive")
+
     session = MockSession(project_path=project_path)
     session_file = session.setup()
 

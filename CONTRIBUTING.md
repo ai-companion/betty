@@ -102,7 +102,7 @@ For advanced testing, you can create mock session files directly:
 ```python
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Create project directory
 project_dir = Path.home() / ".claude" / "projects" / "-tmp-my-test-project"
@@ -111,16 +111,20 @@ project_dir.mkdir(parents=True, exist_ok=True)
 # Create session file
 session_file = project_dir / "test-session-001.jsonl"
 
+# Helper for UTC timestamp
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
 # Write mock entries
 entries = [
     {
         "type": "user",
-        "timestamp": datetime.now().isoformat() + "Z",
+        "timestamp": utc_timestamp(),
         "message": {"content": "Hello, can you help me?"}
     },
     {
         "type": "assistant",
-        "timestamp": datetime.now().isoformat() + "Z",
+        "timestamp": utc_timestamp(),
         "message": {
             "content": [
                 {"type": "text", "text": "Of course! How can I help you today?"}
