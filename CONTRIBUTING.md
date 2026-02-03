@@ -153,6 +153,30 @@ Key directories:
 - `src/claude_companion/cli.py` - CLI entry point and commands
 - `src/claude_companion/mock_session.py` - Mock session generator for development
 
+## Working with GitHub Issues and PRs
+
+In cloud environments where the `gh` CLI isn't available, you can use the GitHub API directly with the `GITHUB_TOKEN` environment variable:
+
+```bash
+# View an issue
+curl -s -H "Authorization: token $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/repos/ai-companion/claude-companion/issues/73
+
+# List open issues
+curl -s -H "Authorization: token $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/repos/ai-companion/claude-companion/issues?state=open
+
+# Create a pull request
+curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/repos/ai-companion/claude-companion/pulls \
+  -d '{"title":"My PR","head":"my-branch","base":"main","body":"Description"}'
+```
+
+Make sure your `GITHUB_TOKEN` has the appropriate scopes (repo access for private repos, or public_repo for public).
+
 ## Submitting Changes
 
 1. Create a feature branch
