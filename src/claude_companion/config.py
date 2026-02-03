@@ -57,7 +57,10 @@ LEGACY_CONFIG_FILE = CONFIG_DIR / "config.json"
 
 
 def _migrate_json_config() -> None:
-    """Migrate legacy JSON config to TOML format."""
+    """Migrate legacy JSON config to TOML format.
+
+    Keeps the old JSON file as a backup (.json.bak).
+    """
     import json
     if LEGACY_CONFIG_FILE.exists() and not CONFIG_FILE.exists():
         try:
@@ -65,10 +68,23 @@ def _migrate_json_config() -> None:
                 data = json.load(f)
             with open(CONFIG_FILE, "wb") as f:
                 tomli_w.dump(data, f)
-            # Remove legacy file after successful migration
-            LEGACY_CONFIG_FILE.unlink()
+            # Keep old file as backup instead of deleting
+            backup_file = LEGACY_CONFIG_FILE.with_suffix(".json.bak")
+            LEGACY_CONFIG_FILE.rename(backup_file)
         except Exception:
             pass  # Silently ignore migration errors
+
+
+def _load_from_json() -> dict | None:
+    """Try to load config from legacy JSON file (fallback)."""
+    import json
+    if LEGACY_CONFIG_FILE.exists():
+        try:
+            with open(LEGACY_CONFIG_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return None
 
 
 def load_config() -> Config:
@@ -93,20 +109,26 @@ def load_config() -> Config:
     style = DEFAULT_STYLE
     collapse_tools = DEFAULT_CONFIG.collapse_tools
 
-    # Try loading from config file
+    # Try loading from config file (TOML first, then JSON for backwards compat)
+    data = None
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "rb") as f:
                 data = tomllib.load(f)
-                llm_data = data.get("llm", {})
-                provider = llm_data.get("provider", provider)
-                llm_url = llm_data.get("base_url", llm_url)
-                llm_model = llm_data.get("model", llm_model)
-                style = data.get("style", style)
-                collapse_tools = data.get("collapse_tools", collapse_tools)
         except Exception:
-            # Silently fall back to defaults if config file is malformed
-            pass
+            pass  # Try JSON fallback
+
+    # Fallback to JSON if TOML not found or failed
+    if data is None:
+        data = _load_from_json()
+
+    if data is not None:
+        llm_data = data.get("llm", {})
+        provider = llm_data.get("provider", provider)
+        llm_url = llm_data.get("base_url", llm_url)
+        llm_model = llm_data.get("model", llm_model)
+        style = data.get("style", style)
+        collapse_tools = data.get("collapse_tools", collapse_tools)
 
     # Environment variables override everything
     provider = os.getenv("CLAUDE_COMPANION_LLM_PROVIDER", provider)
