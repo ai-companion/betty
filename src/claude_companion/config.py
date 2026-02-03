@@ -57,10 +57,7 @@ LEGACY_CONFIG_FILE = CONFIG_DIR / "config.json"
 
 
 def _migrate_json_config() -> None:
-    """Migrate legacy JSON config to TOML format.
-
-    Keeps the old JSON file as a backup (.json.bak).
-    """
+    """Migrate legacy JSON config to TOML format."""
     import json
     if LEGACY_CONFIG_FILE.exists() and not CONFIG_FILE.exists():
         try:
@@ -68,9 +65,8 @@ def _migrate_json_config() -> None:
                 data = json.load(f)
             with open(CONFIG_FILE, "wb") as f:
                 tomli_w.dump(data, f)
-            # Keep old file as backup instead of deleting
-            backup_file = LEGACY_CONFIG_FILE.with_suffix(".json.bak")
-            LEGACY_CONFIG_FILE.rename(backup_file)
+            # Remove old JSON after successful migration
+            LEGACY_CONFIG_FILE.unlink()
         except Exception:
             pass  # Silently ignore migration errors
 
