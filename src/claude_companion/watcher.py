@@ -122,9 +122,15 @@ class TranscriptWatcher:
                 # Successfully parsed - advance position past this line
                 current_pos += line_length
             except json.JSONDecodeError:
-                # Failed to parse - stop here, don't advance position
-                # This line might be incomplete (Claude still writing)
-                break
+                # If this line has a newline, it's complete but malformed - skip it
+                # If no newline, it might be incomplete (Claude still writing) - stop here
+                if has_newline:
+                    # Malformed but complete line - skip and continue
+                    current_pos += line_length
+                    continue
+                else:
+                    # Partial line - stop and retry on next poll
+                    break
 
         # Only update position to last successfully parsed line
         with self._lock:
