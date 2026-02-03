@@ -51,7 +51,8 @@ uv run python -c "from claude_companion import tui, store, models; print('OK')"
 - **`cache.py`** - Persistent disk cache for summaries (`~/.cache/claude-companion/summaries.json`)
 - **`config.py`** - Configuration management for LLM server settings (supports env vars, config file, defaults)
 - **`export.py`** - Export session data to Markdown or JSON formats
-- **`cli.py`** - Click-based CLI with commands: `config`
+- **`mock_session.py`** - Mock session generator for development: creates realistic Claude Code session files for testing and cloud-based development without Claude Code
+- **`cli.py`** - Click-based CLI with commands: `config`, `mock`
 
 ### Session Discovery
 
@@ -76,7 +77,7 @@ By default, only sessions for the current directory are shown. Use `--global` to
 
 Configuration priority:
 1. Environment variables: `CLAUDE_COMPANION_LLM_URL`, `CLAUDE_COMPANION_LLM_MODEL`
-2. Config file: `~/.claude-companion/config.json`
+2. Config file: `~/.claude-companion/config.toml`
 3. Hardcoded defaults (vLLM)
 
 Use `claude-companion config` to set up your LLM server. Summaries are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.

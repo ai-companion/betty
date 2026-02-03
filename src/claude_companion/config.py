@@ -1,10 +1,18 @@
 """Configuration management for Claude Companion."""
 
-import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+# Use tomllib on Python 3.11+, fall back to tomli for 3.10
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+import tomli_w
 
 
 # Default style for TUI
@@ -43,7 +51,37 @@ DEFAULT_CONFIG = Config(
 
 # Config file path
 CONFIG_DIR = Path.home() / ".claude-companion"
-CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_FILE = CONFIG_DIR / "config.toml"
+# Legacy JSON config for migration
+LEGACY_CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def _migrate_json_config() -> None:
+    """Migrate legacy JSON config to TOML format."""
+    import json
+    if LEGACY_CONFIG_FILE.exists() and not CONFIG_FILE.exists():
+        try:
+            with open(LEGACY_CONFIG_FILE) as f:
+                data = json.load(f)
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            with open(CONFIG_FILE, "wb") as f:
+                tomli_w.dump(data, f)
+            # Remove old JSON after successful migration
+            LEGACY_CONFIG_FILE.unlink()
+        except Exception:
+            pass  # Silently ignore migration errors
+
+
+def _load_from_json() -> dict | None:
+    """Try to load config from legacy JSON file (fallback)."""
+    import json
+    if LEGACY_CONFIG_FILE.exists():
+        try:
+            with open(LEGACY_CONFIG_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return None
 
 
 def load_config() -> Config:
@@ -51,13 +89,16 @@ def load_config() -> Config:
 
     Priority (highest to lowest):
     1. Environment variables (CLAUDE_COMPANION_*)
-    2. Config file (~/.claude-companion/config.json)
+    2. Config file (~/.claude-companion/config.toml)
     3. Hardcoded defaults
 
     API keys are always loaded from environment variables:
     - OPENAI_API_KEY for OpenAI
     - ANTHROPIC_API_KEY for Anthropic
     """
+    # Migrate legacy JSON config if needed
+    _migrate_json_config()
+
     # Start with defaults
     provider = DEFAULT_CONFIG.llm.provider
     llm_url = DEFAULT_CONFIG.llm.base_url
@@ -65,20 +106,26 @@ def load_config() -> Config:
     style = DEFAULT_STYLE
     collapse_tools = DEFAULT_CONFIG.collapse_tools
 
-    # Try loading from config file
+    # Try loading from config file (TOML first, then JSON for backwards compat)
+    data = None
     if CONFIG_FILE.exists():
         try:
-            with open(CONFIG_FILE) as f:
-                data = json.load(f)
-                llm_data = data.get("llm", {})
-                provider = llm_data.get("provider", provider)
-                llm_url = llm_data.get("base_url", llm_url)
-                llm_model = llm_data.get("model", llm_model)
-                style = data.get("style", style)
-                collapse_tools = data.get("collapse_tools", collapse_tools)
+            with open(CONFIG_FILE, "rb") as f:
+                data = tomllib.load(f)
         except Exception:
-            # Silently fall back to defaults if config file is malformed
-            pass
+            pass  # Try JSON fallback
+
+    # Fallback to JSON if TOML not found or failed
+    if data is None:
+        data = _load_from_json()
+
+    if data is not None:
+        llm_data = data.get("llm", {})
+        provider = llm_data.get("provider", provider)
+        llm_url = llm_data.get("base_url", llm_url)
+        llm_model = llm_data.get("model", llm_model)
+        style = data.get("style", style)
+        collapse_tools = data.get("collapse_tools", collapse_tools)
 
     # Environment variables override everything
     provider = os.getenv("CLAUDE_COMPANION_LLM_PROVIDER", provider)
@@ -130,8 +177,8 @@ def save_config(config: Config) -> None:
     if config.llm.provider in ("local", "openrouter") and config.llm.base_url:
         data["llm"]["base_url"] = config.llm.base_url
 
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(CONFIG_FILE, "wb") as f:
+        tomli_w.dump(data, f)
 
 
 def get_example_configs() -> dict[str, dict[str, Any]]:

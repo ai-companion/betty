@@ -40,6 +40,7 @@ The companion will automatically detect and display your Claude Code session.
 | `claude-companion uninstall` | Remove Claude Code hooks |
 | `claude-companion status` | Check hook installation status |
 | `claude-companion config` | Configure LLM server for summarization |
+| `claude-companion mock` | Generate mock sessions for development |
 
 ## Options
 
@@ -214,6 +215,22 @@ pip install -e .
 # Run
 claude-companion
 ```
+
+### Cloud-Based Development
+
+For development in environments without Claude Code (GitHub Codespaces, GitPod, remote servers), use the mock session feature:
+
+```bash
+# Terminal 1: Start mock session that simulates Claude Code
+claude-companion mock --demo
+
+# Terminal 2: Watch the mock session
+claude-companion --global
+```
+
+The mock command creates realistic Claude Code session files, enabling full development and testing without needing Claude Code installed.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed setup instructions.
 
 ## License
 
