@@ -42,6 +42,9 @@ def export_session_markdown(session: Session, output_path: Path | None = None) -
         if turn.critic:
             lines.append(f"**Critic**: {turn.critic}")
             lines.append("")
+        if turn.annotation:
+            lines.append(f"**Annotation**: {turn.annotation}")
+            lines.append("")
         lines.append(turn.content_full)
         lines.append("")
 
@@ -75,6 +78,7 @@ def export_session_json(session: Session, output_path: Path | None = None) -> st
                 "summary": turn.summary,
                 "critic": turn.critic,
                 "critic_sentiment": turn.critic_sentiment,
+                "annotation": turn.annotation,
                 "word_count": turn.word_count,
                 "timestamp": turn.timestamp.isoformat(),
             }
