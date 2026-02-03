@@ -51,7 +51,8 @@ uv run python -c "from claude_companion import tui, store, models; print('OK')"
 - **`cache.py`** - Persistent disk cache for summaries (`~/.cache/claude-companion/summaries.json`)
 - **`config.py`** - Configuration management for LLM server settings (supports env vars, config file, defaults)
 - **`export.py`** - Export session data to Markdown or JSON formats
-- **`cli.py`** - Click-based CLI with commands: `config`
+- **`mock_session.py`** - Mock session generator for development: creates realistic Claude Code session files for testing and cloud-based development without Claude Code
+- **`cli.py`** - Click-based CLI with commands: `config`, `mock`
 
 ### Session Discovery
 
