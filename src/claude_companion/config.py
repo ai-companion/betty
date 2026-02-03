@@ -63,6 +63,7 @@ def _migrate_json_config() -> None:
         try:
             with open(LEGACY_CONFIG_FILE) as f:
                 data = json.load(f)
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             with open(CONFIG_FILE, "wb") as f:
                 tomli_w.dump(data, f)
             # Remove old JSON after successful migration

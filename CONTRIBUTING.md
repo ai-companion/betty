@@ -42,7 +42,7 @@ pip install -e .
 
 ```bash
 # Install dependencies directly
-pip install click filelock requests rich openai anthropic textual
+pip install click filelock requests rich openai anthropic textual tomli tomli-w
 
 # Install package in editable mode
 pip install -e .
@@ -163,17 +163,17 @@ In cloud environments where the `gh` CLI isn't available, you can use the GitHub
 
 ```bash
 # View an issue
-curl -s -H "Authorization: token $GITHUB_TOKEN" \
+curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
   https://api.github.com/repos/ai-companion/claude-companion/issues/73
 
 # List open issues
-curl -s -H "Authorization: token $GITHUB_TOKEN" \
+curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
   https://api.github.com/repos/ai-companion/claude-companion/issues?state=open
 
 # Create a pull request
-curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
   https://api.github.com/repos/ai-companion/claude-companion/pulls \
   -d '{"title":"My PR","head":"my-branch","base":"main","body":"Description"}'
