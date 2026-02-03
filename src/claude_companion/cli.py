@@ -249,5 +249,28 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
 
 
+@main.command()
+@click.option("--demo", is_flag=True, help="Auto-play a sample conversation")
+@click.option("--project", "-p", help="Simulated project path (default: /tmp/mock-project)")
+@click.option("--delay", "-d", type=float, default=1.5, help="Delay between messages in demo mode (default: 1.5s)")
+def mock(demo: bool, project: str | None, delay: float) -> None:
+    """Generate mock Claude Code sessions for development.
+
+    This is useful for testing and development in environments without
+    access to Claude Code (e.g., cloud-based development).
+
+    Examples:
+      claude-companion mock                # Interactive mode
+      claude-companion mock --demo         # Auto-play sample conversation
+      claude-companion mock --demo -d 2.0  # Slower demo (2s between messages)
+    """
+    from .mock_session import run_demo, run_interactive
+
+    if demo:
+        run_demo(project_path=project, delay=delay)
+    else:
+        run_interactive(project_path=project)
+
+
 if __name__ == "__main__":
     main()
