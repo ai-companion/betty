@@ -1325,6 +1325,9 @@ class CompanionApp(App):
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
         if 0 <= index < len(widgets):
             widget = widgets[index]
+            # Trigger summarization for unsummarized tool groups
+            if isinstance(widget, ToolGroupWidget) and not widget.group.summary:
+                self.store.summarize_tool_group(widget.group.tool_turns)
             widget.expanded = not widget.expanded
             # Persist group state
             if isinstance(widget, ToolGroupWidget):

@@ -651,6 +651,9 @@ class TUI:
             ):
                 item = turns[self._selected_index]
                 if isinstance(item, ToolGroup):
+                    # Trigger summarization if no summary yet
+                    if not item.summary:
+                        self.store.summarize_tool_group(item.tool_turns)
                     # Toggle and persist in state dict (keyed by first tool turn number)
                     new_state = not item.expanded
                     self._group_expanded_state[item.first_turn_number] = new_state
