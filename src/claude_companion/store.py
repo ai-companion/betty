@@ -486,11 +486,39 @@ class EventStore:
                     pass
         return callback
 
-    def summarize_historical_turns(self) -> int:
-        """Submit all historical turns without summaries for summarization.
+    def summarize_tool_group(self, tool_turns: list[Turn]) -> bool:
+        """Submit a specific tool group for summarization.
 
-        Submits tool groups (before user or assistant turns) and assistant text.
-        Returns the count of items submitted.
+        Args:
+            tool_turns: List of consecutive tool turns to summarize
+
+        Returns:
+            True if summarization was submitted, False if already has summary or empty.
+        """
+        if not tool_turns:
+            return False
+
+        # Check if already has summary
+        if tool_turns[0].summary:
+            return False
+
+        tool_cache_key = make_tool_cache_key(tool_turns)
+        cached_tool = self._summary_cache.get(tool_cache_key)
+        if cached_tool:
+            tool_turns[0].summary = cached_tool
+            return False
+
+        self._summarizer.summarize_tools_async(
+            tool_turns,
+            self._make_tool_summary_callback(tool_turns, tool_cache_key)
+        )
+        return True
+
+    def summarize_historical_turns(self) -> int:
+        """Submit all turns without summaries for summarization.
+
+        Submits tool groups (before user or assistant turns, plus trailing tools)
+        and assistant text. Returns the count of items submitted.
         """
         count = 0
         with self._lock:
@@ -500,10 +528,10 @@ class EventStore:
             if not session:
                 return 0
 
-            for turn in session.turns:
-                if not turn.is_historical:
-                    continue
+            # Track which tool turns we've already processed
+            processed_tool_indices: set[int] = set()
 
+            for i, turn in enumerate(session.turns):
                 # Summarize tools before user or assistant turns
                 if turn.role in ("user", "assistant"):
                     _, tool_turns = _get_turn_context(session, turn)
@@ -520,10 +548,15 @@ class EventStore:
                             )
                             count += 1
 
+                    # Mark these tool turns as processed
+                    for tt in tool_turns:
+                        for j, st in enumerate(session.turns):
+                            if st is tt:
+                                processed_tool_indices.add(j)
+                                break
+
                 # Summarize assistant text
                 if turn.role == "assistant" and not turn.summary:
-
-                    # Summarize assistant
                     asst_cache_key = self._make_assistant_cache_key(turn.content_full)
                     cached = self._summary_cache.get(asst_cache_key)
                     if cached:
@@ -534,6 +567,28 @@ class EventStore:
                             self._make_summary_callback(turn, asst_cache_key)
                         )
                         count += 1
+
+            # Handle trailing tool groups (tools at the end with no following user/assistant)
+            trailing_tools: list[Turn] = []
+            for i in range(len(session.turns) - 1, -1, -1):
+                turn = session.turns[i]
+                if turn.role == "tool" and i not in processed_tool_indices:
+                    trailing_tools.insert(0, turn)
+                else:
+                    break
+
+            if trailing_tools and not trailing_tools[0].summary:
+                tool_cache_key = make_tool_cache_key(trailing_tools)
+                cached_tool = self._summary_cache.get(tool_cache_key)
+                if cached_tool:
+                    trailing_tools[0].summary = cached_tool
+                else:
+                    self._summarizer.summarize_tools_async(
+                        trailing_tools,
+                        self._make_tool_summary_callback(trailing_tools, tool_cache_key)
+                    )
+                    count += 1
+
         return count
 
     def set_annotation(self, turn_number: int, annotation: str) -> bool:

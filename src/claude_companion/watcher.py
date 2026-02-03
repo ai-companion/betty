@@ -76,7 +76,12 @@ class TranscriptWatcher:
             time.sleep(0.5)  # Poll every 500ms
 
     def _check_for_updates(self) -> None:
-        """Check for new content in the transcript file."""
+        """Check for new content in the transcript file.
+
+        Position is only advanced after successfully parsing a line.
+        This ensures that if we read a partial line (Claude still writing),
+        we'll re-read it on the next poll when it's complete.
+        """
         with self._lock:
             path = self._current_path
             pos = self._last_position
@@ -92,22 +97,44 @@ class TranscriptWatcher:
         with open(path, "r") as f:
             f.seek(pos)
             new_content = f.read()
-            new_position = f.tell()
 
-        with self._lock:
-            self._last_position = new_position
+        # Track position for each successfully parsed line
+        current_pos = pos
+        lines = new_content.split("\n")
 
-        # Parse new lines
-        for line in new_content.strip().split("\n"):
-            if not line:
+        for i, line in enumerate(lines):
+            # Calculate line length in bytes
+            line_bytes = len(line.encode('utf-8'))
+            # Add 1 for newline, except for the last line if it doesn't end with newline
+            has_newline = (i < len(lines) - 1) or new_content.endswith("\n")
+            line_length = line_bytes + (1 if has_newline else 0)
+
+            # Skip empty lines but advance position
+            if not line.strip():
+                current_pos += line_length
                 continue
+
             try:
                 entry = json.loads(line)
                 turns = self._parse_entry(entry)
                 for turn in turns:
                     self._on_turn(turn)
+                # Successfully parsed - advance position past this line
+                current_pos += line_length
             except json.JSONDecodeError:
-                continue
+                # If this line has a newline, it's complete but malformed - skip it
+                # If no newline, it might be incomplete (Claude still writing) - stop here
+                if has_newline:
+                    # Malformed but complete line - skip and continue
+                    current_pos += line_length
+                    continue
+                else:
+                    # Partial line - stop and retry on next poll
+                    break
+
+        # Only update position to last successfully parsed line
+        with self._lock:
+            self._last_position = current_pos
 
     def _parse_entry(self, entry: dict) -> list[Turn]:
         """Parse a transcript entry and return turns."""
