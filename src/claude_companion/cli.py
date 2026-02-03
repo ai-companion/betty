@@ -29,22 +29,21 @@ def get_project_paths(global_mode: bool) -> list[Path]:
         global_mode: If True, return all project directories. If False, return only current directory's project.
 
     Returns:
-        List of project directories to watch
+        List of project directories to watch (may include non-existent paths that will be watched)
     """
     projects_dir = Path.home() / ".claude" / "projects"
 
-    if not projects_dir.exists():
-        return []
-
     if global_mode:
         # All project directories (those starting with "-")
+        if not projects_dir.exists():
+            return [projects_dir]  # Watch the parent dir for new projects
         return [p for p in projects_dir.iterdir()
-                if p.is_dir() and p.name.startswith("-")]
+                if p.is_dir() and p.name.startswith("-")] or [projects_dir]
     else:
-        # Current directory only
+        # Current directory only - return path even if it doesn't exist yet
+        # The watcher will poll until sessions appear
         encoded = cwd_to_project_path()
-        project_path = projects_dir / encoded
-        return [project_path] if project_path.exists() else []
+        return [projects_dir / encoded]
 
 
 @click.group(invoke_without_command=True)
@@ -66,15 +65,6 @@ def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
 def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, collapse_tools: bool = True) -> None:
     """Run the main companion TUI with directory-based session discovery."""
     project_paths = get_project_paths(global_mode)
-
-    if not project_paths:
-        if global_mode:
-            console.print("[yellow]No Claude sessions found.[/yellow]")
-            console.print("Run [bold]claude[/bold] in any directory to start a session.")
-        else:
-            console.print("[yellow]No Claude sessions for current directory.[/yellow]")
-            console.print("Run [bold]claude[/bold] here first, or use [bold]--global[/bold] to see all sessions.")
-        return
 
     # Create store and start watching
     # Load only most recent session by default; new sessions auto-detected while running
