@@ -85,9 +85,9 @@ def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, coll
         )
         logging.info("Claude Companion starting (debug logging enabled)")
     else:
-        # Default: INFO level, no file logging
+        # Default: only warn+ so TUI stays clean
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.WARNING,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 

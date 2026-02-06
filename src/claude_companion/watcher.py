@@ -60,7 +60,7 @@ class TranscriptWatcher:
                 return
             self._running = True
 
-        logger.info(f"Starting watcher for {path.name} at position {self._last_position}")
+        logger.debug(f"Starting watcher for {path.name} at position {self._last_position}")
         self._thread = threading.Thread(target=self._watch_loop, daemon=True)
         self._thread.start()
 
