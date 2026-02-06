@@ -1,5 +1,7 @@
 """CLI entry point for Claude Companion."""
 
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import click
@@ -64,6 +66,31 @@ def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
 
 def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, collapse_tools: bool = True) -> None:
     """Run the main companion TUI with directory-based session discovery."""
+    # Configure logging based on config (opt-in debug logging)
+    config = load_config()
+
+    if config.debug_logging:
+        # Debug logging enabled - use rotating file handler
+        log_file = Path.home() / ".cache" / "claude-companion" / "debug.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            log_file,
+            maxBytes=5 * 1024 * 1024,  # 5MB
+            backupCount=3,
+        )
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            handlers=[handler],
+        )
+        logging.info("Claude Companion starting (debug logging enabled)")
+    else:
+        # Default: only warn+ so TUI stays clean
+        logging.basicConfig(
+            level=logging.WARNING,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+
     projects_dir = Path.home() / ".claude" / "projects"
     project_paths = get_project_paths(global_mode)
 
@@ -112,7 +139,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         current_config = load_config()
 
         console.print("\n[bold]Current Configuration:[/bold]")
-        console.print(f"  Style:    [cyan]{current_config.style}[/cyan]")
+        console.print(f"  Style:          [cyan]{current_config.style}[/cyan]")
+        console.print(f"  Debug Logging:  [cyan]{current_config.debug_logging}[/cyan]")
 
         console.print("\n[bold]LLM Configuration:[/bold]")
         console.print(f"  Provider: [cyan]{current_config.llm.provider}[/cyan]")
@@ -131,6 +159,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         import os
         if os.getenv("CLAUDE_COMPANION_STYLE"):
             console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_STYLE is set: {os.getenv('CLAUDE_COMPANION_STYLE')}")
+        if os.getenv("CLAUDE_COMPANION_DEBUG_LOGGING"):
+            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_DEBUG_LOGGING is set: {os.getenv('CLAUDE_COMPANION_DEBUG_LOGGING')}")
         if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
             console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_PROVIDER is set: {os.getenv('CLAUDE_COMPANION_LLM_PROVIDER')}")
         if os.getenv("CLAUDE_COMPANION_LLM_URL"):
@@ -157,7 +187,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         url = preset_config.get("base_url")  # Only for local providers
         console.print(f"Using [cyan]{preset_config['description']}[/cyan] preset")
 
-        # Create config from preset, preserving style and collapse_tools
+        # Create config from preset, preserving style, collapse_tools, and debug_logging
         new_config = Config(
             llm=LLMConfig(
                 provider=provider,
@@ -166,6 +196,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             ),
             style=new_style,
             collapse_tools=current_config.collapse_tools,
+            debug_logging=current_config.debug_logging,
         )
 
         save_config(new_config)
@@ -194,6 +225,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             llm=current_config.llm,
             style=style,
             collapse_tools=current_config.collapse_tools,
+            debug_logging=current_config.debug_logging,
         )
         save_config(new_config)
 
@@ -233,6 +265,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         ),
         style=new_style,
         collapse_tools=current_config.collapse_tools,
+        debug_logging=current_config.debug_logging,
     )
 
     save_config(new_config)

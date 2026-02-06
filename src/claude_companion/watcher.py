@@ -1,12 +1,15 @@
 """Watch transcript files for real-time updates."""
 
 import json
+import logging
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
 from .models import Turn, count_words, _truncate, _extract_tool_content, parse_task_operation
+
+logger = logging.getLogger(__name__)
 
 
 class TranscriptWatcher:
@@ -50,11 +53,14 @@ class TranscriptWatcher:
         # Check cancelled flag and set running atomically to prevent race with stop()
         with self._lock:
             if self._cancelled:
+                logger.debug(f"Watcher cancelled before start: {path.name}")
                 return
             if self._running:
+                logger.debug(f"Watcher already running: {path.name}")
                 return
             self._running = True
 
+        logger.debug(f"Starting watcher for {path.name} at position {self._last_position}")
         self._thread = threading.Thread(target=self._watch_loop, daemon=True)
         self._thread.start()
 
@@ -71,8 +77,8 @@ class TranscriptWatcher:
         while self._running:
             try:
                 self._check_for_updates()
-            except Exception:
-                pass  # Don't crash on errors
+            except Exception as e:
+                logger.error(f"Error in transcript watcher: {e}", exc_info=True)
             time.sleep(0.5)  # Poll every 500ms
 
     def _check_for_updates(self) -> None:
@@ -93,53 +99,64 @@ class TranscriptWatcher:
         if current_size <= pos:
             return  # No new content
 
-        # Read new content
-        with open(path, "r") as f:
-            f.seek(pos)
-            new_content = f.read()
+        logger.debug(f"Detected file change: {path.name} size={current_size} pos={pos}")
 
-        # Track position for each successfully parsed line
-        current_pos = pos
-        lines = new_content.split("\n")
+        # Read and parse line by line using f.tell() for position tracking
+        # This matches how transcript.py works and avoids encoding issues
+        last_good_position = pos
 
-        for i, line in enumerate(lines):
-            # Calculate line length in bytes
-            line_bytes = len(line.encode('utf-8'))
-            # Add 1 for newline, except for the last line if it doesn't end with newline
-            has_newline = (i < len(lines) - 1) or new_content.endswith("\n")
-            line_length = line_bytes + (1 if has_newline else 0)
+        try:
+            with open(path, "r") as f:
+                f.seek(pos)
 
-            # Skip empty lines but advance position
-            if not line.strip():
-                current_pos += line_length
-                continue
+                while True:
+                    line_start = f.tell()
+                    raw_line = f.readline()
 
-            try:
-                entry = json.loads(line)
-                turns = self._parse_entry(entry)
-                for turn in turns:
-                    self._on_turn(turn)
-                # Successfully parsed - advance position past this line
-                current_pos += line_length
-            except json.JSONDecodeError:
-                # If this line has a newline, it's complete but malformed - skip it
-                # If no newline, it might be incomplete (Claude still writing) - stop here
-                if has_newline:
-                    # Malformed but complete line - skip and continue
-                    current_pos += line_length
-                    continue
-                else:
-                    # Partial line - stop and retry on next poll
-                    break
+                    if not raw_line:
+                        break  # EOF
 
-        # Only update position to last successfully parsed line
+                    # Check for newline BEFORE stripping to distinguish complete vs incomplete lines
+                    has_newline = raw_line.endswith("\n")
+                    line = raw_line.strip()
+
+                    if not line:
+                        # Empty line - update position and continue
+                        last_good_position = f.tell()
+                        continue
+
+                    try:
+                        entry = json.loads(line)
+                        turns = self._parse_entry(entry)
+                        if not turns:
+                            logger.debug(f"No turns extracted from entry type: {entry.get('type', 'unknown')}")
+                        for turn in turns:
+                            self._on_turn(turn)
+                        # Successfully parsed - update position to after this line
+                        last_good_position = f.tell()
+                    except json.JSONDecodeError as e:
+                        # Use newline presence to determine if line is complete
+                        if has_newline:
+                            # Complete but malformed - skip it
+                            logger.warning(f"Malformed JSON line (skipping): {e}")
+                            last_good_position = f.tell()
+                        else:
+                            # Likely incomplete (Claude still writing) - stop here
+                            logger.debug(f"Incomplete JSON line (will retry)")
+                            break
+        except IOError as e:
+            logger.error(f"Error reading transcript file: {e}")
+            return
+
+        # Update position to last successfully parsed line
         with self._lock:
-            self._last_position = current_pos
+            self._last_position = last_good_position
 
     def _parse_entry(self, entry: dict) -> list[Turn]:
         """Parse a transcript entry and return turns."""
         turns: list[Turn] = []
         entry_type = entry.get("type", "")
+        logger.debug(f"Parsing entry type: {entry_type}")
 
         if entry_type == "user":
             message = entry.get("message", {})
