@@ -64,13 +64,19 @@ def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
 
 def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, collapse_tools: bool = True) -> None:
     """Run the main companion TUI with directory-based session discovery."""
+    projects_dir = Path.home() / ".claude" / "projects"
     project_paths = get_project_paths(global_mode)
 
     # Create store and start watching
     # Load only most recent session by default; new sessions auto-detected while running
     max_sessions = 1
     store = EventStore()
-    store.start_watching(project_paths, max_sessions=max_sessions)
+    store.start_watching(
+        project_paths,
+        max_sessions=max_sessions,
+        projects_dir=projects_dir,
+        global_mode=global_mode,
+    )
 
     scope = "all projects" if global_mode else "current directory"
     console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")

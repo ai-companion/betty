@@ -19,6 +19,9 @@ class ProjectWatcher:
         project_paths: list[Path],
         on_session_discovered: Callable[[str, Path], None],
         max_sessions: int | None = None,
+        projects_dir: Path | None = None,
+        global_mode: bool = False,
+        on_initial_load_done: Callable[[], None] | None = None,
     ):
         """Initialize project watcher.
 
@@ -29,10 +32,17 @@ class ProjectWatcher:
             max_sessions: Maximum number of sessions to load on initial scan.
                 If None, all sessions are loaded. New sessions created while
                 watching are always detected regardless of this limit.
+            projects_dir: Parent directory containing project subdirectories
+                (e.g., ~/.claude/projects). Used in global mode to discover new projects.
+            global_mode: If True, re-scan projects_dir for new subdirectories on each poll.
+            on_initial_load_done: Callback called after the initial scan completes.
         """
-        self._project_paths = project_paths
+        self._project_paths = list(project_paths)
         self._on_session_discovered = on_session_discovered
         self._max_sessions = max_sessions
+        self._projects_dir = projects_dir
+        self._global_mode = global_mode
+        self._on_initial_load_done = on_initial_load_done
         self._known_sessions: set[str] = set()  # Sessions we've loaded
         self._skipped_sessions: dict[str, tuple[Path, float]] = {}  # session_id -> (path, last_mtime)
         self._running = False
@@ -78,6 +88,10 @@ class ProjectWatcher:
         for file, mtime in sessions_to_skip:
             self._skipped_sessions[file.stem] = (file, mtime)
 
+        # Signal that initial load is complete
+        if self._on_initial_load_done:
+            self._on_initial_load_done()
+
         # Start background polling thread
         self._running = True
         self._thread = threading.Thread(target=self._watch_loop, daemon=True)
@@ -85,6 +99,16 @@ class ProjectWatcher:
 
     def _scan_for_new_sessions(self) -> None:
         """Scan for new sessions and check if skipped sessions became active."""
+        # In global mode, discover new project directories
+        if self._global_mode and self._projects_dir and self._projects_dir.exists():
+            try:
+                known_paths = set(self._project_paths)
+                for p in self._projects_dir.iterdir():
+                    if p.is_dir() and p.name.startswith("-") and p not in known_paths:
+                        self._project_paths.append(p)
+            except (PermissionError, OSError):
+                pass
+
         for project_path in self._project_paths:
             if not project_path.exists():
                 continue
