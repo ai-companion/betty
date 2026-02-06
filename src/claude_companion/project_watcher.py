@@ -21,6 +21,7 @@ class ProjectWatcher:
         max_sessions: int | None = None,
         projects_dir: Path | None = None,
         global_mode: bool = False,
+        on_initial_load_done: Callable[[], None] | None = None,
     ):
         """Initialize project watcher.
 
@@ -34,12 +35,14 @@ class ProjectWatcher:
             projects_dir: Parent directory containing project subdirectories
                 (e.g., ~/.claude/projects). Used in global mode to discover new projects.
             global_mode: If True, re-scan projects_dir for new subdirectories on each poll.
+            on_initial_load_done: Callback called after the initial scan completes.
         """
         self._project_paths = list(project_paths)
         self._on_session_discovered = on_session_discovered
         self._max_sessions = max_sessions
         self._projects_dir = projects_dir
         self._global_mode = global_mode
+        self._on_initial_load_done = on_initial_load_done
         self._known_sessions: set[str] = set()  # Sessions we've loaded
         self._skipped_sessions: dict[str, tuple[Path, float]] = {}  # session_id -> (path, last_mtime)
         self._running = False
@@ -84,6 +87,10 @@ class ProjectWatcher:
         # Track skipped sessions with their mtime (to detect if they become active)
         for file, mtime in sessions_to_skip:
             self._skipped_sessions[file.stem] = (file, mtime)
+
+        # Signal that initial load is complete
+        if self._on_initial_load_done:
+            self._on_initial_load_done()
 
         # Start background polling thread
         self._running = True

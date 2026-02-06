@@ -36,6 +36,7 @@ class EventStore:
         self._transcript_watchers: dict[str, TranscriptWatcher] = {}  # session_id -> watcher
         self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
         self._project_watcher: ProjectWatcher | None = None
+        self._initial_load_done = False  # Set after initial scan completes
 
         # Load config and initialize summarizer
         config = load_config()
@@ -70,8 +71,14 @@ class EventStore:
             max_sessions=max_sessions,
             projects_dir=projects_dir,
             global_mode=global_mode,
+            on_initial_load_done=self._on_initial_load_done,
         )
         self._project_watcher.start()
+
+    def _on_initial_load_done(self) -> None:
+        """Called when ProjectWatcher finishes its initial scan."""
+        with self._lock:
+            self._initial_load_done = True
 
     def _on_session_discovered(self, session_id: str, transcript_path: Path) -> None:
         """Handle discovery of a new session file.
@@ -100,8 +107,10 @@ class EventStore:
             )
             self._sessions[session_id] = session
 
-            # Auto-activate newly discovered sessions
-            self._active_session_id = session_id
+            # During initial load, select first session only (most recent due to sort order).
+            # After initial load, always auto-activate newly discovered sessions.
+            if self._initial_load_done or self._active_session_id is None:
+                self._active_session_id = session_id
 
         # Load transcript history and start watcher (outside lock)
         file_position = self._load_transcript_history(session_id, str(transcript_path))
