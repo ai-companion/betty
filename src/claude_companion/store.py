@@ -48,18 +48,28 @@ class EventStore:
         self._summary_cache = SummaryCache()  # single cache for both assistant and tool summaries
         self._annotation_cache = AnnotationCache()  # user annotations
 
-    def start_watching(self, project_paths: list[Path], max_sessions: int | None = None) -> None:
+    def start_watching(
+        self,
+        project_paths: list[Path],
+        max_sessions: int | None = None,
+        projects_dir: Path | None = None,
+        global_mode: bool = False,
+    ) -> None:
         """Start watching project directories for sessions.
 
         Args:
             project_paths: List of project directories to watch for .jsonl session files
             max_sessions: Maximum number of sessions to load on initial scan.
                 If None, all sessions are loaded. New sessions are always detected.
+            projects_dir: Parent directory for project subdirectories (for global mode discovery).
+            global_mode: If True, dynamically discover new project directories.
         """
         self._project_watcher = ProjectWatcher(
             project_paths,
             on_session_discovered=self._on_session_discovered,
             max_sessions=max_sessions,
+            projects_dir=projects_dir,
+            global_mode=global_mode,
         )
         self._project_watcher.start()
 
@@ -90,9 +100,8 @@ class EventStore:
             )
             self._sessions[session_id] = session
 
-            # Auto-select first session
-            if self._active_session_id is None:
-                self._active_session_id = session_id
+            # Auto-activate newly discovered sessions
+            self._active_session_id = session_id
 
         # Load transcript history and start watcher (outside lock)
         file_position = self._load_transcript_history(session_id, str(transcript_path))
