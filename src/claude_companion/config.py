@@ -36,6 +36,7 @@ class Config:
     llm: LLMConfig
     style: str = field(default=DEFAULT_STYLE)
     collapse_tools: bool = field(default=True)  # Collapse tool turns into groups
+    debug_logging: bool = field(default=False)  # Enable debug logging to file (opt-in)
 
 
 # Default configuration
@@ -47,6 +48,7 @@ DEFAULT_CONFIG = Config(
     ),
     style=DEFAULT_STYLE,
     collapse_tools=True,
+    debug_logging=False,
 )
 
 # Config file path
@@ -105,6 +107,7 @@ def load_config() -> Config:
     llm_model = DEFAULT_CONFIG.llm.model
     style = DEFAULT_STYLE
     collapse_tools = DEFAULT_CONFIG.collapse_tools
+    debug_logging = DEFAULT_CONFIG.debug_logging
 
     # Try loading from config file (TOML first, then JSON for backwards compat)
     data = None
@@ -126,6 +129,7 @@ def load_config() -> Config:
         llm_model = llm_data.get("model", llm_model)
         style = data.get("style", style)
         collapse_tools = data.get("collapse_tools", collapse_tools)
+        debug_logging = data.get("debug_logging", debug_logging)
 
     # Environment variables override everything
     provider = os.getenv("CLAUDE_COMPANION_LLM_PROVIDER", provider)
@@ -135,6 +139,9 @@ def load_config() -> Config:
     collapse_tools_env = os.getenv("CLAUDE_COMPANION_COLLAPSE_TOOLS")
     if collapse_tools_env is not None:
         collapse_tools = collapse_tools_env.lower() in ("true", "1", "yes")
+    debug_logging_env = os.getenv("CLAUDE_COMPANION_DEBUG_LOGGING")
+    if debug_logging_env is not None:
+        debug_logging = debug_logging_env.lower() in ("true", "1", "yes")
 
     # Load API key from environment based on provider
     api_key = None
@@ -154,6 +161,7 @@ def load_config() -> Config:
         ),
         style=style,
         collapse_tools=collapse_tools,
+        debug_logging=debug_logging,
     )
 
 
@@ -171,6 +179,7 @@ def save_config(config: Config) -> None:
         },
         "style": config.style,
         "collapse_tools": config.collapse_tools,
+        "debug_logging": config.debug_logging,
     }
 
     # Save base_url for local providers and openrouter

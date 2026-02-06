@@ -111,12 +111,15 @@ class TranscriptWatcher:
 
                 while True:
                     line_start = f.tell()
-                    line = f.readline()
+                    raw_line = f.readline()
 
-                    if not line:
+                    if not raw_line:
                         break  # EOF
 
-                    line = line.strip()
+                    # Check for newline BEFORE stripping to distinguish complete vs incomplete lines
+                    has_newline = raw_line.endswith("\n")
+                    line = raw_line.strip()
+
                     if not line:
                         # Empty line - update position and continue
                         last_good_position = f.tell()
@@ -129,19 +132,17 @@ class TranscriptWatcher:
                             logger.debug(f"No turns extracted from entry type: {entry.get('type', 'unknown')}")
                         for turn in turns:
                             self._on_turn(turn)
-                            logger.debug(f"Parsed turn: role={turn.role} turn_number={turn.turn_number}")
                         # Successfully parsed - update position to after this line
                         last_good_position = f.tell()
                     except json.JSONDecodeError as e:
-                        # Check if this looks like a complete line (ends with })
-                        if line.endswith("}"):
+                        # Use newline presence to determine if line is complete
+                        if has_newline:
                             # Complete but malformed - skip it
                             logger.warning(f"Malformed JSON line (skipping): {e}")
-                            logger.debug(f"Line content: {line[:200]}")
                             last_good_position = f.tell()
                         else:
                             # Likely incomplete (Claude still writing) - stop here
-                            logger.debug(f"Incomplete JSON line (will retry): {line[:100]}")
+                            logger.debug(f"Incomplete JSON line (will retry)")
                             break
         except IOError as e:
             logger.error(f"Error reading transcript file: {e}")
