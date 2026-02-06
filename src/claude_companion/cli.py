@@ -1,5 +1,6 @@
 """CLI entry point for Claude Companion."""
 
+import logging
 from pathlib import Path
 
 import click
@@ -64,6 +65,18 @@ def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
 
 def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, collapse_tools: bool = True) -> None:
     """Run the main companion TUI with directory-based session discovery."""
+    # Configure logging to file for debugging
+    log_file = Path.home() / ".cache" / "claude-companion" / "debug.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+        ],
+    )
+    logging.info("Claude Companion starting")
+
     projects_dir = Path.home() / ".claude" / "projects"
     project_paths = get_project_paths(global_mode)
 
