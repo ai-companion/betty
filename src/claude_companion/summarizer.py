@@ -1,6 +1,8 @@
 """LLM summarization for assistant turns using local or API providers."""
 
 import logging
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -159,7 +161,7 @@ class Summarizer:
 
     def __init__(
         self,
-        provider: Literal["local", "openai", "openrouter", "anthropic"],
+        provider: Literal["local", "openai", "openrouter", "anthropic", "claude-code"],
         model: str,
         base_url: str | None = None,
         api_key: str | None = None,
@@ -170,6 +172,14 @@ class Summarizer:
         self.base_url = base_url.rstrip("/") if base_url else None
         self.api_key = api_key
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+        # Preflight check for claude-code provider
+        if provider == "claude-code" and not shutil.which("claude"):
+            logger.warning(
+                "claude-code provider selected but 'claude' CLI not found on PATH. "
+                "Summarization will fail. Install Claude Code or switch provider: "
+                "claude-companion config --preset <provider>"
+            )
 
         # Lazy-load API clients
         self._openai_client = None
@@ -231,6 +241,8 @@ class Summarizer:
                 summary = self._summarize_openrouter(prompt, TOOL_SYSTEM_PROMPT)
             elif self.provider == "anthropic":
                 summary = self._summarize_anthropic(prompt, TOOL_SYSTEM_PROMPT)
+            elif self.provider == "claude-code":
+                summary = self._summarize_claude_code(prompt, TOOL_SYSTEM_PROMPT)
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -239,7 +251,7 @@ class Summarizer:
         except requests.exceptions.ConnectionError:
             logger.debug(f"Summarizer: {self.provider} server not available")
             callback("[server unavailable]", False)
-        except requests.exceptions.Timeout:
+        except (requests.exceptions.Timeout, subprocess.TimeoutExpired):
             logger.debug(f"Summarizer: {self.provider} request timed out")
             callback("[timeout]", False)
         except Exception as e:
@@ -286,6 +298,8 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
                 critique = self._summarize_openrouter(prompt, CRITIC_SYSTEM_PROMPT)
             elif self.provider == "anthropic":
                 critique = self._summarize_anthropic(prompt, CRITIC_SYSTEM_PROMPT)
+            elif self.provider == "claude-code":
+                critique = self._summarize_claude_code(prompt, CRITIC_SYSTEM_PROMPT)
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -303,7 +317,7 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
         except requests.exceptions.ConnectionError:
             logger.debug(f"Critic: {self.provider} server not available")
             callback("[critic unavailable]", "progress", False)
-        except requests.exceptions.Timeout:
+        except (requests.exceptions.Timeout, subprocess.TimeoutExpired):
             logger.debug(f"Critic: {self.provider} request timed out")
             callback("[critic timeout]", "progress", False)
         except Exception as e:
@@ -339,6 +353,8 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
                 summary = self._summarize_openrouter(prompt, SYSTEM_PROMPT)
             elif self.provider == "anthropic":
                 summary = self._summarize_anthropic(prompt, SYSTEM_PROMPT)
+            elif self.provider == "claude-code":
+                summary = self._summarize_claude_code(prompt, SYSTEM_PROMPT)
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -347,7 +363,7 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
         except requests.exceptions.ConnectionError:
             logger.debug(f"Summarizer: {self.provider} server not available")
             callback("[server unavailable]", False)
-        except requests.exceptions.Timeout:
+        except (requests.exceptions.Timeout, subprocess.TimeoutExpired):
             logger.debug(f"Summarizer: {self.provider} request timed out")
             callback("[timeout]", False)
         except Exception as e:
@@ -441,6 +457,24 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
             ],
         )
         return response.content[0].text.strip()
+
+    def _summarize_claude_code(self, prompt: str, system_prompt: str) -> str:
+        """Summarize using claude CLI in single-prompt mode.
+
+        Prompt is piped via stdin to avoid OS ARG_MAX limits on long prompts.
+        """
+        result = subprocess.run(
+            ["claude", "-p", "--no-session-persistence", "--model", self.model,
+             "--disable-slash-commands", "--tools", "", "--setting-sources", "",
+             "--system-prompt", system_prompt],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"claude exited with code {result.returncode}")
+        return result.stdout.strip()
 
     def shutdown(self) -> None:
         """Shutdown the executor, cancelling pending tasks."""
