@@ -123,7 +123,7 @@ def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, coll
 @click.option("--style", type=click.Choice(["rich", "claude-code"]), help="UI style")
 @click.option("--url", help="LLM server base URL (e.g., http://localhost:1234/v1, for local only)")
 @click.option("--model", help="LLM model name (e.g., gpt-4o-mini)")
-@click.option("--preset", type=click.Choice(["vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
+@click.option("--preset", type=click.Choice(["claude-code", "vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
 @click.option("--show", is_flag=True, help="Show current configuration")
 def config(style: str | None, url: str | None, model: str | None, preset: str | None, show: bool) -> None:
     """Configure Claude Companion settings.

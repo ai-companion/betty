@@ -23,7 +23,7 @@ DEFAULT_STYLE = "rich"
 class LLMConfig:
     """LLM server configuration for summarization."""
 
-    provider: Literal["local", "openai", "openrouter", "anthropic"]
+    provider: Literal["local", "openai", "openrouter", "anthropic", "claude-code"]
     model: str
     base_url: str | None = None  # For local providers or custom endpoints
     api_key: str | None = None  # Only for API providers (loaded from env)
@@ -42,9 +42,8 @@ class Config:
 # Default configuration
 DEFAULT_CONFIG = Config(
     llm=LLMConfig(
-        provider="local",
-        base_url="http://localhost:8008/v1",  # vLLM default
-        model="Qwen/Qwen3-30B-A3B-Instruct-2507",
+        provider="claude-code",
+        model="haiku",
     ),
     style=DEFAULT_STYLE,
     collapse_tools=True,
@@ -186,6 +185,8 @@ def save_config(config: Config) -> None:
     if config.llm.provider in ("local", "openrouter") and config.llm.base_url:
         data["llm"]["base_url"] = config.llm.base_url
 
+    # claude-code provider doesn't need base_url
+
     with open(CONFIG_FILE, "wb") as f:
         tomli_w.dump(data, f)
 
@@ -226,5 +227,10 @@ def get_example_configs() -> dict[str, dict[str, Any]]:
             "provider": "anthropic",
             "model": "claude-3-5-haiku-20241022",
             "description": "Anthropic API (requires ANTHROPIC_API_KEY env var)",
+        },
+        "claude-code": {
+            "provider": "claude-code",
+            "model": "haiku",
+            "description": "Claude Code CLI (uses `claude -p`, no API key needed)",
         },
     }
