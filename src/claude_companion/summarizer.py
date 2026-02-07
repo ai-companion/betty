@@ -465,6 +465,7 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
         """
         result = subprocess.run(
             ["claude", "-p", "--no-session-persistence", "--model", self.model,
+             "--disable-slash-commands", "--tools", "", "--setting-sources", "",
              "--system-prompt", system_prompt],
             input=prompt,
             capture_output=True,
