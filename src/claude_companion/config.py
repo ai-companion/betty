@@ -198,7 +198,7 @@ def get_example_configs() -> dict[str, dict[str, Any]]:
             "provider": "local",
             "base_url": "http://localhost:8008/v1",
             "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
-            "description": "vLLM server (default)",
+            "description": "vLLM server",
         },
         "lm-studio": {
             "provider": "local",

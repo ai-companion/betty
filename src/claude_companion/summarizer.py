@@ -1,6 +1,7 @@
 """LLM summarization for assistant turns using local or API providers."""
 
 import logging
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Callable, Literal
@@ -171,6 +172,14 @@ class Summarizer:
         self.base_url = base_url.rstrip("/") if base_url else None
         self.api_key = api_key
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+        # Preflight check for claude-code provider
+        if provider == "claude-code" and not shutil.which("claude"):
+            logger.warning(
+                "claude-code provider selected but 'claude' CLI not found on PATH. "
+                "Summarization will fail. Install Claude Code or switch provider: "
+                "claude-companion config --preset <provider>"
+            )
 
         # Lazy-load API clients
         self._openai_client = None
@@ -450,10 +459,14 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
         return response.content[0].text.strip()
 
     def _summarize_claude_code(self, prompt: str, system_prompt: str) -> str:
-        """Summarize using claude CLI in single-prompt mode."""
+        """Summarize using claude CLI in single-prompt mode.
+
+        Prompt is piped via stdin to avoid OS ARG_MAX limits on long prompts.
+        """
         result = subprocess.run(
             ["claude", "-p", "--no-session-persistence", "--model", self.model,
-             "--system-prompt", system_prompt, prompt],
+             "--system-prompt", system_prompt],
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=60,
