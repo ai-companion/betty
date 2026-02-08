@@ -51,39 +51,61 @@ CRITIC_SYSTEM_PROMPT = (
 )
 
 
-def make_tool_cache_key(tool_turns: list[Turn]) -> str:
+def _prompt_fingerprint(model: str, system_prompt: str) -> str:
+    """Create a short fingerprint from model name and system prompt.
+
+    This ensures cache keys are invalidated when the model or prompt changes.
+
+    Args:
+        model: Model name/identifier
+        system_prompt: System prompt text
+
+    Returns:
+        12-char hex digest uniquely identifying the model+prompt combination
+    """
+    import hashlib
+    return hashlib.sha256(f"{model}|{system_prompt}".encode()).hexdigest()[:12]
+
+
+def make_tool_cache_key(tool_turns: list[Turn], model: str, system_prompt: str) -> str:
     """Create cache key for a sequence of tool turns.
 
     Args:
         tool_turns: List of tool turns
+        model: Model name (for cache invalidation on model change)
+        system_prompt: System prompt (for cache invalidation on prompt change)
 
     Returns:
         Cache key that uniquely identifies this tool sequence
     """
     import hashlib
+    fingerprint = _prompt_fingerprint(model, system_prompt)
     # use hash of full content to avoid collisions from truncated previews
     tool_sig = "|".join(
         f"{t.tool_name}:{hashlib.sha256(t.content_full.encode()).hexdigest()[:12]}"
         for t in tool_turns
     )
-    return f"TOOLS::{tool_sig}"
+    return f"TOOLS::{fingerprint}::{tool_sig}"
 
 
-def make_critic_cache_key(assistant_turn: Turn, context: dict) -> str:
+def make_critic_cache_key(assistant_turn: Turn, context: dict, model: str, system_prompt: str) -> str:
     """Create cache key for critic evaluation.
 
     Args:
         assistant_turn: The assistant turn being critiqued
         context: Context dictionary with user_message and active_tasks
+        model: Model name (for cache invalidation on model change)
+        system_prompt: System prompt (for cache invalidation on prompt change)
 
     Returns:
         Cache key that uniquely identifies this critique
     """
     import hashlib
+    fingerprint = _prompt_fingerprint(model, system_prompt)
     content_sig = hashlib.sha256(assistant_turn.content_full.encode()).hexdigest()[:12]
     context_str = f"{context['user_message']}|{context['active_tasks']}|{context.get('tool_summary', '')}"
     context_sig = hashlib.sha256(context_str.encode()).hexdigest()[:8]
-    return f"CRITIC::{content_sig}::{context_sig}"
+    return f"CRITIC::{fingerprint}::{content_sig}::{context_sig}"
 
 
 def _get_turn_context(session: "Session", assistant_turn: Turn, max_tools: int = 10) -> tuple[Turn | None, list[Turn]]:
