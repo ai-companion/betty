@@ -21,8 +21,8 @@ uv run claude-companion
 
 # LLM configuration (for summarization)
 claude-companion config --show                    # Show current config
-claude-companion config --preset lm-studio        # Use LM Studio preset
-claude-companion config --preset ollama           # Use Ollama preset
+claude-companion config --llm-preset lm-studio    # Use LM Studio preset
+claude-companion config --llm-preset ollama       # Use Ollama preset
 claude-companion config --url URL --model MODEL   # Custom configuration
 
 # Test imports

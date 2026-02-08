@@ -83,7 +83,7 @@ claude-companion config --show
 # 1. Start LM Studio and load a model
 # 2. Enable the local server in LM Studio (default: http://localhost:1234)
 # 3. Configure the companion
-claude-companion config --preset lm-studio
+claude-companion config --llm-preset lm-studio
 
 # 4. Start the companion
 claude-companion
@@ -100,7 +100,7 @@ ollama serve
 ollama pull qwen2.5:7b
 
 # 3. Configure the companion
-claude-companion config --preset ollama
+claude-companion config --llm-preset ollama
 
 # 4. Start the companion
 claude-companion
@@ -113,7 +113,7 @@ claude-companion
 ```bash
 # 1. Get API key from https://openrouter.ai/keys
 # 2. Configure the companion
-claude-companion config --preset openrouter
+claude-companion config --llm-preset openrouter
 
 # 3. Set API key and start
 export OPENROUTER_API_KEY="sk-or-v1-..."
@@ -127,7 +127,7 @@ claude-companion
 ```bash
 # 1. Get API key from https://platform.openai.com/api-keys
 # 2. Configure the companion
-claude-companion config --preset openai
+claude-companion config --llm-preset openai
 
 # 3. Set API key and start
 export OPENAI_API_KEY="sk-..."
@@ -141,7 +141,7 @@ claude-companion
 ```bash
 # 1. Get API key from https://console.anthropic.com/
 # 2. Configure the companion
-claude-companion config --preset anthropic
+claude-companion config --llm-preset anthropic
 
 # 3. Set API key and start
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -156,12 +156,12 @@ Simply reconfigure and restart:
 
 ```bash
 # Switch to OpenRouter
-claude-companion config --preset openrouter
+claude-companion config --llm-preset openrouter
 export OPENROUTER_API_KEY="sk-or-v1-..."
 claude-companion
 
 # Switch back to LM Studio
-claude-companion config --preset lm-studio
+claude-companion config --llm-preset lm-studio
 claude-companion  # No API key needed
 ```
 
@@ -177,7 +177,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 Then simply:
 ```bash
-claude-companion config --preset openrouter
+claude-companion config --llm-preset openrouter
 claude-companion
 ```
 
