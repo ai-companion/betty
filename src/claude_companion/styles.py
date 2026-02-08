@@ -199,6 +199,17 @@ class RichStyle(StyleRenderer):
         if turn.role in ("user", "assistant"):
             subtitle = f"{turn.word_count:,} words"
 
+        # Add critic sentiment indicator for assistant turns
+        if turn.role == "assistant" and turn.critic_sentiment:
+            sentiment_map = {
+                "progress": "[green]✓[/green]",
+                "concern": "[yellow]⚠[/yellow]",
+                "critical": "[red]✗[/red]",
+            }
+            indicator = sentiment_map.get(turn.critic_sentiment, "")
+            if indicator and subtitle:
+                subtitle = f"{subtitle} {indicator}"
+
         if turn.role == "assistant":
             panel_content = Markdown(f"{expand_indicator}{content}")
         else:
@@ -424,8 +435,27 @@ class ClaudeCodeStyle(StyleRenderer):
             parts = [row]
             if conv_turn > 0:
                 timestamp_str = turn.timestamp.strftime("%H:%M")
-                status = f"── turn {conv_turn}, {turn.word_count} words, {timestamp_str} ──"
-                parts.append(Text(status, style="dim", justify="right"))
+                sentiment_indicator = ""
+                if turn.critic_sentiment:
+                    sentiment_map = {
+                        "progress": " ✓",
+                        "concern": " ⚠",
+                        "critical": " ✗",
+                    }
+                    sentiment_indicator = sentiment_map.get(turn.critic_sentiment, "")
+                sentiment_style = {
+                    "progress": "green",
+                    "concern": "yellow",
+                    "critical": "red",
+                }.get(turn.critic_sentiment or "", "dim")
+                status_text = Text(justify="right")
+                # Split to color only the sentiment indicator
+                base = f"── turn {conv_turn}, {turn.word_count} words, {timestamp_str}"
+                status_text.append(base, style="dim")
+                if sentiment_indicator:
+                    status_text.append(sentiment_indicator, style=sentiment_style)
+                status_text.append(" ──", style="dim")
+                parts.append(status_text)
             return Group(*parts)
 
         # Tool turns: render as Text to preserve verbatim output

@@ -39,12 +39,15 @@ TOOL_SYSTEM_PROMPT = (
 
 # System prompt for critic evaluation
 CRITIC_SYSTEM_PROMPT = (
-    "You are a supervisor evaluating an AI coding assistant's response. "
-    "Assess whether the assistant is making progress toward the user's request "
-    "and if any critical issues were introduced. "
-    "Provide a 1-2 sentence evaluation. Start with one of these indicators: "
-    "✓ (making progress, no issues), ⚠ (some concerns or partial progress), or "
-    "✗ (critical issues or off-track). Be constructive and specific."
+    "You are a supervisor evaluating an AI coding assistant's work. "
+    "Assess the assistant's response AND tool actions together. Consider: "
+    "Did commands succeed or fail? Were files modified correctly? Is the approach sound?\n\n"
+    "Start with exactly one indicator:\n"
+    "✓ = making progress, tools succeeded, on track\n"
+    "⚠ = partial progress, minor concerns (e.g. retry needed, suboptimal approach)\n"
+    "✗ = critical issue needing human attention (destructive action, repeated failures, "
+    "off-track from request, or errors the assistant hasn't addressed)\n\n"
+    "Follow with a 1-2 sentence evaluation. Be specific."
 )
 
 
@@ -78,7 +81,7 @@ def make_critic_cache_key(assistant_turn: Turn, context: dict) -> str:
     """
     import hashlib
     content_sig = hashlib.sha256(assistant_turn.content_full.encode()).hexdigest()[:12]
-    context_str = f"{context['user_message']}|{context['active_tasks']}"
+    context_str = f"{context['user_message']}|{context['active_tasks']}|{context.get('tool_summary', '')}"
     context_sig = hashlib.sha256(context_str.encode()).hexdigest()[:8]
     return f"CRITIC::{content_sig}::{context_sig}"
 
@@ -137,10 +140,11 @@ def _get_critic_context(session: "Session", assistant_turn: Turn) -> dict:
         assistant_turn: The assistant turn being critiqued
 
     Returns:
-        Dictionary with user_message, assistant_response, active_tasks, turn_number, total_turns
+        Dictionary with user_message, assistant_response, active_tasks,
+        turn_number, total_turns, and tool_summary
     """
-    # Find preceding user message
-    user_turn, _ = _get_turn_context(session, assistant_turn)
+    # Find preceding user message and tool turns
+    user_turn, tool_turns = _get_turn_context(session, assistant_turn)
     user_message = user_turn.content_full if user_turn else "[No user message]"
 
     # Get active tasks
@@ -151,10 +155,21 @@ def _get_critic_context(session: "Session", assistant_turn: Turn) -> dict:
     ]
     tasks_summary = "\n".join(active_tasks) if active_tasks else "[No active tasks]"
 
+    # Build tool summary from preceding tool turns
+    max_tool_content = 300
+    tool_lines = []
+    for t in tool_turns[:10]:
+        content = t.content_full
+        if len(content) > max_tool_content:
+            content = content[:max_tool_content] + "..."
+        tool_lines.append(f"  - {t.tool_name}: {content}")
+    tool_summary = "\n".join(tool_lines) if tool_lines else "  [No tools called]"
+
     return {
         "user_message": user_message,
         "assistant_response": assistant_turn.content_full,
         "active_tasks": tasks_summary,
+        "tool_summary": tool_summary,
         "turn_number": assistant_turn.turn_number,
         "total_turns": len(session.turns),
     }
@@ -339,11 +354,13 @@ class Summarizer:
 - Turn {context['turn_number']} of {context['total_turns']}
 - Active tasks:
 {context['active_tasks']}
+- Tools called:
+{context['tool_summary']}
 
 Assistant's response:
 {assistant_response}
 
-Evaluate: Is the assistant making progress toward the user's request? Were any critical issues introduced?"""
+Evaluate: Is the assistant making progress? Did tool actions succeed? Any critical issues?"""
 
             critique = self._call_llm(prompt, CRITIC_SYSTEM_PROMPT)
 
