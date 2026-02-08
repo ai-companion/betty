@@ -1,10 +1,11 @@
 """Configuration management for Claude Companion."""
 
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 # Use tomllib on Python 3.11+, fall back to tomli for 3.10
 if sys.version_info >= (3, 11):
@@ -14,6 +15,7 @@ else:
 
 import tomli_w
 
+logger = logging.getLogger(__name__)
 
 # Default style for TUI
 DEFAULT_STYLE = "rich"
@@ -21,12 +23,24 @@ DEFAULT_STYLE = "rich"
 
 @dataclass
 class LLMConfig:
-    """LLM server configuration for summarization."""
+    """LLM server configuration for summarization.
 
-    provider: Literal["local", "openai", "openrouter", "anthropic", "claude-code"]
+    The model string encodes the provider using litellm conventions:
+    - "openai/gpt-4o-mini" → OpenAI API
+    - "anthropic/claude-3-5-haiku-20241022" → Anthropic API
+    - "openrouter/openai/gpt-4o-mini" → OpenRouter
+    - "ollama/qwen2.5:7b" → Ollama (native litellm support)
+    - "claude-code/haiku" → Claude Code CLI subprocess (special case)
+    """
+
     model: str
-    base_url: str | None = None  # For local providers or custom endpoints
-    api_key: str | None = None  # Only for API providers (loaded from env)
+    api_base: str | None = None  # For local providers or custom endpoints
+    api_key: str | None = None  # Explicit API key (litellm also reads env vars)
+
+    @property
+    def is_claude_code(self) -> bool:
+        """Check if this config uses the claude-code subprocess provider."""
+        return self.model.startswith("claude-code/")
 
 
 @dataclass
@@ -42,8 +56,7 @@ class Config:
 # Default configuration
 DEFAULT_CONFIG = Config(
     llm=LLMConfig(
-        provider="claude-code",
-        model="haiku",
+        model="claude-code/haiku",
     ),
     style=DEFAULT_STYLE,
     collapse_tools=True,
@@ -73,6 +86,54 @@ def _migrate_json_config() -> None:
             pass  # Silently ignore migration errors
 
 
+def _migrate_provider_config(data: dict) -> bool:
+    """Migrate old provider+model config to litellm model string format.
+
+    Converts e.g. {"provider": "openai", "model": "gpt-4o-mini"}
+    to {"model": "openai/gpt-4o-mini"} and re-saves.
+
+    Returns True if migration occurred.
+    """
+    llm_data = data.get("llm", {})
+    provider = llm_data.get("provider")
+    if not provider:
+        return False
+
+    model = llm_data.get("model", "")
+
+    # Map old provider+model to litellm model string
+    if provider == "claude-code":
+        new_model = f"claude-code/{model}"
+    elif provider == "local":
+        # Local providers: keep raw model name, api_base handles routing
+        new_model = model
+    elif provider in ("openai", "openrouter", "anthropic"):
+        new_model = f"{provider}/{model}" if "/" not in model else model
+    else:
+        new_model = model
+
+    # Update data in-place
+    llm_data["model"] = new_model
+    llm_data.pop("provider", None)
+
+    # Rename base_url -> api_base
+    if "base_url" in llm_data:
+        llm_data["api_base"] = llm_data.pop("base_url")
+
+    data["llm"] = llm_data
+
+    # Re-save config
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_FILE, "wb") as f:
+            tomli_w.dump(data, f)
+        logger.info(f"Migrated config: provider={provider} -> model={new_model}")
+    except Exception:
+        pass
+
+    return True
+
+
 def _load_from_json() -> dict | None:
     """Try to load config from legacy JSON file (fallback)."""
     import json
@@ -93,17 +154,15 @@ def load_config() -> Config:
     2. Config file (~/.claude-companion/config.toml)
     3. Hardcoded defaults
 
-    API keys are always loaded from environment variables:
-    - OPENAI_API_KEY for OpenAI
-    - ANTHROPIC_API_KEY for Anthropic
+    API keys for litellm providers are read from standard env vars
+    (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) by litellm automatically.
     """
     # Migrate legacy JSON config if needed
     _migrate_json_config()
 
     # Start with defaults
-    provider = DEFAULT_CONFIG.llm.provider
-    llm_url = DEFAULT_CONFIG.llm.base_url
     llm_model = DEFAULT_CONFIG.llm.model
+    api_base = DEFAULT_CONFIG.llm.api_base
     style = DEFAULT_STYLE
     collapse_tools = DEFAULT_CONFIG.collapse_tools
     debug_logging = DEFAULT_CONFIG.debug_logging
@@ -122,17 +181,27 @@ def load_config() -> Config:
         data = _load_from_json()
 
     if data is not None:
+        # Auto-migrate old provider-based config
+        _migrate_provider_config(data)
+
         llm_data = data.get("llm", {})
-        provider = llm_data.get("provider", provider)
-        llm_url = llm_data.get("base_url", llm_url)
         llm_model = llm_data.get("model", llm_model)
+        api_base = llm_data.get("api_base", api_base)
         style = data.get("style", style)
         collapse_tools = data.get("collapse_tools", collapse_tools)
         debug_logging = data.get("debug_logging", debug_logging)
 
     # Environment variables override everything
-    provider = os.getenv("CLAUDE_COMPANION_LLM_PROVIDER", provider)
-    llm_url = os.getenv("CLAUDE_COMPANION_LLM_URL", llm_url)
+    # Deprecation warning for old env var
+    if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
+        logger.warning(
+            "CLAUDE_COMPANION_LLM_PROVIDER is deprecated. "
+            "Use CLAUDE_COMPANION_LLM_MODEL with litellm prefix instead "
+            "(e.g., 'openai/gpt-4o-mini')."
+        )
+
+    api_base = os.getenv("CLAUDE_COMPANION_LLM_API_BASE",
+                         os.getenv("CLAUDE_COMPANION_LLM_URL", api_base))
     llm_model = os.getenv("CLAUDE_COMPANION_LLM_MODEL", llm_model)
     style = os.getenv("CLAUDE_COMPANION_STYLE", style)
     collapse_tools_env = os.getenv("CLAUDE_COMPANION_COLLAPSE_TOOLS")
@@ -142,21 +211,10 @@ def load_config() -> Config:
     if debug_logging_env is not None:
         debug_logging = debug_logging_env.lower() in ("true", "1", "yes")
 
-    # Load API key from environment based on provider
-    api_key = None
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-    elif provider == "openrouter":
-        api_key = os.getenv("OPENROUTER_API_KEY")
-    elif provider == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-
     return Config(
         llm=LLMConfig(
-            provider=provider,
-            base_url=llm_url,
             model=llm_model,
-            api_key=api_key,
+            api_base=api_base,
         ),
         style=style,
         collapse_tools=collapse_tools,
@@ -167,13 +225,12 @@ def load_config() -> Config:
 def save_config(config: Config) -> None:
     """Save configuration to file.
 
-    Note: API keys are never saved to the config file, only loaded from environment.
+    Note: API keys are never saved to the config file.
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     data: dict[str, Any] = {
         "llm": {
-            "provider": config.llm.provider,
             "model": config.llm.model,
         },
         "style": config.style,
@@ -181,11 +238,9 @@ def save_config(config: Config) -> None:
         "debug_logging": config.debug_logging,
     }
 
-    # Save base_url for local providers and openrouter
-    if config.llm.provider in ("local", "openrouter") and config.llm.base_url:
-        data["llm"]["base_url"] = config.llm.base_url
-
-    # claude-code provider doesn't need base_url
+    # Save api_base when set (for local/custom endpoints)
+    if config.llm.api_base:
+        data["llm"]["api_base"] = config.llm.api_base
 
     with open(CONFIG_FILE, "wb") as f:
         tomli_w.dump(data, f)
@@ -195,42 +250,33 @@ def get_example_configs() -> dict[str, dict[str, Any]]:
     """Get example configurations for common LLM providers."""
     return {
         "vllm": {
-            "provider": "local",
-            "base_url": "http://localhost:8008/v1",
-            "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+            "api_base": "http://localhost:8008/v1",
+            "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
             "description": "vLLM server",
         },
         "lm-studio": {
-            "provider": "local",
-            "base_url": "http://localhost:1234/v1",
-            "model": "openai/gpt-oss-20b",
+            "api_base": "http://localhost:1234/v1",
+            "model": "gpt-oss-20b",
             "description": "LM Studio",
         },
         "ollama": {
-            "provider": "local",
-            "base_url": "http://localhost:11434/v1",
-            "model": "qwen2.5:7b",
-            "description": "Ollama",
+            "model": "ollama/qwen2.5:7b",
+            "description": "Ollama (native litellm support, no api_base needed)",
         },
         "openai": {
-            "provider": "openai",
-            "model": "gpt-4o-mini",
+            "model": "openai/gpt-4o-mini",
             "description": "OpenAI API (requires OPENAI_API_KEY env var)",
         },
         "openrouter": {
-            "provider": "openrouter",
-            "model": "openai/gpt-4o-mini",
-            "base_url": "https://openrouter.ai/api/v1",
+            "model": "openrouter/openai/gpt-4o-mini",
             "description": "OpenRouter API (requires OPENROUTER_API_KEY env var)",
         },
         "anthropic": {
-            "provider": "anthropic",
-            "model": "claude-3-5-haiku-20241022",
+            "model": "anthropic/claude-3-5-haiku-20241022",
             "description": "Anthropic API (requires ANTHROPIC_API_KEY env var)",
         },
         "claude-code": {
-            "provider": "claude-code",
-            "model": "haiku",
+            "model": "claude-code/haiku",
             "description": "Claude Code CLI (uses `claude -p`, no API key needed)",
         },
     }
