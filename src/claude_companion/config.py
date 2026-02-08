@@ -107,8 +107,17 @@ def _migrate_provider_config(data: dict) -> bool:
     elif provider == "local":
         # Local providers: keep raw model name, api_base handles routing
         new_model = model
-    elif provider in ("openai", "openrouter", "anthropic"):
+    elif provider == "openrouter":
+        # Always prefix with openrouter/ — litellm routes natively.
+        # Old configs had model like "openai/gpt-4o-mini" which needs
+        # the full "openrouter/openai/gpt-4o-mini" for litellm.
+        new_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
+        # Drop base_url: litellm handles OpenRouter endpoint natively
+        llm_data.pop("base_url", None)
+    elif provider in ("openai", "anthropic"):
         new_model = f"{provider}/{model}" if "/" not in model else model
+        # Drop base_url: litellm handles these endpoints natively
+        llm_data.pop("base_url", None)
     else:
         new_model = model
 
@@ -116,7 +125,7 @@ def _migrate_provider_config(data: dict) -> bool:
     llm_data["model"] = new_model
     llm_data.pop("provider", None)
 
-    # Rename base_url -> api_base
+    # Rename base_url -> api_base (only remains for local providers)
     if "base_url" in llm_data:
         llm_data["api_base"] = llm_data.pop("base_url")
 
