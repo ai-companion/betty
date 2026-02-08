@@ -443,7 +443,6 @@ class ClaudeCodeStyle(StyleRenderer):
                         "critical": " ✗",
                     }
                     sentiment_indicator = sentiment_map.get(turn.critic_sentiment, "")
-                status = f"── turn {conv_turn}, {turn.word_count} words, {timestamp_str}{sentiment_indicator} ──"
                 sentiment_style = {
                     "progress": "green",
                     "concern": "yellow",
