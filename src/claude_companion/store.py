@@ -495,6 +495,15 @@ class EventStore:
             turn.critic_sentiment = sentiment
             if success:
                 self._summary_cache.set(cache_key, critique)
+                # Fire alert on critical sentiment
+                if sentiment == "critical":
+                    alert = Alert(
+                        level=AlertLevel.DANGER,
+                        title="Critic: critical issue",
+                        message=critique,
+                        turn=turn,
+                    )
+                    self._add_alert(alert)
             # Notify listeners
             for listener in self._turn_listeners:
                 try:
