@@ -1,12 +1,13 @@
-"""LLM summarization for assistant turns using local or API providers."""
+"""LLM summarization for assistant turns using litellm, openai SDK, or claude-code subprocess."""
 
 import logging
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Callable
 
-import requests
+import litellm
+import openai
 
 from .models import Turn
 
@@ -14,6 +15,9 @@ if TYPE_CHECKING:
     from .models import Session
 
 logger = logging.getLogger(__name__)
+
+# Suppress litellm's verbose debug/info logging
+litellm.suppress_debug_info = True
 
 # System prompt for assistant text summarization (no tool context)
 SYSTEM_PROMPT = (
@@ -157,34 +161,27 @@ def _get_critic_context(session: "Session", assistant_turn: Turn) -> dict:
 
 
 class Summarizer:
-    """Summarizes assistant turns using local server or API providers (OpenAI, OpenRouter, Anthropic)."""
+    """Summarizes assistant turns using litellm (any provider) or claude-code subprocess."""
 
     def __init__(
         self,
-        provider: Literal["local", "openai", "openrouter", "anthropic", "claude-code"],
         model: str,
-        base_url: str | None = None,
+        api_base: str | None = None,
         api_key: str | None = None,
         max_workers: int = 2,
     ):
-        self.provider = provider
         self.model = model
-        self.base_url = base_url.rstrip("/") if base_url else None
+        self.api_base = api_base.rstrip("/") if api_base else None
         self.api_key = api_key
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
         # Preflight check for claude-code provider
-        if provider == "claude-code" and not shutil.which("claude"):
+        if self.model.startswith("claude-code/") and not shutil.which("claude"):
             logger.warning(
                 "claude-code provider selected but 'claude' CLI not found on PATH. "
                 "Summarization will fail. Install Claude Code or switch provider: "
                 "claude-companion config --preset <provider>"
             )
-
-        # Lazy-load API clients
-        self._openai_client = None
-        self._openrouter_client = None
-        self._anthropic_client = None
 
     def summarize_async(
         self,
@@ -211,6 +208,78 @@ class Summarizer:
         """Submit critique job, calls callback with (critique, sentiment, success)."""
         self._executor.submit(self._critique, turn, context, callback)
 
+    def _call_llm(self, prompt: str, system_prompt: str) -> str:
+        """Call LLM via litellm, openai SDK, or claude-code subprocess.
+
+        Routing:
+        - claude-code/* → subprocess
+        - api_base set  → openai SDK direct (local/custom servers)
+        - otherwise     → litellm (cloud providers with auto-routing)
+
+        Args:
+            prompt: User prompt to send
+            system_prompt: System prompt for context
+
+        Returns:
+            LLM response text
+        """
+        if self.model.startswith("claude-code/"):
+            return self._call_claude_code(prompt, system_prompt)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        if self.api_base:
+            # Local/custom OpenAI-compatible server: use openai SDK directly
+            # to avoid litellm model-name parsing and auth issues.
+            from openai import OpenAI
+            client = OpenAI(
+                base_url=self.api_base,
+                api_key=self.api_key or "no-key-required",
+            )
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=150,
+                temperature=0.3,
+            )
+        else:
+            # Cloud provider: use litellm for routing (openai/, anthropic/, etc.)
+            kwargs: dict = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": 150,
+                "temperature": 0.3,
+            }
+            if self.api_key:
+                kwargs["api_key"] = self.api_key
+            response = litellm.completion(**kwargs)
+
+        return response.choices[0].message.content.strip()
+
+    def _call_claude_code(self, prompt: str, system_prompt: str) -> str:
+        """Call claude CLI in single-prompt mode.
+
+        Prompt is piped via stdin to avoid OS ARG_MAX limits on long prompts.
+        """
+        # Extract model name from "claude-code/<model>" prefix
+        claude_model = self.model.split("/", 1)[1] if "/" in self.model else self.model
+
+        result = subprocess.run(
+            ["claude", "-p", "--no-session-persistence", "--model", claude_model,
+             "--disable-slash-commands", "--tools", "", "--setting-sources", "",
+             "--system-prompt", system_prompt],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"claude exited with code {result.returncode}")
+        return result.stdout.strip()
+
     def _summarize_tools(
         self,
         tool_turns: list[Turn],
@@ -232,30 +301,17 @@ class Summarizer:
                 tool_lines.append(f"- {t.tool_name}: {content}")
             prompt = "Actions taken:\n" + "\n".join(tool_lines) + "\n\nSummarize these actions."
 
-            # Route to appropriate provider
-            if self.provider == "local":
-                summary = self._summarize_local(prompt, TOOL_SYSTEM_PROMPT)
-            elif self.provider == "openai":
-                summary = self._summarize_openai(prompt, TOOL_SYSTEM_PROMPT)
-            elif self.provider == "openrouter":
-                summary = self._summarize_openrouter(prompt, TOOL_SYSTEM_PROMPT)
-            elif self.provider == "anthropic":
-                summary = self._summarize_anthropic(prompt, TOOL_SYSTEM_PROMPT)
-            elif self.provider == "claude-code":
-                summary = self._summarize_claude_code(prompt, TOOL_SYSTEM_PROMPT)
-            else:
-                raise ValueError(f"Unknown provider: {self.provider}")
-
+            summary = self._call_llm(prompt, TOOL_SYSTEM_PROMPT)
             callback(summary, True)
 
-        except requests.exceptions.ConnectionError:
-            logger.debug(f"Summarizer: {self.provider} server not available")
+        except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):
+            logger.debug(f"Summarizer: {self.model} server not available")
             callback("[server unavailable]", False)
-        except (requests.exceptions.Timeout, subprocess.TimeoutExpired):
-            logger.debug(f"Summarizer: {self.provider} request timed out")
+        except (litellm.exceptions.Timeout, openai.APITimeoutError, subprocess.TimeoutExpired):
+            logger.debug(f"Summarizer: {self.model} request timed out")
             callback("[timeout]", False)
         except Exception as e:
-            logger.debug(f"Summarizer error ({self.provider}): {e}")
+            logger.debug(f"Summarizer error ({self.model}): {e}")
             callback(f"[error: {type(e).__name__}]", False)
 
     def _critique(
@@ -289,19 +345,7 @@ Assistant's response:
 
 Evaluate: Is the assistant making progress toward the user's request? Were any critical issues introduced?"""
 
-            # Route to provider
-            if self.provider == "local":
-                critique = self._summarize_local(prompt, CRITIC_SYSTEM_PROMPT)
-            elif self.provider == "openai":
-                critique = self._summarize_openai(prompt, CRITIC_SYSTEM_PROMPT)
-            elif self.provider == "openrouter":
-                critique = self._summarize_openrouter(prompt, CRITIC_SYSTEM_PROMPT)
-            elif self.provider == "anthropic":
-                critique = self._summarize_anthropic(prompt, CRITIC_SYSTEM_PROMPT)
-            elif self.provider == "claude-code":
-                critique = self._summarize_claude_code(prompt, CRITIC_SYSTEM_PROMPT)
-            else:
-                raise ValueError(f"Unknown provider: {self.provider}")
+            critique = self._call_llm(prompt, CRITIC_SYSTEM_PROMPT)
 
             # Extract sentiment
             sentiment = "progress"
@@ -314,14 +358,14 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
 
             callback(critique, sentiment, True)
 
-        except requests.exceptions.ConnectionError:
-            logger.debug(f"Critic: {self.provider} server not available")
+        except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):
+            logger.debug(f"Critic: {self.model} server not available")
             callback("[critic unavailable]", "progress", False)
-        except (requests.exceptions.Timeout, subprocess.TimeoutExpired):
-            logger.debug(f"Critic: {self.provider} request timed out")
+        except (litellm.exceptions.Timeout, openai.APITimeoutError, subprocess.TimeoutExpired):
+            logger.debug(f"Critic: {self.model} request timed out")
             callback("[critic timeout]", "progress", False)
         except Exception as e:
-            logger.debug(f"Critic error ({self.provider}): {e}")
+            logger.debug(f"Critic error ({self.model}): {e}")
             callback(f"[critic error: {type(e).__name__}]", "progress", False)
 
     def _summarize(
@@ -344,137 +388,18 @@ Evaluate: Is the assistant making progress toward the user's request? Were any c
             # Build prompt for assistant-only summarization
             prompt = f"What is the assistant communicating in this response?\n\n{content}"
 
-            # Route to appropriate provider
-            if self.provider == "local":
-                summary = self._summarize_local(prompt, SYSTEM_PROMPT)
-            elif self.provider == "openai":
-                summary = self._summarize_openai(prompt, SYSTEM_PROMPT)
-            elif self.provider == "openrouter":
-                summary = self._summarize_openrouter(prompt, SYSTEM_PROMPT)
-            elif self.provider == "anthropic":
-                summary = self._summarize_anthropic(prompt, SYSTEM_PROMPT)
-            elif self.provider == "claude-code":
-                summary = self._summarize_claude_code(prompt, SYSTEM_PROMPT)
-            else:
-                raise ValueError(f"Unknown provider: {self.provider}")
-
+            summary = self._call_llm(prompt, SYSTEM_PROMPT)
             callback(summary, True)
 
-        except requests.exceptions.ConnectionError:
-            logger.debug(f"Summarizer: {self.provider} server not available")
+        except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):
+            logger.debug(f"Summarizer: {self.model} server not available")
             callback("[server unavailable]", False)
-        except (requests.exceptions.Timeout, subprocess.TimeoutExpired):
-            logger.debug(f"Summarizer: {self.provider} request timed out")
+        except (litellm.exceptions.Timeout, openai.APITimeoutError, subprocess.TimeoutExpired):
+            logger.debug(f"Summarizer: {self.model} request timed out")
             callback("[timeout]", False)
         except Exception as e:
-            logger.debug(f"Summarizer error ({self.provider}): {e}")
+            logger.debug(f"Summarizer error ({self.model}): {e}")
             callback(f"[error: {type(e).__name__}]", False)
-
-    def _summarize_local(self, prompt: str, system_prompt: str) -> str:
-        """Summarize using local OpenAI-compatible server."""
-        if not self.base_url:
-            raise ValueError("base_url required for local provider")
-
-        response = requests.post(
-            f"{self.base_url}/chat/completions",
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 150,
-                "temperature": 0.3,
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
-
-    def _summarize_openai(self, prompt: str, system_prompt: str) -> str:
-        """Summarize using OpenAI API."""
-        if not self.api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set")
-
-        # Lazy-load openai client
-        if self._openai_client is None:
-            from openai import OpenAI
-            self._openai_client = OpenAI(api_key=self.api_key)
-
-        response = self._openai_client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=150,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
-
-    def _summarize_openrouter(self, prompt: str, system_prompt: str) -> str:
-        """Summarize using OpenRouter API (uses OpenAI SDK)."""
-        if not self.api_key:
-            raise ValueError("OPENROUTER_API_KEY environment variable not set")
-
-        # Lazy-load openrouter client (uses OpenAI SDK with custom base_url)
-        if self._openrouter_client is None:
-            from openai import OpenAI
-            self._openrouter_client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url or "https://openrouter.ai/api/v1",
-            )
-
-        response = self._openrouter_client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=150,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
-
-    def _summarize_anthropic(self, prompt: str, system_prompt: str) -> str:
-        """Summarize using Anthropic API."""
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-
-        # Lazy-load anthropic client
-        if self._anthropic_client is None:
-            from anthropic import Anthropic
-            self._anthropic_client = Anthropic(api_key=self.api_key)
-
-        response = self._anthropic_client.messages.create(
-            model=self.model,
-            max_tokens=150,
-            temperature=0.3,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-        )
-        return response.content[0].text.strip()
-
-    def _summarize_claude_code(self, prompt: str, system_prompt: str) -> str:
-        """Summarize using claude CLI in single-prompt mode.
-
-        Prompt is piped via stdin to avoid OS ARG_MAX limits on long prompts.
-        """
-        result = subprocess.run(
-            ["claude", "-p", "--no-session-persistence", "--model", self.model,
-             "--disable-slash-commands", "--tools", "", "--setting-sources", "",
-             "--system-prompt", system_prompt],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"claude exited with code {result.returncode}")
-        return result.stdout.strip()
 
     def shutdown(self) -> None:
         """Shutdown the executor, cancelling pending tasks."""
