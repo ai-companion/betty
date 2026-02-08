@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .config import CONFIG_FILE, DEFAULT_STYLE, get_example_configs, load_config, save_config, Config, LLMConfig
+from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig
 from .store import EventStore
 from .tui_textual import CompanionApp
 
@@ -50,9 +50,12 @@ def get_project_paths(global_mode: bool) -> list[Path]:
 
 @click.group(invoke_without_command=True)
 @click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects (not just current directory)")
+@click.option("--style", type=click.Choice(["rich", "claude-code"]), default=None, help="UI style override for this run")
+@click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
+@click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
-def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -61,14 +64,22 @@ def main(ctx: click.Context, global_mode: bool, version: bool) -> None:
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
         config = load_config()
-        run_companion(global_mode=global_mode, ui_style=config.style, collapse_tools=config.collapse_tools)
+        # Apply CLI overrides (not saved to config file)
+        if style is not None:
+            config.style = style
+        if collapse_tools is not None:
+            config.collapse_tools = collapse_tools
+        if debug_logging is not None:
+            config.debug_logging = debug_logging
+        run_companion(global_mode=global_mode, config=config)
 
 
-def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, collapse_tools: bool = True) -> None:
+def run_companion(global_mode: bool = False, config: Config | None = None) -> None:
     """Run the main companion TUI with directory-based session discovery."""
-    # Configure logging based on config (opt-in debug logging)
-    config = load_config()
+    if config is None:
+        config = load_config()
 
+    # Configure logging based on config (opt-in debug logging)
     if config.debug_logging:
         # Debug logging enabled - use rotating file handler
         log_file = Path.home() / ".cache" / "claude-companion" / "debug.log"
@@ -110,7 +121,7 @@ def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, coll
 
     try:
         # Run Textual TUI
-        app = CompanionApp(store, collapse_tools=collapse_tools, ui_style=ui_style)
+        app = CompanionApp(store, collapse_tools=config.collapse_tools, ui_style=config.style)
         app.run()
     except KeyboardInterrupt:
         pass
@@ -123,16 +134,20 @@ def run_companion(global_mode: bool = False, ui_style: str = DEFAULT_STYLE, coll
 @click.option("--style", type=click.Choice(["rich", "claude-code"]), help="UI style")
 @click.option("--url", help="LLM server API base URL (e.g., http://localhost:1234/v1)")
 @click.option("--model", help="LLM model name with litellm prefix (e.g., openai/gpt-4o-mini)")
-@click.option("--preset", type=click.Choice(["claude-code", "vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
+@click.option("--llm-preset", "preset", type=click.Choice(["claude-code", "vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
+@click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
+@click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--show", is_flag=True, help="Show current configuration")
-def config(style: str | None, url: str | None, model: str | None, preset: str | None, show: bool) -> None:
+def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, show: bool) -> None:
     """Configure Claude Companion settings.
 
     Examples:
-      claude-companion config --style claude-code    # Set UI style
-      claude-companion config --preset openrouter    # Use OpenRouter API
-      claude-companion config --preset lm-studio     # Use LM Studio
-      claude-companion config --show                 # Show current config
+      claude-companion config --style claude-code        # Set UI style
+      claude-companion config --llm-preset openrouter    # Use OpenRouter API
+      claude-companion config --llm-preset lm-studio     # Use LM Studio
+      claude-companion config --collapse-tools           # Enable tool collapsing
+      claude-companion config --debug-logging            # Enable debug logging
+      claude-companion config --show                     # Show current config
     """
     if show:
         # Show current configuration
@@ -140,6 +155,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
 
         console.print("\n[bold]Current Configuration:[/bold]")
         console.print(f"  Style:          [cyan]{current_config.style}[/cyan]")
+        console.print(f"  Collapse Tools: [cyan]{current_config.collapse_tools}[/cyan]")
         console.print(f"  Debug Logging:  [cyan]{current_config.debug_logging}[/cyan]")
 
         console.print("\n[bold]LLM Configuration:[/bold]")
@@ -168,6 +184,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         import os
         if os.getenv("CLAUDE_COMPANION_STYLE"):
             console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_STYLE is set: {os.getenv('CLAUDE_COMPANION_STYLE')}")
+        if os.getenv("CLAUDE_COMPANION_COLLAPSE_TOOLS"):
+            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_COLLAPSE_TOOLS is set: {os.getenv('CLAUDE_COMPANION_COLLAPSE_TOOLS')}")
         if os.getenv("CLAUDE_COMPANION_DEBUG_LOGGING"):
             console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_DEBUG_LOGGING is set: {os.getenv('CLAUDE_COMPANION_DEBUG_LOGGING')}")
         if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
@@ -184,6 +202,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     # Load current config to preserve values not being changed
     current_config = load_config()
     new_style = style if style else current_config.style
+    new_collapse_tools = collapse_tools if collapse_tools is not None else current_config.collapse_tools
+    new_debug_logging = debug_logging if debug_logging is not None else current_config.debug_logging
 
     if preset:
         # Use preset configuration
@@ -204,8 +224,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
                 api_base=preset_api_base,
             ),
             style=new_style,
-            collapse_tools=current_config.collapse_tools,
-            debug_logging=current_config.debug_logging,
+            collapse_tools=new_collapse_tools,
+            debug_logging=new_debug_logging,
         )
 
         save_config(new_config)
@@ -227,23 +247,25 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
         return
 
-    # Style-only change
-    if style and not url and not model:
-        new_config = Config(
-            llm=current_config.llm,
-            style=style,
-            collapse_tools=current_config.collapse_tools,
-            debug_logging=current_config.debug_logging,
-        )
-        save_config(new_config)
+    # Non-LLM config change (style, collapse_tools, debug_logging only)
+    if not url and not model and not preset:
+        if style or collapse_tools is not None or debug_logging is not None:
+            new_config = Config(
+                llm=current_config.llm,
+                style=new_style,
+                collapse_tools=new_collapse_tools,
+                debug_logging=new_debug_logging,
+            )
+            save_config(new_config)
 
-        console.print("\n[green]Configuration saved![/green]")
-        console.print(f"  Style: [cyan]{style}[/cyan]")
-        console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
-        return
+            console.print("\n[green]Configuration saved![/green]")
+            console.print(f"  Style:          [cyan]{new_style}[/cyan]")
+            console.print(f"  Collapse Tools: [cyan]{new_collapse_tools}[/cyan]")
+            console.print(f"  Debug Logging:  [cyan]{new_debug_logging}[/cyan]")
+            console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
+            return
 
-    if not url and not model and not preset and not style:
-        # Show help
+        # No flags at all — show help
         console.print("\n[bold]UI Styles:[/bold]")
         console.print("  [cyan]rich[/cyan]        Boxes with emojis (default)")
         console.print("  [cyan]claude-code[/cyan]  Minimal style matching Claude Code")
@@ -257,7 +279,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             console.print(f"               Model:    {cfg['model']}\n")
 
         console.print("Use --style to set UI style.")
-        console.print("Use --preset to apply an LLM preset.")
+        console.print("Use --llm-preset to apply an LLM preset.")
         console.print("Use --show to view current configuration.")
         return
 
@@ -271,8 +293,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             api_base=new_api_base,
         ),
         style=new_style,
-        collapse_tools=current_config.collapse_tools,
-        debug_logging=current_config.debug_logging,
+        collapse_tools=new_collapse_tools,
+        debug_logging=new_debug_logging,
     )
 
     save_config(new_config)
