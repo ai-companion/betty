@@ -12,9 +12,13 @@ from .config import load_config
 from .models import Session, TaskState, Turn
 from .project_watcher import ProjectWatcher
 from .summarizer import (
+    CRITIC_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    TOOL_SYSTEM_PROMPT,
     Summarizer,
     _get_turn_context,
     _get_critic_context,
+    _prompt_fingerprint,
     make_tool_cache_key,
     make_critic_cache_key,
 )
@@ -359,7 +363,7 @@ class EventStore:
 
                 # Summarize tool group (if there are tools)
                 if tool_turns:
-                    tool_cache_key = make_tool_cache_key(tool_turns)
+                    tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
                     cached_tool = self._summary_cache.get(tool_cache_key)
                     if cached_tool:
                         # Store on first tool turn
@@ -385,7 +389,7 @@ class EventStore:
                     # Critique assistant turn (only for non-historical)
                     if not turn.is_historical:
                         critic_context = _get_critic_context(session, turn)
-                        critic_cache_key = make_critic_cache_key(turn, critic_context)
+                        critic_cache_key = make_critic_cache_key(turn, critic_context, self._summarizer.model, CRITIC_SYSTEM_PROMPT)
                         cached_critic = self._summary_cache.get(critic_cache_key)
                         if cached_critic:
                             turn.critic = cached_critic
@@ -452,7 +456,8 @@ class EventStore:
         Returns:
             Cache key that uniquely identifies this assistant text
         """
-        return f"ASST::{content}"
+        fingerprint = _prompt_fingerprint(self._summarizer.model, SYSTEM_PROMPT)
+        return f"ASST::{fingerprint}::{content}"
 
     def _make_summary_callback(self, turn: Turn, cache_key: str) -> Callable[[str, bool], None]:
         """Create a callback that updates turn summary and notifies listeners."""
@@ -528,7 +533,7 @@ class EventStore:
         if tool_turns[0].summary:
             return False
 
-        tool_cache_key = make_tool_cache_key(tool_turns)
+        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
         cached_tool = self._summary_cache.get(tool_cache_key)
         if cached_tool:
             tool_turns[0].summary = cached_tool
@@ -563,7 +568,7 @@ class EventStore:
                     _, tool_turns = _get_turn_context(session, turn)
 
                     if tool_turns and (not tool_turns[0].summary):
-                        tool_cache_key = make_tool_cache_key(tool_turns)
+                        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
                         cached_tool = self._summary_cache.get(tool_cache_key)
                         if cached_tool:
                             tool_turns[0].summary = cached_tool
@@ -604,7 +609,7 @@ class EventStore:
                     break
 
             if trailing_tools and not trailing_tools[0].summary:
-                tool_cache_key = make_tool_cache_key(trailing_tools)
+                tool_cache_key = make_tool_cache_key(trailing_tools, self._summarizer.model, TOOL_SYSTEM_PROMPT)
                 cached_tool = self._summary_cache.get(tool_cache_key)
                 if cached_tool:
                     trailing_tools[0].summary = cached_tool
@@ -730,7 +735,7 @@ class EventStore:
                     _, tool_turns = _get_turn_context(session, turn)
 
                     if tool_turns:
-                        tool_cache_key = make_tool_cache_key(tool_turns)
+                        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
                         cached_tool = self._summary_cache.get(tool_cache_key)
                         if cached_tool:
                             tool_turns[0].summary = cached_tool
