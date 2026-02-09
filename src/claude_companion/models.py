@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .analyzer import Analysis
 
 
 def count_words(text: str) -> int:
@@ -30,6 +33,7 @@ class Turn:
     critic_sentiment: str | None = None  # "progress" | "concern" | "critical"
     task_operation: tuple[str, dict[str, Any]] | None = None  # (operation_type, data) for task tools
     annotation: str | None = None  # User-provided annotation
+    analysis: "Analysis | None" = None  # On-demand LLM analysis
 
 
 @dataclass

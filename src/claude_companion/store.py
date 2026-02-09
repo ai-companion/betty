@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_turn_for_alerts, send_system_notification
+from .analyzer import ANALYZER_SYSTEM_PROMPT, Analysis, Analyzer, make_analysis_cache_key
 from .cache import AnnotationCache, SummaryCache
 from .config import load_config
 from .models import Session, TaskState, Turn
@@ -42,9 +43,14 @@ class EventStore:
         self._project_watcher: ProjectWatcher | None = None
         self._initial_load_done = False  # Set after initial scan completes
 
-        # Load config and initialize summarizer
+        # Load config and initialize summarizer + analyzer
         config = load_config()
         self._summarizer = Summarizer(
+            model=config.llm.model,
+            api_base=config.llm.api_base,
+            api_key=config.llm.api_key,
+        )
+        self._analyzer = Analyzer(
             model=config.llm.model,
             api_base=config.llm.api_base,
             api_key=config.llm.api_key,
@@ -650,6 +656,91 @@ class EventStore:
                     return True
             return False
 
+    def analyze_turn(self, turn: Turn) -> bool:
+        """Submit a turn for on-demand LLM analysis.
+
+        Args:
+            turn: The turn to analyze
+
+        Returns:
+            True if analysis was submitted, False if already analyzed or loaded from cache
+        """
+        # Already analyzed successfully (summary doesn't start with "[")
+        if turn.analysis and not turn.analysis.summary.startswith("["):
+            return False
+
+        # Clear error analysis for retry
+        if turn.analysis and turn.analysis.summary.startswith("["):
+            turn.analysis = None
+
+        # Get active session
+        with self._lock:
+            if not self._active_session_id:
+                return False
+            session = self._sessions.get(self._active_session_id)
+            if not session:
+                return False
+
+        # Build context and check cache
+        context = self._analyzer._context_manager.build_context(session, turn)
+        cache_key = make_analysis_cache_key(
+            turn, context, self._analyzer.model, ANALYZER_SYSTEM_PROMPT
+        )
+
+        cached = self._summary_cache.get(cache_key)
+        if cached:
+            import json
+            try:
+                data = json.loads(cached)
+                turn.analysis = Analysis(
+                    summary=data["summary"],
+                    critique=data["critique"],
+                    sentiment=data["sentiment"],
+                    word_count=data["word_count"],
+                    context_word_count=data["context_word_count"],
+                )
+                # Notify listeners so TUI refreshes
+                for listener in self._turn_listeners:
+                    try:
+                        listener(turn)
+                    except Exception:
+                        pass
+                return False
+            except (json.JSONDecodeError, KeyError):
+                pass  # Fall through to re-analyze
+
+        # Submit for analysis
+        self._analyzer.analyze_async(
+            session, turn, self._make_analysis_callback(turn, cache_key)
+        )
+        return True
+
+    def _make_analysis_callback(
+        self, turn: Turn, cache_key: str
+    ) -> "Callable[[Analysis, bool], None]":
+        """Create callback that updates turn analysis and notifies listeners."""
+        def callback(analysis: Analysis, success: bool) -> None:
+            turn.analysis = analysis
+            if success:
+                import json
+                self._summary_cache.set(
+                    cache_key,
+                    json.dumps({
+                        "summary": analysis.summary,
+                        "critique": analysis.critique,
+                        "sentiment": analysis.sentiment,
+                        "word_count": analysis.word_count,
+                        "context_word_count": analysis.context_word_count,
+                    }),
+                )
+            # Notify turn listeners to refresh TUI
+            for listener in self._turn_listeners:
+                try:
+                    listener(turn)
+                except Exception:
+                    pass
+        return callback
+
     def load_annotations_for_session(self, session_id: str) -> None:
         """Load cached annotations for a session's turns."""
         with self._lock:
@@ -683,6 +774,7 @@ class EventStore:
             watcher.stop()
 
         self._summarizer.shutdown()
+        self._analyzer.shutdown()
 
     def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> int:
         """Load historical turns from transcript file.
