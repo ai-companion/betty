@@ -1,6 +1,7 @@
 """CLI entry point for Claude Companion."""
 
 import logging
+import subprocess
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -24,11 +25,50 @@ def cwd_to_project_path() -> str:
     return str(Path.cwd()).replace("/", "-")
 
 
-def get_project_paths(global_mode: bool) -> list[Path]:
+def path_to_project_dir(path: str) -> str:
+    """Encode an absolute path to Claude's project directory name.
+
+    e.g., /Users/kai/src/foo -> -Users-kai-src-foo
+    """
+    return path.replace("/", "-")
+
+
+def get_worktree_paths() -> list[str]:
+    """Get all worktree paths for the current git repository.
+
+    Runs ``git worktree list --porcelain`` and extracts the worktree paths.
+
+    Returns:
+        List of absolute paths for each worktree, or just the current
+        directory if git is unavailable or the current directory is not
+        inside a git repository.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return [str(Path.cwd())]
+
+        paths: list[str] = []
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                paths.append(line[len("worktree "):])
+        return paths if paths else [str(Path.cwd())]
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return [str(Path.cwd())]
+
+
+def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Path]:
     """Get project directories to watch.
 
     Args:
-        global_mode: If True, return all project directories. If False, return only current directory's project.
+        global_mode: If True, return all project directories.
+        worktree_mode: If True, return project directories for all git worktrees
+            of the current repository.
 
     Returns:
         List of project directories to watch (may include non-existent paths that will be watched)
@@ -41,6 +81,10 @@ def get_project_paths(global_mode: bool) -> list[Path]:
             return []
         return [p for p in projects_dir.iterdir()
                 if p.is_dir() and p.name.startswith("-")]
+    elif worktree_mode:
+        # All worktrees of the current git repo
+        worktrees = get_worktree_paths()
+        return [projects_dir / path_to_project_dir(wt) for wt in worktrees]
     else:
         # Current directory only - return path even if it doesn't exist yet
         # The watcher will poll until sessions appear
@@ -50,12 +94,13 @@ def get_project_paths(global_mode: bool) -> list[Path]:
 
 @click.group(invoke_without_command=True)
 @click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects (not just current directory)")
+@click.option("--worktree", "-w", "worktree_mode", is_flag=True, help="Watch all git worktrees of the current repository")
 @click.option("--style", type=click.Choice(["rich", "claude-code"]), default=None, help="UI style override for this run")
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
-def main(ctx: click.Context, global_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -63,6 +108,9 @@ def main(ctx: click.Context, global_mode: bool, style: str | None, collapse_tool
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
+        if global_mode and worktree_mode:
+            console.print("[red]Error:[/red] --global and --worktree are mutually exclusive")
+            raise SystemExit(1)
         config = load_config()
         # Apply CLI overrides (not saved to config file)
         if style is not None:
@@ -71,10 +119,10 @@ def main(ctx: click.Context, global_mode: bool, style: str | None, collapse_tool
             config.collapse_tools = collapse_tools
         if debug_logging is not None:
             config.debug_logging = debug_logging
-        run_companion(global_mode=global_mode, config=config)
+        run_companion(global_mode=global_mode, worktree_mode=worktree_mode, config=config)
 
 
-def run_companion(global_mode: bool = False, config: Config | None = None) -> None:
+def run_companion(global_mode: bool = False, worktree_mode: bool = False, config: Config | None = None) -> None:
     """Run the main companion TUI with directory-based session discovery."""
     if config is None:
         config = load_config()
@@ -103,7 +151,7 @@ def run_companion(global_mode: bool = False, config: Config | None = None) -> No
         )
 
     projects_dir = Path.home() / ".claude" / "projects"
-    project_paths = get_project_paths(global_mode)
+    project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
 
     # Create store and start watching
     # Load only most recent session by default; new sessions auto-detected while running
@@ -116,7 +164,12 @@ def run_companion(global_mode: bool = False, config: Config | None = None) -> No
         global_mode=global_mode,
     )
 
-    scope = "all projects" if global_mode else "current directory"
+    if global_mode:
+        scope = "all projects"
+    elif worktree_mode:
+        scope = f"git worktrees ({len(project_paths)} found)"
+    else:
+        scope = "current directory"
     console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
 
     try:
