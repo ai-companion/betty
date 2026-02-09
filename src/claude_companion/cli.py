@@ -33,15 +33,25 @@ def path_to_project_dir(path: str) -> str:
     return path.replace("/", "-")
 
 
+class GitNotFoundError(Exception):
+    """Raised when the git executable is not found."""
+
+
+class NotAGitRepoError(Exception):
+    """Raised when the current directory is not inside a git repository."""
+
+
 def get_worktree_paths() -> list[str]:
     """Get all worktree paths for the current git repository.
 
     Runs ``git worktree list --porcelain`` and extracts the worktree paths.
 
     Returns:
-        List of absolute paths for each worktree, or just the current
-        directory if git is unavailable or the current directory is not
-        inside a git repository.
+        List of absolute paths for each worktree.
+
+    Raises:
+        GitNotFoundError: If the git executable is not found.
+        NotAGitRepoError: If the current directory is not inside a git repository.
     """
     try:
         result = subprocess.run(
@@ -50,16 +60,26 @@ def get_worktree_paths() -> list[str]:
             text=True,
             timeout=5,
         )
-        if result.returncode != 0:
-            return [str(Path.cwd())]
+    except FileNotFoundError:
+        raise GitNotFoundError("git is not installed or not on PATH")
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise GitNotFoundError(f"failed to run git: {exc}")
 
-        paths: list[str] = []
-        for line in result.stdout.splitlines():
-            if line.startswith("worktree "):
-                paths.append(line[len("worktree "):])
-        return paths if paths else [str(Path.cwd())]
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return [str(Path.cwd())]
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise NotAGitRepoError(
+            stderr or "current directory is not inside a git repository"
+        )
+
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            paths.append(line[len("worktree "):])
+
+    if not paths:
+        raise NotAGitRepoError("git worktree list returned no worktrees")
+
+    return paths
 
 
 def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Path]:
@@ -151,7 +171,14 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, config
         )
 
     projects_dir = Path.home() / ".claude" / "projects"
-    project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
+    try:
+        project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
+    except GitNotFoundError:
+        console.print("[red]Error:[/red] --worktree requires git, but git is not installed or not on PATH")
+        raise SystemExit(1)
+    except NotAGitRepoError:
+        console.print("[red]Error:[/red] --worktree requires a git repository, but the current directory is not inside one")
+        raise SystemExit(1)
 
     # Create store and start watching
     # Load only most recent session by default; new sessions auto-detected while running
