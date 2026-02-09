@@ -17,20 +17,19 @@ from .tui_textual import CompanionApp
 console = Console()
 
 
-def cwd_to_project_path() -> str:
-    """Encode CWD to Claude's project directory name.
-
-    e.g., /Users/kai/src/foo -> -Users-kai-src-foo
-    """
-    return str(Path.cwd()).replace("/", "-")
-
-
-def path_to_project_dir(path: str) -> str:
+def encode_project_path(path: str) -> str:
     """Encode an absolute path to Claude's project directory name.
 
+    Strips the leading ``/`` and joins components with ``-``.
+
     e.g., /Users/kai/src/foo -> -Users-kai-src-foo
     """
-    return path.replace("/", "-")
+    return "-" + path.strip("/").replace("/", "-")
+
+
+def cwd_to_project_path() -> str:
+    """Encode CWD to Claude's project directory name."""
+    return encode_project_path(str(Path.cwd()))
 
 
 class GitNotFoundError(Exception):
@@ -104,7 +103,7 @@ def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Pa
     elif worktree_mode:
         # All worktrees of the current git repo
         worktrees = get_worktree_paths()
-        return [projects_dir / path_to_project_dir(wt) for wt in worktrees]
+        return [projects_dir / encode_project_path(wt) for wt in worktrees]
     else:
         # Current directory only - return path even if it doesn't exist yet
         # The watcher will poll until sessions appear
@@ -126,11 +125,12 @@ def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, style: str 
         console.print(f"claude-companion v{__version__}")
         return
 
+    if global_mode and worktree_mode:
+        console.print("[red]Error:[/red] --global and --worktree are mutually exclusive")
+        raise SystemExit(1)
+
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
-        if global_mode and worktree_mode:
-            console.print("[red]Error:[/red] --global and --worktree are mutually exclusive")
-            raise SystemExit(1)
         config = load_config()
         # Apply CLI overrides (not saved to config file)
         if style is not None:
@@ -173,8 +173,8 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, config
     projects_dir = Path.home() / ".claude" / "projects"
     try:
         project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
-    except GitNotFoundError:
-        console.print("[red]Error:[/red] --worktree requires git, but git is not installed or not on PATH")
+    except GitNotFoundError as exc:
+        console.print(f"[red]Error:[/red] --worktree requires git: {exc}")
         raise SystemExit(1)
     except NotAGitRepoError:
         console.print("[red]Error:[/red] --worktree requires a git repository, but the current directory is not inside one")
