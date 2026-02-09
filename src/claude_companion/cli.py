@@ -24,7 +24,7 @@ def encode_project_path(path: str) -> str:
 
     e.g., /Users/kai/src/foo -> -Users-kai-src-foo
     """
-    return "-" + path.strip("/").replace("/", "-")
+    return "-" + path.lstrip("/").replace("/", "-")
 
 
 def cwd_to_project_path() -> str:
@@ -33,7 +33,11 @@ def cwd_to_project_path() -> str:
 
 
 class GitNotFoundError(Exception):
-    """Raised when the git executable is not found."""
+    """Raised when the git executable is not found on PATH."""
+
+
+class GitCommandError(Exception):
+    """Raised when the git command fails to execute (timeout, OS error)."""
 
 
 class NotAGitRepoError(Exception):
@@ -49,7 +53,8 @@ def get_worktree_paths() -> list[str]:
         List of absolute paths for each worktree.
 
     Raises:
-        GitNotFoundError: If the git executable is not found.
+        GitNotFoundError: If the git executable is not found on PATH.
+        GitCommandError: If the git command fails to execute (timeout, OS error).
         NotAGitRepoError: If the current directory is not inside a git repository.
     """
     try:
@@ -62,7 +67,7 @@ def get_worktree_paths() -> list[str]:
     except FileNotFoundError:
         raise GitNotFoundError("git is not installed or not on PATH")
     except (subprocess.TimeoutExpired, OSError) as exc:
-        raise GitNotFoundError(f"failed to run git: {exc}")
+        raise GitCommandError(f"failed to run git: {exc}")
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
@@ -126,8 +131,7 @@ def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, style: str 
         return
 
     if global_mode and worktree_mode:
-        console.print("[red]Error:[/red] --global and --worktree are mutually exclusive")
-        raise SystemExit(1)
+        raise click.UsageError("--global and --worktree are mutually exclusive")
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
@@ -173,11 +177,16 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, config
     projects_dir = Path.home() / ".claude" / "projects"
     try:
         project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
-    except GitNotFoundError as exc:
-        console.print(f"[red]Error:[/red] --worktree requires git: {exc}")
+    except GitNotFoundError:
+        console.print("[red]Error:[/red] --worktree requires git, but git is not installed or not on PATH")
         raise SystemExit(1)
-    except NotAGitRepoError:
-        console.print("[red]Error:[/red] --worktree requires a git repository, but the current directory is not inside one")
+    except GitCommandError as exc:
+        console.print(f"[red]Error:[/red] --worktree failed: {exc}")
+        raise SystemExit(1)
+    except NotAGitRepoError as exc:
+        console.print(
+            f"[red]Error:[/red] --worktree requires a git repository; git reported: {exc}"
+        )
         raise SystemExit(1)
 
     # Create store and start watching
