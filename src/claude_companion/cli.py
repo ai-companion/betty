@@ -1,6 +1,7 @@
 """CLI entry point for Claude Companion."""
 
 import logging
+import subprocess
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -16,19 +17,82 @@ from .tui_textual import CompanionApp
 console = Console()
 
 
-def cwd_to_project_path() -> str:
-    """Encode CWD to Claude's project directory name.
+def encode_project_path(path: str) -> str:
+    """Encode an absolute path to Claude's project directory name.
+
+    Strips the leading ``/`` and joins components with ``-``.
 
     e.g., /Users/kai/src/foo -> -Users-kai-src-foo
     """
-    return str(Path.cwd()).replace("/", "-")
+    return "-" + path.lstrip("/").replace("/", "-")
 
 
-def get_project_paths(global_mode: bool) -> list[Path]:
+def cwd_to_project_path() -> str:
+    """Encode CWD to Claude's project directory name."""
+    return encode_project_path(str(Path.cwd()))
+
+
+class GitNotFoundError(Exception):
+    """Raised when the git executable is not found on PATH."""
+
+
+class GitCommandError(Exception):
+    """Raised when the git command fails to execute (timeout, OS error)."""
+
+
+class NotAGitRepoError(Exception):
+    """Raised when the current directory is not inside a git repository."""
+
+
+def get_worktree_paths() -> list[str]:
+    """Get all worktree paths for the current git repository.
+
+    Runs ``git worktree list --porcelain`` and extracts the worktree paths.
+
+    Returns:
+        List of absolute paths for each worktree.
+
+    Raises:
+        GitNotFoundError: If the git executable is not found on PATH.
+        GitCommandError: If the git command fails to execute (timeout, OS error).
+        NotAGitRepoError: If the current directory is not inside a git repository.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        raise GitNotFoundError("git is not installed or not on PATH")
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise GitCommandError(f"failed to run git: {exc}")
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise NotAGitRepoError(
+            stderr or "current directory is not inside a git repository"
+        )
+
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            paths.append(line[len("worktree "):])
+
+    if not paths:
+        raise NotAGitRepoError("git worktree list returned no worktrees")
+
+    return paths
+
+
+def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Path]:
     """Get project directories to watch.
 
     Args:
-        global_mode: If True, return all project directories. If False, return only current directory's project.
+        global_mode: If True, return all project directories.
+        worktree_mode: If True, return project directories for all git worktrees
+            of the current repository.
 
     Returns:
         List of project directories to watch (may include non-existent paths that will be watched)
@@ -41,6 +105,10 @@ def get_project_paths(global_mode: bool) -> list[Path]:
             return []
         return [p for p in projects_dir.iterdir()
                 if p.is_dir() and p.name.startswith("-")]
+    elif worktree_mode:
+        # All worktrees of the current git repo
+        worktrees = get_worktree_paths()
+        return [projects_dir / encode_project_path(wt) for wt in worktrees]
     else:
         # Current directory only - return path even if it doesn't exist yet
         # The watcher will poll until sessions appear
@@ -50,16 +118,20 @@ def get_project_paths(global_mode: bool) -> list[Path]:
 
 @click.group(invoke_without_command=True)
 @click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects (not just current directory)")
+@click.option("--worktree", "-w", "worktree_mode", is_flag=True, help="Watch all git worktrees of the current repository")
 @click.option("--style", type=click.Choice(["rich", "claude-code"]), default=None, help="UI style override for this run")
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
-def main(ctx: click.Context, global_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
         return
+
+    if global_mode and worktree_mode:
+        raise click.UsageError("--global and --worktree are mutually exclusive")
 
     # If no subcommand, run the main TUI
     if ctx.invoked_subcommand is None:
@@ -71,10 +143,10 @@ def main(ctx: click.Context, global_mode: bool, style: str | None, collapse_tool
             config.collapse_tools = collapse_tools
         if debug_logging is not None:
             config.debug_logging = debug_logging
-        run_companion(global_mode=global_mode, config=config)
+        run_companion(global_mode=global_mode, worktree_mode=worktree_mode, config=config)
 
 
-def run_companion(global_mode: bool = False, config: Config | None = None) -> None:
+def run_companion(global_mode: bool = False, worktree_mode: bool = False, config: Config | None = None) -> None:
     """Run the main companion TUI with directory-based session discovery."""
     if config is None:
         config = load_config()
@@ -103,7 +175,19 @@ def run_companion(global_mode: bool = False, config: Config | None = None) -> No
         )
 
     projects_dir = Path.home() / ".claude" / "projects"
-    project_paths = get_project_paths(global_mode)
+    try:
+        project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
+    except GitNotFoundError:
+        console.print("[red]Error:[/red] --worktree requires git, but git is not installed or not on PATH")
+        raise SystemExit(1)
+    except GitCommandError as exc:
+        console.print(f"[red]Error:[/red] --worktree failed: {exc}")
+        raise SystemExit(1)
+    except NotAGitRepoError as exc:
+        console.print(
+            f"[red]Error:[/red] --worktree requires a git repository; git reported: {exc}"
+        )
+        raise SystemExit(1)
 
     # Create store and start watching
     # Load only most recent session by default; new sessions auto-detected while running
@@ -116,7 +200,12 @@ def run_companion(global_mode: bool = False, config: Config | None = None) -> No
         global_mode=global_mode,
     )
 
-    scope = "all projects" if global_mode else "current directory"
+    if global_mode:
+        scope = "all projects"
+    elif worktree_mode:
+        scope = f"git worktrees ({len(project_paths)} found)"
+    else:
+        scope = "current directory"
     console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
 
     try:
