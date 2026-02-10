@@ -1036,15 +1036,12 @@ class ManagerView(ScrollableContainer):
 
     def _update_card_selection(self) -> None:
         """Update selected state on all cards."""
-        try:
-            cards = list(self.query("SessionCard"))
-            for i, card in enumerate(cards):
-                card.selected = (i == self._selected_index)
-            # Scroll selected card into view
-            if 0 <= self._selected_index < len(cards):
-                cards[self._selected_index].scroll_visible()
-        except NoMatches:
-            pass
+        cards = list(self.query("SessionCard"))
+        for i, card in enumerate(cards):
+            card.selected = (i == self._selected_index)
+        # Scroll selected card into view
+        if 0 <= self._selected_index < len(cards):
+            cards[self._selected_index].scroll_visible()
 
 
 class ConversationView(ScrollableContainer):
