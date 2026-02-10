@@ -697,10 +697,11 @@ class HeaderPanel(Static):
 
         session_parts = []
         for i, session in enumerate(self._sessions[:9], 1):
+            safe_name = session.display_name.replace("[", "\\[")
             if self._active and session.session_id == self._active.session_id:
-                session_parts.append(f"[bold reverse] {i} [/] {session.display_name}")
+                session_parts.append(f"[bold reverse] {i} [/] {safe_name}")
             else:
-                session_parts.append(f"[dim]\\[{i}][/dim] {session.display_name}")
+                session_parts.append(f"[dim]\\[{i}][/dim] {safe_name}")
 
         sessions_text = "  ".join(session_parts) if session_parts else "[dim]No sessions[/dim]"
 
@@ -928,8 +929,10 @@ class SessionCard(Static):
         words_out = session.total_output_words
         active_marker = " [green]*[/green]" if self.is_active else ""
 
+        # Escape Rich markup chars in display name (branch names may contain [])
+        safe_name = session.display_name.replace("[", "\\[")
         lines = [
-            f"[bold]{session.display_name}[/bold]{active_marker}",
+            f"[bold]{safe_name}[/bold]{active_marker}",
             f"[dim]{session.model} | {time_str}[/dim]",
             f"turns:{turn_count} tools:{tool_calls}",
             f"[dim]in:{words_in:,} out:{words_out:,}[/dim]",
@@ -1024,7 +1027,7 @@ class ManagerView(ScrollableContainer):
             return self._session_ids[self._selected_index]
         return None
 
-    def move_selection(self, delta: int, columns: int = 3) -> None:
+    def move_selection(self, delta: int) -> None:
         """Move selection by delta (positive=right/down, negative=left/up)."""
         if not self._session_ids:
             return
@@ -1354,7 +1357,10 @@ class CompanionApp(App):
 
     def _refresh_header(self) -> None:
         """Refresh header panel."""
-        sessions = [s for s in self.store.get_sessions() if s.turns]
+        sessions = self.store.get_sessions()
+        if self._manager_view_active:
+            # In manager mode, filter out empty sessions (e.g. from claude -r)
+            sessions = [s for s in sessions if s.turns]
         active = self.store.get_active_session()
         _, filter_label = self._turn_filters[self._filter_index]
         header = self.query_one("#header", HeaderPanel)
@@ -1763,6 +1769,15 @@ class CompanionApp(App):
 
     def action_escape(self) -> None:
         """Handle escape key."""
+        # Always close tasks/plan overlays first, regardless of mode
+        if self._show_tasks:
+            self._show_tasks = False
+            self._refresh_views()
+            return
+        if self._show_plan:
+            self._show_plan = False
+            self._refresh_views()
+            return
         # Return to manager view if started with --manager and viewing a session
         if not self._manager_view_active and self._manager_mode:
             self._show_manager_view()
@@ -1771,16 +1786,9 @@ class CompanionApp(App):
         if self._manager_view_active:
             self._hide_manager_view()
             return
-        # Clear selection or close views
-        if self._show_tasks:
-            self._show_tasks = False
-            self._refresh_views()
-        elif self._show_plan:
-            self._show_plan = False
-            self._refresh_views()
-        else:
-            conversation = self.query_one("#conversation", ConversationView)
-            conversation.set_selected_index(None)
+        # Clear selection
+        conversation = self.query_one("#conversation", ConversationView)
+        conversation.set_selected_index(None)
 
     def _select_session(self, index: int) -> None:
         """Select session by index (1-based)."""

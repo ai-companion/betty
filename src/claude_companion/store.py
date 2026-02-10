@@ -41,6 +41,7 @@ class EventStore:
         self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
         self._project_watcher: ProjectWatcher | None = None
         self._initial_load_done = False  # Set after initial scan completes
+        self._branch_cache: dict[str, str | None] = {}  # project_dir -> branch name
 
         # Load config and initialize summarizer
         config = load_config()
@@ -134,9 +135,13 @@ class EventStore:
             from .utils import decode_project_path
             project_dir = decode_project_path(project_path)
 
-            # Try to detect git branch (non-blocking, best-effort)
+            # Try to detect git branch (best-effort with short timeout)
             if project_dir:
-                branch = self._detect_git_branch(project_dir)
+                if project_dir in self._branch_cache:
+                    branch = self._branch_cache[project_dir]
+                else:
+                    branch = self._detect_git_branch(project_dir)
+                    self._branch_cache[project_dir] = branch
                 if branch:
                     with self._lock:
                         session = self._sessions.get(session_id)

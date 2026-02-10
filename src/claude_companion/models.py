@@ -164,24 +164,29 @@ class Session:
     plan_updated_at: datetime | None = None  # Last modification time
     active: bool = True
     branch: str | None = None  # Git branch name if detected
+    _display_name_from_path: str | None = field(default=None, init=False, repr=False)
 
     @property
     def display_name(self) -> str:
         """Short display name for the session.
 
         Prefers branch name if available, otherwise shows last 2 path segments
-        of the decoded project path.
+        of the decoded project path (cached to avoid repeated filesystem access).
         """
         if self.branch:
             return self.branch
+        if self._display_name_from_path is not None:
+            return self._display_name_from_path
         if self.project_path:
             from .utils import decode_project_path
             decoded = decode_project_path(self.project_path)
             if decoded:
                 parts = [p for p in decoded.split("/") if p]
                 if len(parts) >= 2:
-                    return "/".join(parts[-2:])
-                return parts[-1] if parts else self.session_id[:8]
+                    self._display_name_from_path = "/".join(parts[-2:])
+                else:
+                    self._display_name_from_path = parts[-1] if parts else self.session_id[:8]
+                return self._display_name_from_path
         return self.session_id[:8]
 
     @property
