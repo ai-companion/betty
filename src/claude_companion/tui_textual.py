@@ -974,11 +974,13 @@ class ManagerView(ScrollableContainer):
 
     def refresh_cards(self, sessions: list[Session], active_session_id: str | None) -> None:
         """Rebuild session cards from current sessions."""
-        # Build a fingerprint of relevant data to skip no-op rebuilds
+        # Build a fingerprint of relevant data to skip no-op rebuilds.
+        # Include minute-resolution timestamp so relative time labels refresh.
+        now_minute = int(datetime.now().timestamp() // 60)
         snapshot = "|".join(
             f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}"
             for s in sessions
-        ) + f"||{active_session_id}"
+        ) + f"||{active_session_id}||{now_minute}"
         if snapshot == self._last_snapshot:
             return
         self._last_snapshot = snapshot
