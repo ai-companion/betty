@@ -129,10 +129,19 @@ class EventStore:
 
         self._create_transcript_watcher(session_id, str(transcript_path), start_turn, file_position)
 
-        # Start plan file watcher
+        # Detect git branch and start plan file watcher
         if project_path:
             from .utils import decode_project_path
             project_dir = decode_project_path(project_path)
+
+            # Try to detect git branch (non-blocking, best-effort)
+            if project_dir:
+                branch = self._detect_git_branch(project_dir)
+                if branch:
+                    with self._lock:
+                        session = self._sessions.get(session_id)
+                        if session:
+                            session.branch = branch
 
             if project_dir:
                 plan_watcher = PlanFileWatcher(
@@ -142,6 +151,24 @@ class EventStore:
                 plan_watcher.start()
                 with self._lock:
                     self._plan_watchers[session_id] = plan_watcher
+
+    @staticmethod
+    def _detect_git_branch(project_dir: str) -> str | None:
+        """Detect the current git branch for a project directory.
+
+        Returns branch name or None if not a git repo / detection fails.
+        """
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "-C", project_dir, "branch", "--show-current"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        return None
 
     def _add_alert(self, alert: Alert) -> None:
         """Add an alert and notify listeners."""

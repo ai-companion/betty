@@ -910,7 +910,18 @@ class SessionCard(Static):
 
     def _update_content(self) -> None:
         session = self.session
-        started = session.started_at.strftime("%H:%M:%S")
+        last = session.last_activity
+        # Show relative time for last activity
+        delta = (datetime.now() - last).total_seconds()
+        if delta < 60:
+            time_str = "just now"
+        elif delta < 3600:
+            time_str = f"{int(delta / 60)}m ago"
+        elif delta < 86400:
+            time_str = f"{int(delta / 3600)}h ago"
+        else:
+            time_str = last.strftime("%b %d")
+
         turn_count = len(session.turns)
         tool_calls = session.total_tool_calls
         words_in = session.total_input_words
@@ -919,7 +930,7 @@ class SessionCard(Static):
 
         lines = [
             f"[bold]{session.display_name}[/bold]{active_marker}",
-            f"[dim]{session.model} | {started}[/dim]",
+            f"[dim]{session.model} | {time_str}[/dim]",
             f"turns:{turn_count} tools:{tool_calls}",
             f"[dim]in:{words_in:,} out:{words_out:,}[/dim]",
         ]

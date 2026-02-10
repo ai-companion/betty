@@ -163,15 +163,33 @@ class Session:
     plan_file_path: str | None = None  # Absolute path to plan file
     plan_updated_at: datetime | None = None  # Last modification time
     active: bool = True
+    branch: str | None = None  # Git branch name if detected
 
     @property
     def display_name(self) -> str:
-        """Short display name for the session."""
+        """Short display name for the session.
+
+        Prefers branch name if available, otherwise shows last 2 path segments
+        of the decoded project path.
+        """
+        if self.branch:
+            return self.branch
         if self.project_path:
-            # Extract last component of path
-            parts = self.project_path.replace("-", "/").split("/")
-            return parts[-1] if parts else self.session_id[:8]
+            from .utils import decode_project_path
+            decoded = decode_project_path(self.project_path)
+            if decoded:
+                parts = [p for p in decoded.split("/") if p]
+                if len(parts) >= 2:
+                    return "/".join(parts[-2:])
+                return parts[-1] if parts else self.session_id[:8]
         return self.session_id[:8]
+
+    @property
+    def last_activity(self) -> datetime:
+        """Timestamp of the most recent turn, or started_at if no turns."""
+        if self.turns:
+            return self.turns[-1].timestamp
+        return self.started_at
 
     @property
     def total_input_words(self) -> int:
