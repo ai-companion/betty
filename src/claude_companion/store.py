@@ -167,7 +167,7 @@ class EventStore:
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
+            return None  # git not available or timed out
         return None
 
     def _add_alert(self, alert: Alert) -> None:
