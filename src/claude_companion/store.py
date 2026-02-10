@@ -41,6 +41,7 @@ class EventStore:
         self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
         self._project_watcher: ProjectWatcher | None = None
         self._initial_load_done = False  # Set after initial scan completes
+        self._branch_cache: dict[str, str | None] = {}  # project_dir -> branch name
 
         # Load config and initialize summarizer
         config = load_config()
@@ -129,10 +130,29 @@ class EventStore:
 
         self._create_transcript_watcher(session_id, str(transcript_path), start_turn, file_position)
 
-        # Start plan file watcher
+        # Detect git branch and start plan file watcher
         if project_path:
             from .utils import decode_project_path
             project_dir = decode_project_path(project_path)
+
+            # Try to detect git branch (best-effort with short timeout).
+            # During initial load, reuse cached branch for the same project_dir.
+            # After initial load, always re-detect so new sessions reflect the
+            # current branch even if the user has switched branches.
+            if project_dir:
+                if not self._initial_load_done and project_dir in self._branch_cache:
+                    branch = self._branch_cache[project_dir]
+                else:
+                    branch = self._detect_git_branch(project_dir)
+                    # Only cache successful detections to avoid poisoning the
+                    # cache with transient failures (timeout, git unavailable).
+                    if branch:
+                        self._branch_cache[project_dir] = branch
+                if branch:
+                    with self._lock:
+                        session = self._sessions.get(session_id)
+                        if session:
+                            session.branch = branch
 
             if project_dir:
                 plan_watcher = PlanFileWatcher(
@@ -142,6 +162,24 @@ class EventStore:
                 plan_watcher.start()
                 with self._lock:
                     self._plan_watchers[session_id] = plan_watcher
+
+    @staticmethod
+    def _detect_git_branch(project_dir: str) -> str | None:
+        """Detect the current git branch for a project directory.
+
+        Returns branch name or None if not a git repo / detection fails.
+        """
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "-C", project_dir, "branch", "--show-current"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return None  # git not available or timed out
+        return None
 
     def _add_alert(self, alert: Alert) -> None:
         """Add an alert and notify listeners."""
@@ -202,6 +240,14 @@ class EventStore:
             )
             if 1 <= index <= len(sessions):
                 self._active_session_id = sessions[index - 1].session_id
+                return True
+            return False
+
+    def set_active_session_by_id(self, session_id: str) -> bool:
+        """Set active session by session ID. Returns True if successful."""
+        with self._lock:
+            if session_id in self._sessions:
+                self._active_session_id = session_id
                 return True
             return False
 
