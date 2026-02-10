@@ -47,3 +47,5 @@ The companion auto-detects your session. No hooks or configuration needed.
 | `x` | Export to Markdown |
 | `D` | Delete session |
 | `q` | Quit |
+
+See all keybindings in the TUI status bar.

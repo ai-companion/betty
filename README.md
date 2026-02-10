@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.jpg" alt="Claude Companion" width="120">
+  <img src="https://raw.githubusercontent.com/ai-companion/claude-companion/main/docs/assets/logo.jpg" alt="Claude Companion" width="120">
 </p>
 
 # Claude Companion
@@ -63,6 +63,8 @@ The companion auto-detects your session. No hooks or configuration needed.
 | `x` | Export to Markdown |
 | `D` | Delete session |
 | `q` | Quit |
+
+See all keybindings in the TUI status bar.
 
 ## License
 
