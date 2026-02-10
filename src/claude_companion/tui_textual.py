@@ -686,7 +686,7 @@ class HeaderPanel(Static):
 
     def _render_header(self) -> None:
         if self._manager_active:
-            n = len(self._sessions)
+            n = sum(1 for s in self._sessions if s.turns)
             content = (
                 f"[bold]Claude Companion[/bold] — Manager View\n"
                 f"[dim]{n} session{'s' if n != 1 else ''} | "
@@ -1481,6 +1481,9 @@ class CompanionApp(App):
         if not self._manager_view_active:
             return
         sessions = self.store.get_sessions()
+        # Filter out empty sessions (e.g. claude -r creates sessions with only
+        # file-history-snapshot entries before a conversation actually starts)
+        sessions = [s for s in sessions if s.turns]
         active = self.store.get_active_session()
         active_id = active.session_id if active else None
         manager_view = self.query_one("#manager-view", ManagerView)
