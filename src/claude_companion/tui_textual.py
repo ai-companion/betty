@@ -1355,7 +1355,7 @@ class CompanionApp(App):
 
     def _refresh_header(self) -> None:
         """Refresh header panel."""
-        sessions = self.store.get_sessions()
+        sessions = [s for s in self.store.get_sessions() if s.turns]
         active = self.store.get_active_session()
         _, filter_label = self._turn_filters[self._filter_index]
         header = self.query_one("#header", HeaderPanel)
