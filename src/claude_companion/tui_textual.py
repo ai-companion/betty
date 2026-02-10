@@ -13,7 +13,7 @@ from rich.text import Text as RichText
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, Horizontal, Vertical
+from textual.containers import Container, ScrollableContainer, Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
@@ -675,14 +675,26 @@ class HeaderPanel(Static):
         active: Session | None,
         filter_label: str,
         auto_scroll: bool,
+        manager_active: bool = False,
     ) -> None:
         self._sessions = sessions
         self._active = active
         self._filter_label = filter_label
         self._auto_scroll = auto_scroll
+        self._manager_active = manager_active
         self._render_header()
 
     def _render_header(self) -> None:
+        if self._manager_active:
+            n = len(self._sessions)
+            content = (
+                f"[bold]Claude Companion[/bold] — Manager View\n"
+                f"[dim]{n} session{'s' if n != 1 else ''} | "
+                f"j/k/h/l:navigate  enter:open  M:toggle  q:quit[/dim]"
+            )
+            self.update(RichText.from_markup(content))
+            return
+
         session_parts = []
         for i, session in enumerate(self._sessions[:9], 1):
             if self._active and session.session_id == self._active.session_id:
@@ -846,6 +858,180 @@ class PlanView(Static):
         md_content = Markdown(session.plan_content)
 
         self.update(RichGroup(RichText.from_markup(header), md_content))
+
+
+class SessionCard(Static):
+    """Widget for displaying a session card in the manager view."""
+
+    DEFAULT_CSS = """
+    SessionCard {
+        height: auto;
+        min-height: 5;
+        padding: 1 2;
+        border: solid $primary;
+        margin: 0;
+    }
+
+    SessionCard.selected {
+        border: solid $accent;
+        background: $primary 30%;
+    }
+
+    SessionCard.active-session {
+        border: solid $success;
+    }
+
+    SessionCard.selected.active-session {
+        border: solid $accent;
+        background: $success 20%;
+    }
+    """
+
+    selected: reactive[bool] = reactive(False)
+
+    def __init__(self, session: Session, is_active: bool = False, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.session = session
+        self.is_active = is_active
+
+    def on_mount(self) -> None:
+        self._update_content()
+        self._update_classes()
+
+    def watch_selected(self, value: bool) -> None:
+        self._update_classes()
+
+    def _update_classes(self) -> None:
+        self.remove_class("selected", "active-session")
+        if self.selected:
+            self.add_class("selected")
+        if self.is_active:
+            self.add_class("active-session")
+
+    def _update_content(self) -> None:
+        session = self.session
+        started = session.started_at.strftime("%H:%M:%S")
+        turn_count = len(session.turns)
+        tool_calls = session.total_tool_calls
+        words_in = session.total_input_words
+        words_out = session.total_output_words
+        active_marker = " [green]*[/green]" if self.is_active else ""
+
+        lines = [
+            f"[bold]{session.display_name}[/bold]{active_marker}",
+            f"[dim]{session.model} | {started}[/dim]",
+            f"turns:{turn_count} tools:{tool_calls}",
+            f"[dim]in:{words_in:,} out:{words_out:,}[/dim]",
+        ]
+
+        self.update(RichText.from_markup("\n".join(lines)))
+
+
+class ManagerView(ScrollableContainer):
+    """Grid container for session cards in manager view."""
+
+    DEFAULT_CSS = """
+    ManagerView {
+        height: 1fr;
+        display: none;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+    }
+
+    ManagerView.visible {
+        display: block;
+    }
+
+    #manager-grid {
+        layout: grid;
+        grid-size: 3;
+        grid-gutter: 1;
+        padding: 1 2;
+        height: auto;
+    }
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._selected_index: int = 0
+        self._session_ids: list[str] = []
+        self._refresh_counter: int = 0
+        self._last_snapshot: str = ""  # fingerprint to skip no-op rebuilds
+
+    def compose(self) -> ComposeResult:
+        yield Container(id="manager-grid")
+
+    def refresh_cards(self, sessions: list[Session], active_session_id: str | None) -> None:
+        """Rebuild session cards from current sessions."""
+        # Build a fingerprint of relevant data to skip no-op rebuilds
+        snapshot = "|".join(
+            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}"
+            for s in sessions
+        ) + f"||{active_session_id}"
+        if snapshot == self._last_snapshot:
+            return
+        self._last_snapshot = snapshot
+
+        self._session_ids = [s.session_id for s in sessions]
+
+        # Clamp selection
+        if self._session_ids:
+            self._selected_index = min(self._selected_index, len(self._session_ids) - 1)
+        else:
+            self._selected_index = 0
+
+        self._refresh_counter += 1
+        rc = self._refresh_counter
+
+        # Clear children of the grid and rebuild
+        try:
+            grid = self.query_one("#manager-grid", Container)
+        except NoMatches:
+            return
+
+        grid.remove_children()
+
+        if not sessions:
+            grid.mount(Static("[dim]No sessions found. Waiting...[/dim]"))
+            return
+
+        for i, session in enumerate(sessions):
+            is_active = (session.session_id == active_session_id)
+            card = SessionCard(
+                session,
+                is_active=is_active,
+                id=f"card-{rc}-{i}",
+            )
+            card.selected = (i == self._selected_index)
+            grid.mount(card)
+
+    def get_selected_session_id(self) -> str | None:
+        """Get the session ID of the currently selected card."""
+        if self._session_ids and 0 <= self._selected_index < len(self._session_ids):
+            return self._session_ids[self._selected_index]
+        return None
+
+    def move_selection(self, delta: int, columns: int = 3) -> None:
+        """Move selection by delta (positive=right/down, negative=left/up)."""
+        if not self._session_ids:
+            return
+        new_index = self._selected_index + delta
+        new_index = max(0, min(new_index, len(self._session_ids) - 1))
+        if new_index != self._selected_index:
+            self._selected_index = new_index
+            self._update_card_selection()
+
+    def _update_card_selection(self) -> None:
+        """Update selected state on all cards."""
+        try:
+            cards = list(self.query("SessionCard"))
+            for i, card in enumerate(cards):
+                card.selected = (i == self._selected_index)
+            # Scroll selected card into view
+            if 0 <= self._selected_index < len(cards):
+                cards[self._selected_index].scroll_visible()
+        except NoMatches:
+            pass
 
 
 class ConversationView(ScrollableContainer):
@@ -1026,6 +1212,11 @@ class CompanionApp(App):
         Binding("s", "toggle_summary", "Summary", show=False),
         Binding("S", "summarize_all", "Summarize All", show=False),
         Binding("D", "delete_session", "Delete", show=False),
+        Binding("M", "toggle_manager", "Manager", show=False),
+        Binding("h", "nav_left", "Left", show=False),
+        Binding("l", "nav_right", "Right", show=False),
+        Binding("left", "nav_left", "Left", show=False),
+        Binding("right", "nav_right", "Right", show=False),
         Binding("m", "focus_monitor", "Monitor", show=False),
         Binding("?", "focus_ask", "Ask", show=False),
         Binding("escape", "escape", "Escape", show=False),
@@ -1053,13 +1244,15 @@ class CompanionApp(App):
             super().__init__()
             self.alert = alert
 
-    def __init__(self, store: "EventStore", collapse_tools: bool = True, ui_style: str = "rich") -> None:
+    def __init__(self, store: "EventStore", collapse_tools: bool = True, ui_style: str = "rich", manager_mode: bool = False) -> None:
         super().__init__()
         self.store = store
         self._collapse_tools = collapse_tools
         self._use_summary = True
         self._filter_index = 0
         self._ui_style = ui_style  # "rich" or "claude-code"
+        self._manager_mode = manager_mode  # Started with --manager flag
+        self._manager_view_active = manager_mode  # Currently showing manager view
         # Filters differ by style
         if ui_style == "rich":
             self._turn_filters = [
@@ -1091,6 +1284,7 @@ class CompanionApp(App):
 
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
+        yield ManagerView(id="manager-view")
         yield ConversationView(id="conversation")
         yield TaskListView(id="tasks-view")
         yield PlanView(id="plan-view")
@@ -1104,6 +1298,9 @@ class CompanionApp(App):
         self.store.add_alert_listener(self._on_store_alert)
         # Initial render
         self._refresh_all()
+        # Show manager view if started with --manager
+        if self._manager_mode:
+            self._show_manager_view()
         # Set up periodic refresh for summaries
         self.set_interval(0.5, self._check_for_updates)
 
@@ -1118,9 +1315,12 @@ class CompanionApp(App):
     @on(TurnAdded)
     def handle_turn_added(self, message: TurnAdded) -> None:
         """Handle new turn on main thread."""
-        self._refresh_conversation()
-        if self._auto_scroll:
-            self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
+        if self._manager_view_active:
+            self._refresh_manager()
+        else:
+            self._refresh_conversation()
+            if self._auto_scroll:
+                self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
 
     @on(AlertAdded)
     def handle_alert_added(self, message: AlertAdded) -> None:
@@ -1130,7 +1330,10 @@ class CompanionApp(App):
     def _check_for_updates(self) -> None:
         """Periodic check for updates (summaries, plan changes, etc.)."""
         self._refresh_header()
-        self._refresh_views()  # Refresh plan/tasks in case they changed
+        if self._manager_view_active:
+            self._refresh_manager()
+        else:
+            self._refresh_views()  # Refresh plan/tasks in case they changed
 
     def _refresh_all(self) -> None:
         """Refresh all UI components."""
@@ -1145,7 +1348,7 @@ class CompanionApp(App):
         active = self.store.get_active_session()
         _, filter_label = self._turn_filters[self._filter_index]
         header = self.query_one("#header", HeaderPanel)
-        header.update_header(sessions, active, filter_label, self._auto_scroll)
+        header.update_header(sessions, active, filter_label, self._auto_scroll, manager_active=self._manager_view_active)
 
     def _refresh_conversation(self) -> None:
         """Refresh conversation view."""
@@ -1246,17 +1449,47 @@ class CompanionApp(App):
 
         tasks_view = self.query_one("#tasks-view", TaskListView)
         plan_view = self.query_one("#plan-view", PlanView)
+        manager_view = self.query_one("#manager-view", ManagerView)
         conversation = self.query_one("#conversation", ConversationView)
 
-        # Update visibility
-        tasks_view.set_class(self._show_tasks, "visible")
-        plan_view.set_class(self._show_plan, "visible")
-        conversation.set_class(self._show_tasks or self._show_plan, "hidden")
+        # Update visibility - manager view hides conversation and other views
+        manager_view.set_class(self._manager_view_active, "visible")
+        tasks_view.set_class(self._show_tasks and not self._manager_view_active, "visible")
+        plan_view.set_class(self._show_plan and not self._manager_view_active, "visible")
+        conversation.set_class(
+            self._show_tasks or self._show_plan or self._manager_view_active, "hidden"
+        )
 
-        if self._show_tasks:
+        if self._show_tasks and not self._manager_view_active:
             tasks_view.update_tasks(session)
-        if self._show_plan:
+        if self._show_plan and not self._manager_view_active:
             plan_view.update_plan(session)
+
+    def _refresh_manager(self) -> None:
+        """Refresh the manager view with current sessions."""
+        if not self._manager_view_active:
+            return
+        sessions = self.store.get_sessions()
+        active = self.store.get_active_session()
+        active_id = active.session_id if active else None
+        manager_view = self.query_one("#manager-view", ManagerView)
+        manager_view.refresh_cards(sessions, active_id)
+
+    def _show_manager_view(self) -> None:
+        """Show the manager view."""
+        self._manager_view_active = True
+        self._show_tasks = False
+        self._show_plan = False
+        self._refresh_manager()
+        self._refresh_views()
+        self._refresh_header()
+
+    def _hide_manager_view(self) -> None:
+        """Hide the manager view and return to conversation."""
+        self._manager_view_active = False
+        self._refresh_views()
+        self._refresh_header()
+        self._refresh_conversation()
 
     def _show_status(self, message: str) -> None:
         """Show a status message in the footer."""
@@ -1265,7 +1498,11 @@ class CompanionApp(App):
 
     # Action handlers
     def action_nav_down(self) -> None:
-        """Navigate down in conversation."""
+        """Navigate down in conversation or manager grid."""
+        if self._manager_view_active:
+            manager = self.query_one("#manager-view", ManagerView)
+            manager.move_selection(3)  # Move down one row (3 columns)
+            return
         self._auto_scroll = False
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
@@ -1282,7 +1519,11 @@ class CompanionApp(App):
         conversation.scroll_to_selected()
 
     def action_nav_up(self) -> None:
-        """Navigate up in conversation."""
+        """Navigate up in conversation or manager grid."""
+        if self._manager_view_active:
+            manager = self.query_one("#manager-view", ManagerView)
+            manager.move_selection(-3)  # Move up one row (3 columns)
+            return
         self._auto_scroll = False
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
@@ -1297,6 +1538,18 @@ class CompanionApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
+
+    def action_nav_left(self) -> None:
+        """Navigate left in manager grid."""
+        if self._manager_view_active:
+            manager = self.query_one("#manager-view", ManagerView)
+            manager.move_selection(-1)
+
+    def action_nav_right(self) -> None:
+        """Navigate right in manager grid."""
+        if self._manager_view_active:
+            manager = self.query_one("#manager-view", ManagerView)
+            manager.move_selection(1)
 
     def action_go_top(self) -> None:
         """Go to top of conversation."""
@@ -1317,7 +1570,10 @@ class CompanionApp(App):
             conversation.scroll_end()
 
     def action_toggle_expand(self) -> None:
-        """Toggle expand on selected item."""
+        """Toggle expand on selected item, or open session in manager view."""
+        if self._manager_view_active:
+            self._open_selected_session()
+            return
         conversation = self.query_one("#conversation", ConversationView)
         index = conversation.get_selected_index()
         if index is None:
@@ -1332,6 +1588,22 @@ class CompanionApp(App):
             # Persist group state
             if isinstance(widget, ToolGroupWidget):
                 self._group_expanded_state[widget.group.first_turn_number] = widget.expanded
+
+    def _open_selected_session(self) -> None:
+        """Open the selected session from manager view."""
+        manager = self.query_one("#manager-view", ManagerView)
+        session_id = manager.get_selected_session_id()
+        if session_id and self.store.set_active_session_by_id(session_id):
+            self._auto_scroll = True
+            self._group_expanded_state.clear()
+            self._hide_manager_view()
+
+    def action_toggle_manager(self) -> None:
+        """Toggle between manager view and conversation view."""
+        if self._manager_view_active:
+            self._hide_manager_view()
+        else:
+            self._show_manager_view()
 
     def action_expand_all(self) -> None:
         """Expand all items."""
@@ -1478,6 +1750,14 @@ class CompanionApp(App):
 
     def action_escape(self) -> None:
         """Handle escape key."""
+        # Return to manager view if started with --manager and viewing a session
+        if not self._manager_view_active and self._manager_mode:
+            self._show_manager_view()
+            return
+        # Close manager view if it's open (toggled via M key)
+        if self._manager_view_active:
+            self._hide_manager_view()
+            return
         # Clear selection or close views
         if self._show_tasks:
             self._show_tasks = False

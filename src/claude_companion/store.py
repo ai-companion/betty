@@ -205,6 +205,14 @@ class EventStore:
                 return True
             return False
 
+    def set_active_session_by_id(self, session_id: str) -> bool:
+        """Set active session by session ID. Returns True if successful."""
+        with self._lock:
+            if session_id in self._sessions:
+                self._active_session_id = session_id
+                return True
+            return False
+
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and clean up its watchers.
 
