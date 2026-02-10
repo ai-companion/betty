@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ site.title }}</title>
+  <meta name="description" content="{{ site.description }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-content">
+      <img src="{{ '/assets/logo.jpg' | relative_url }}" alt="{{ site.title }}" class="hero-logo">
+      <h1 class="hero-title">{{ site.title }}</h1>
+      <p class="hero-tagline">{{ site.description }}</p>
+      <div class="hero-install">
+        <code>uvx claude-companion</code>
+      </div>
+      <div class="hero-links">
+        <a href="https://github.com/ai-companion/claude-companion" class="btn btn-primary">GitHub</a>
+        <a href="https://pypi.org/project/claude-companion/" class="btn btn-secondary">PyPI</a>
+      </div>
+    </div>
+  </header>
+  <main class="content">
+    {{ content }}
+  </main>
+  <footer class="site-footer">
+    <p>MIT License</p>
+  </footer>
+</body>
+</html>
