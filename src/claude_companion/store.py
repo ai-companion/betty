@@ -135,13 +135,19 @@ class EventStore:
             from .utils import decode_project_path
             project_dir = decode_project_path(project_path)
 
-            # Try to detect git branch (best-effort with short timeout)
+            # Try to detect git branch (best-effort with short timeout).
+            # During initial load, reuse cached branch for the same project_dir.
+            # After initial load, always re-detect so new sessions reflect the
+            # current branch even if the user has switched branches.
             if project_dir:
-                if project_dir in self._branch_cache:
+                if not self._initial_load_done and project_dir in self._branch_cache:
                     branch = self._branch_cache[project_dir]
                 else:
                     branch = self._detect_git_branch(project_dir)
-                    self._branch_cache[project_dir] = branch
+                    # Only cache successful detections to avoid poisoning the
+                    # cache with transient failures (timeout, git unavailable).
+                    if branch:
+                        self._branch_cache[project_dir] = branch
                 if branch:
                     with self._lock:
                         session = self._sessions.get(session_id)

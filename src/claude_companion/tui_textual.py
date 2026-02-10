@@ -979,20 +979,28 @@ class ManagerView(ScrollableContainer):
         """Rebuild session cards from current sessions."""
         # Build a fingerprint of relevant data to skip no-op rebuilds.
         # Include minute-resolution timestamp so relative time labels refresh.
+        # Include display_name/branch so cards update promptly when detected.
         now_minute = int(datetime.now().timestamp() // 60)
         snapshot = "|".join(
-            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}"
+            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}"
             for s in sessions
         ) + f"||{active_session_id}||{now_minute}"
         if snapshot == self._last_snapshot:
             return
         self._last_snapshot = snapshot
 
+        # Remember which session was previously selected so we can restore
+        # the selection even if the list order changes.
+        previous_selected_id = self.get_selected_session_id()
+
         self._session_ids = [s.session_id for s in sessions]
 
-        # Clamp selection
+        # Restore selection by session_id if possible; otherwise clamp index.
         if self._session_ids:
-            self._selected_index = min(self._selected_index, len(self._session_ids) - 1)
+            if previous_selected_id is not None and previous_selected_id in self._session_ids:
+                self._selected_index = self._session_ids.index(previous_selected_id)
+            else:
+                self._selected_index = min(self._selected_index, len(self._session_ids) - 1)
         else:
             self._selected_index = 0
 
