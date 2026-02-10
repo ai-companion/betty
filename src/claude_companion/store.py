@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_turn_for_alerts, send_system_notification
-from .analyzer import ANALYZER_SYSTEM_PROMPT, Analysis, Analyzer, make_analysis_cache_key
+from .analyzer import (
+    ANALYZER_SYSTEM_PROMPT,
+    RANGE_SYSTEM_PROMPT,
+    Analysis,
+    Analyzer,
+    make_analysis_cache_key,
+    make_range_cache_key,
+)
 from .cache import AnnotationCache, SummaryCache
 from .config import load_config
 from .models import Session, TaskState, Turn
@@ -57,6 +64,7 @@ class EventStore:
         )
         self._summary_cache = SummaryCache()  # single cache for both assistant and tool summaries
         self._annotation_cache = AnnotationCache()  # user annotations
+        self._range_analyses: dict[tuple[int, int], Analysis] = {}  # (start_turn_num, end_turn_num) -> Analysis
 
     def start_watching(
         self,
@@ -714,6 +722,112 @@ class EventStore:
             session, turn, self._make_analysis_callback(turn, cache_key)
         )
         return True
+
+    def get_range_analysis(self, range_key: tuple[int, int]) -> Analysis | None:
+        """Get cached range analysis result."""
+        return self._range_analyses.get(range_key)
+
+    def clear_range_analyses(self) -> None:
+        """Clear all stored range analyses."""
+        self._range_analyses.clear()
+
+    def analyze_range(self, turns: list[Turn]) -> bool:
+        """Submit a range of turns for analysis.
+
+        Results are stored internally and accessible via get_range_analysis().
+        Turn listeners are notified when analysis completes (same as single-turn).
+
+        Args:
+            turns: The turns in the range
+
+        Returns:
+            True if submitted for analysis, False if already analyzed or loaded from cache
+        """
+        if not turns:
+            return False
+
+        range_key = (turns[0].turn_number, turns[-1].turn_number)
+
+        # Already analyzed successfully
+        existing = self._range_analyses.get(range_key)
+        if existing and not existing.summary.startswith("["):
+            return False
+
+        # Clear error analysis for retry
+        if existing and existing.summary.startswith("["):
+            del self._range_analyses[range_key]
+
+        # Get active session
+        with self._lock:
+            if not self._active_session_id:
+                return False
+            session = self._sessions.get(self._active_session_id)
+            if not session:
+                return False
+
+        # Build context and check cache
+        context = self._analyzer._context_manager.build_context_for_range(
+            session, turns, span_analyses=self._range_analyses
+        )
+        cache_key = make_range_cache_key(
+            turns, context, self._analyzer.model, RANGE_SYSTEM_PROMPT
+        )
+
+        cached = self._summary_cache.get(cache_key)
+        if cached:
+            import json
+            try:
+                data = json.loads(cached)
+                analysis = Analysis(
+                    summary=data["summary"],
+                    critique=data["critique"],
+                    sentiment=data["sentiment"],
+                    word_count=data["word_count"],
+                    context_word_count=data["context_word_count"],
+                )
+                self._range_analyses[range_key] = analysis
+                # Notify turn listeners so TUI refreshes
+                for listener in self._turn_listeners:
+                    try:
+                        listener(turns[0])
+                    except Exception:
+                        pass
+                return False
+            except (json.JSONDecodeError, KeyError):
+                pass  # Fall through to re-analyze
+
+        # Submit for analysis — pass existing span analyses for nested summarization
+        self._analyzer.analyze_range_async(
+            session, turns, self._make_range_analysis_callback(turns, range_key, cache_key),
+            span_analyses=self._range_analyses,
+        )
+        return True
+
+    def _make_range_analysis_callback(
+        self, turns: list[Turn], range_key: tuple[int, int], cache_key: str
+    ) -> "Callable[[Analysis, bool], None]":
+        """Create callback that stores range analysis and notifies listeners."""
+        def callback(analysis: Analysis, success: bool) -> None:
+            self._range_analyses[range_key] = analysis
+            if success:
+                import json
+                self._summary_cache.set(
+                    cache_key,
+                    json.dumps({
+                        "summary": analysis.summary,
+                        "critique": analysis.critique,
+                        "sentiment": analysis.sentiment,
+                        "word_count": analysis.word_count,
+                        "context_word_count": analysis.context_word_count,
+                    }),
+                )
+            # Notify turn listeners so TUI refreshes (same pattern as single-turn)
+            for listener in self._turn_listeners:
+                try:
+                    listener(turns[0])
+                except Exception:
+                    pass
+        return callback
 
     def _make_analysis_callback(
         self, turn: Turn, cache_key: str

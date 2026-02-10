@@ -153,6 +153,31 @@ class ToolGroup:
         return ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
 
 
+def compute_spans(turns: list[Turn]) -> list[tuple[int, int]]:
+    """Return list of (start_idx, end_idx) spans.
+
+    A span starts at each user turn and extends to just before the next user turn.
+    If the session starts with non-user turns, they form a span of their own.
+    Returns inclusive ranges into session.turns.
+    """
+    if not turns:
+        return []
+
+    spans: list[tuple[int, int]] = []
+    current_start = 0
+
+    for i, turn in enumerate(turns):
+        if turn.role == "user" and i > current_start:
+            # Close previous span
+            spans.append((current_start, i - 1))
+            current_start = i
+
+    # Close final span
+    spans.append((current_start, len(turns) - 1))
+
+    return spans
+
+
 @dataclass
 class Session:
     """A Claude Code session."""

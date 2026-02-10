@@ -8,12 +8,15 @@ import pytest
 
 from claude_companion.analyzer import (
     ANALYZER_SYSTEM_PROMPT,
+    RANGE_SYSTEM_PROMPT,
     Analysis,
     Analyzer,
     ContextManager,
+    GoalExtractor,
     make_analysis_cache_key,
+    make_range_cache_key,
 )
-from claude_companion.models import Session, TaskState, Turn
+from claude_companion.models import Session, TaskState, Turn, compute_spans
 
 
 def _make_turn(
@@ -378,3 +381,227 @@ class TestAnalyzerIntegration:
         assert "## Surrounding Turns" in prompt
         assert "## Target Turn" in prompt
         assert "Here is the implementation" in prompt
+
+
+# --- compute_spans tests ---
+
+
+class TestComputeSpans:
+    def test_empty(self):
+        assert compute_spans([]) == []
+
+    def test_single_user_turn(self):
+        turns = [_make_turn(1, "user", "Hello")]
+        assert compute_spans(turns) == [(0, 0)]
+
+    def test_single_assistant_turn(self):
+        turns = [_make_turn(1, "assistant", "Hello")]
+        assert compute_spans(turns) == [(0, 0)]
+
+    def test_basic_spans(self):
+        turns = [
+            _make_turn(1, "user", "Q1"),
+            _make_turn(2, "assistant", "A1"),
+            _make_turn(3, "tool", "T1", "Read"),
+            _make_turn(4, "tool", "T2", "Write"),
+            _make_turn(5, "user", "Q2"),
+            _make_turn(6, "assistant", "A2"),
+            _make_turn(7, "tool", "T3", "Bash"),
+            _make_turn(8, "user", "Q3"),
+            _make_turn(9, "assistant", "A3"),
+        ]
+        spans = compute_spans(turns)
+        assert spans == [(0, 3), (4, 6), (7, 8)]
+
+    def test_leading_non_user_turns(self):
+        turns = [
+            _make_turn(1, "assistant", "Welcome"),
+            _make_turn(2, "tool", "T1", "Read"),
+            _make_turn(3, "user", "Hello"),
+            _make_turn(4, "assistant", "A1"),
+        ]
+        spans = compute_spans(turns)
+        assert spans == [(0, 1), (2, 3)]
+
+    def test_all_user_turns(self):
+        turns = [
+            _make_turn(1, "user", "Q1"),
+            _make_turn(2, "user", "Q2"),
+            _make_turn(3, "user", "Q3"),
+        ]
+        spans = compute_spans(turns)
+        assert spans == [(0, 0), (1, 1), (2, 2)]
+
+    def test_no_user_turns(self):
+        turns = [
+            _make_turn(1, "assistant", "A1"),
+            _make_turn(2, "tool", "T1", "Read"),
+            _make_turn(3, "assistant", "A2"),
+        ]
+        spans = compute_spans(turns)
+        assert spans == [(0, 2)]
+
+
+# --- GoalExtractor tests ---
+
+
+class TestGoalExtractor:
+    def test_basic_extraction(self):
+        ge = GoalExtractor()
+        turns = [
+            _make_turn(1, "user", "Fix the login bug"),
+            _make_turn(2, "assistant", "I'll look at it"),
+        ]
+        session = _make_session(turns)
+        assert ge.extract(session) == "Fix the login bug"
+
+    def test_no_user_turns(self):
+        ge = GoalExtractor()
+        session = _make_session([_make_turn(1, "assistant", "Hello")])
+        assert ge.extract(session) == "[No user message found]"
+
+    def test_truncation(self):
+        ge = GoalExtractor()
+        long_msg = "x" * 3000
+        session = _make_session([_make_turn(1, "user", long_msg)])
+        goal = ge.extract(session)
+        assert len(goal) == 2000
+
+    def test_caching(self):
+        ge = GoalExtractor()
+        turns = [_make_turn(1, "user", "Fix bug")]
+        session = _make_session(turns)
+        result1 = ge.extract(session)
+        # Modify the turn content (shouldn't affect cached result)
+        turns[0] = _make_turn(1, "user", "Different goal")
+        session.turns = turns
+        result2 = ge.extract(session)
+        assert result1 == result2  # Still cached
+
+    def test_first_user_message_used(self):
+        ge = GoalExtractor()
+        turns = [
+            _make_turn(1, "assistant", "Welcome"),
+            _make_turn(2, "user", "First goal"),
+            _make_turn(3, "user", "Second message"),
+        ]
+        session = _make_session(turns)
+        assert ge.extract(session) == "First goal"
+
+
+# --- build_context_for_range tests ---
+
+
+class TestBuildContextForRange:
+    def setup_method(self):
+        self.cm = ContextManager()
+
+    def test_basic_range_context(self):
+        turns = [
+            _make_turn(1, "user", "Fix the bug"),
+            _make_turn(2, "assistant", "Looking at code"),
+            _make_turn(3, "tool", "read src/auth.py", "Read"),
+            _make_turn(4, "assistant", "Found the issue"),
+        ]
+        session = _make_session(turns)
+        ctx = self.cm.build_context_for_range(session, turns[1:3])
+
+        assert ctx["goal"] == "Fix the bug"
+        assert len(ctx["target_turns"]) == 2
+        assert ctx["target_turns"][0]["role"] == "assistant"
+        assert ctx["target_turns"][1]["role"] == "tool:Read"
+        assert ctx["range_start"] == 1
+        assert ctx["range_end"] == 2
+        assert ctx["total_turns"] == 4
+
+    def test_surrounding_context(self):
+        turns = [
+            _make_turn(1, "user", "Build API"),
+            _make_turn(2, "assistant", "Sure"),
+            _make_turn(3, "tool", "read file", "Read"),
+            _make_turn(4, "assistant", "Done"),
+            _make_turn(5, "user", "Add tests"),
+        ]
+        session = _make_session(turns)
+        # Analyze turns 2-3 (the middle)
+        ctx = self.cm.build_context_for_range(session, turns[1:3])
+
+        # Surrounding should include turns outside the range
+        surround_indices = [s["index"] for s in ctx["surrounding"]]
+        assert 1 not in surround_indices  # In range
+        assert 2 not in surround_indices  # In range
+        # Turns 0, 3, 4 should be in surrounding
+        assert 0 in surround_indices
+        assert 3 in surround_indices
+        assert 4 in surround_indices
+
+    def test_full_session_range(self):
+        turns = [
+            _make_turn(1, "user", "Goal"),
+            _make_turn(2, "assistant", "Response"),
+        ]
+        session = _make_session(turns)
+        ctx = self.cm.build_context_for_range(session, turns)
+
+        assert len(ctx["target_turns"]) == 2
+        assert ctx["surrounding"] == []  # No turns outside range
+
+    def test_active_tasks_included(self):
+        turns = [_make_turn(1, "user", "Do something")]
+        session = _make_session(turns)
+        session.tasks["1"] = TaskState(
+            task_id="1", subject="Task A", description="", status="in_progress"
+        )
+        ctx = self.cm.build_context_for_range(session, turns)
+        assert len(ctx["active_tasks"]) == 1
+        assert "[in_progress] Task A" in ctx["active_tasks"]
+
+
+# --- make_range_cache_key tests ---
+
+
+class TestMakeRangeCacheKey:
+    def test_same_input_same_key(self):
+        turns = [_make_turn(1, "user", "Hello"), _make_turn(2, "assistant", "World")]
+        context = {"goal": "Fix bug", "surrounding": []}
+        key1 = make_range_cache_key(turns, context, "model-a", RANGE_SYSTEM_PROMPT)
+        key2 = make_range_cache_key(turns, context, "model-a", RANGE_SYSTEM_PROMPT)
+        assert key1 == key2
+
+    def test_different_turns_different_key(self):
+        turns_a = [_make_turn(1, "user", "Hello")]
+        turns_b = [_make_turn(1, "user", "Goodbye")]
+        context = {"goal": "Fix bug", "surrounding": []}
+        key_a = make_range_cache_key(turns_a, context, "model-a", RANGE_SYSTEM_PROMPT)
+        key_b = make_range_cache_key(turns_b, context, "model-a", RANGE_SYSTEM_PROMPT)
+        assert key_a != key_b
+
+    def test_different_model_different_key(self):
+        turns = [_make_turn(1, "user", "Hello")]
+        context = {"goal": "Fix bug", "surrounding": []}
+        key_a = make_range_cache_key(turns, context, "model-a", RANGE_SYSTEM_PROMPT)
+        key_b = make_range_cache_key(turns, context, "model-b", RANGE_SYSTEM_PROMPT)
+        assert key_a != key_b
+
+    def test_different_context_different_key(self):
+        turns = [_make_turn(1, "user", "Hello")]
+        ctx_a = {"goal": "Fix bug", "surrounding": [{"content": "context A"}]}
+        ctx_b = {"goal": "Fix bug", "surrounding": [{"content": "context B"}]}
+        key_a = make_range_cache_key(turns, ctx_a, "model-a", RANGE_SYSTEM_PROMPT)
+        key_b = make_range_cache_key(turns, ctx_b, "model-a", RANGE_SYSTEM_PROMPT)
+        assert key_a != key_b
+
+    def test_key_format(self):
+        turns = [_make_turn(1, "user", "Hello")]
+        context = {"goal": "Goal", "surrounding": []}
+        key = make_range_cache_key(turns, context, "test", RANGE_SYSTEM_PROMPT)
+        assert key.startswith("RANGE_ANALYSIS::")
+        parts = key.split("::")
+        assert len(parts) == 4
+
+    def test_different_system_prompt_different_key(self):
+        turns = [_make_turn(1, "user", "Hello")]
+        context = {"goal": "Fix bug", "surrounding": []}
+        key_a = make_range_cache_key(turns, context, "model-a", RANGE_SYSTEM_PROMPT)
+        key_b = make_range_cache_key(turns, context, "model-a", ANALYZER_SYSTEM_PROMPT)
+        assert key_a != key_b
