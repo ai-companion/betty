@@ -1659,6 +1659,8 @@ class CompanionApp(App):
 
     def action_toggle_tasks(self) -> None:
         """Toggle task list view."""
+        if self._manager_view_active:
+            return
         self._show_tasks = not self._show_tasks
         self._show_plan = False
         self._refresh_views()
@@ -1666,6 +1668,8 @@ class CompanionApp(App):
 
     def action_toggle_plan(self) -> None:
         """Toggle plan view."""
+        if self._manager_view_active:
+            return
         self._show_plan = not self._show_plan
         self._show_tasks = False
         self._refresh_views()
