@@ -299,41 +299,6 @@ class TurnWidget(Static):
         except NoMatches:
             pass
 
-    def _render_analysis_rich(self, turn: Turn):
-        """Render analysis panel for rich style."""
-        if not turn.analysis:
-            return None
-        a = turn.analysis
-        color = "#5fd787" if a.sentiment == "progress" else (
-            "#ffaf00" if a.sentiment == "concern" else "#ff5f5f"
-        )
-        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(a.sentiment, "?")
-        return RichText.from_markup(
-            f"[{color}]{indicator} Analysis:[/{color}] {a.summary}\n"
-            f"[{color}]  Critique:[/{color}] {a.critique}"
-        )
-
-    def _render_analysis_claude_code(self, turn: Turn):
-        """Render analysis panel for claude-code style."""
-        if not turn.analysis:
-            return None
-        a = turn.analysis
-        color = "#5fd787" if a.sentiment == "progress" else (
-            "#ffaf00" if a.sentiment == "concern" else "#ff5f5f"
-        )
-        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(a.sentiment, "?")
-        row = Table.grid(padding=(0, 0))
-        row.add_column(width=2)
-        row.add_column()
-        row.add_row(
-            RichText("  ", style="dim"),
-            RichText.from_markup(
-                f"[{color}]{indicator} Analysis:[/{color}] {a.summary}\n"
-                f"[{color}]  Critique:[/{color}] {a.critique}"
-            ),
-        )
-        return row
-
     def _render_rich_style(self):
         """Render turn in rich style with emojis and boxes."""
         turn = self.turn
@@ -352,10 +317,6 @@ class TurnWidget(Static):
             # Add annotation if available
             if turn.annotation:
                 parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
-            # Add analysis if available
-            analysis_panel = self._render_analysis_rich(turn)
-            if analysis_panel:
-                parts.append(analysis_panel)
             return RichGroup(*parts)
         elif turn.role == "assistant":
             icon = self.ROLE_ICONS["assistant"]
@@ -395,11 +356,6 @@ class TurnWidget(Static):
             if turn.annotation:
                 parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
 
-            # Add analysis if available
-            analysis_panel = self._render_analysis_rich(turn)
-            if analysis_panel:
-                parts.append(analysis_panel)
-
             return RichGroup(*parts)
         else:
             # Tool turn
@@ -414,10 +370,6 @@ class TurnWidget(Static):
             # Add annotation if available
             if turn.annotation:
                 parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
-            # Add analysis if available
-            analysis_panel = self._render_analysis_rich(turn)
-            if analysis_panel:
-                parts.append(analysis_panel)
             return RichGroup(*parts)
 
     def _render_claude_code_style(self):
@@ -447,10 +399,6 @@ class TurnWidget(Static):
                     RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"),
                 )
                 parts.append(annotation_row)
-            # Add analysis if available
-            analysis_row = self._render_analysis_claude_code(turn)
-            if analysis_row:
-                parts.append(analysis_row)
             return RichGroup(*parts) if len(parts) > 1 else parts[0]
         elif turn.role == "assistant":
             bullet_style = selected_style or "white"
@@ -512,11 +460,6 @@ class TurnWidget(Static):
                 )
                 parts.append(annotation_row)
 
-            # Add analysis if available
-            analysis_row = self._render_analysis_claude_code(turn)
-            if analysis_row:
-                parts.append(analysis_row)
-
             return RichGroup(*parts) if len(parts) > 1 else parts[0]
         else:
             # Tool turn - use green bullet
@@ -547,11 +490,6 @@ class TurnWidget(Static):
                     RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"),
                 )
                 parts.append(annotation_row)
-
-            # Add analysis if available
-            analysis_row = self._render_analysis_claude_code(turn)
-            if analysis_row:
-                parts.append(analysis_row)
 
             return RichGroup(*parts) if len(parts) > 1 else parts[0]
 
@@ -632,17 +570,6 @@ class ToolGroupWidget(Static):
             # Add annotation if available (stored on first tool)
             if first_tool and first_tool.annotation:
                 parts.append(RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"))
-            # Add analysis if available (stored on first tool)
-            if first_tool and first_tool.analysis:
-                a = first_tool.analysis
-                color = "#5fd787" if a.sentiment == "progress" else (
-                    "#ffaf00" if a.sentiment == "concern" else "#ff5f5f"
-                )
-                indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(a.sentiment, "?")
-                parts.append(RichText.from_markup(
-                    f"[{color}]{indicator} Analysis:[/{color}] {a.summary}\n"
-                    f"[{color}]  Critique:[/{color}] {a.critique}"
-                ))
             return RichGroup(*parts)
         else:
             # Expanded or no summary
@@ -661,17 +588,6 @@ class ToolGroupWidget(Static):
             # Add annotation if available (stored on first tool)
             if first_tool and first_tool.annotation:
                 parts.append(RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"))
-            # Add analysis if available (stored on first tool)
-            if first_tool and first_tool.analysis:
-                a = first_tool.analysis
-                color = "#5fd787" if a.sentiment == "progress" else (
-                    "#ffaf00" if a.sentiment == "concern" else "#ff5f5f"
-                )
-                indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(a.sentiment, "?")
-                parts.append(RichText.from_markup(
-                    f"[{color}]{indicator} Analysis:[/{color}] {a.summary}\n"
-                    f"[{color}]  Critique:[/{color}] {a.critique}"
-                ))
             return RichGroup(*parts)
 
     def _render_claude_code_style(self):
@@ -701,24 +617,6 @@ class ToolGroupWidget(Static):
                     RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"),
                 )
                 parts.append(annotation_row)
-            # Add analysis if available (stored on first tool)
-            if first_tool and first_tool.analysis:
-                a = first_tool.analysis
-                color = "#5fd787" if a.sentiment == "progress" else (
-                    "#ffaf00" if a.sentiment == "concern" else "#ff5f5f"
-                )
-                indicator_sym = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(a.sentiment, "?")
-                analysis_row = Table.grid(padding=(0, 0))
-                analysis_row.add_column(width=2)
-                analysis_row.add_column()
-                analysis_row.add_row(
-                    RichText("  ", style="dim"),
-                    RichText.from_markup(
-                        f"[{color}]{indicator_sym} Analysis:[/{color}] {a.summary}\n"
-                        f"[{color}]  Critique:[/{color}] {a.critique}"
-                    ),
-                )
-                parts.append(analysis_row)
             return RichGroup(*parts) if len(parts) > 1 else parts[0]
         else:
             # Expanded or no summary - each tool in two columns
@@ -749,24 +647,6 @@ class ToolGroupWidget(Static):
                     RichText.from_markup(f"[yellow]📝 {first_tool.annotation}[/yellow]"),
                 )
                 parts.append(annotation_row)
-            # Add analysis if available (stored on first tool)
-            if first_tool and first_tool.analysis:
-                a = first_tool.analysis
-                color = "#5fd787" if a.sentiment == "progress" else (
-                    "#ffaf00" if a.sentiment == "concern" else "#ff5f5f"
-                )
-                indicator_sym = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(a.sentiment, "?")
-                analysis_row = Table.grid(padding=(0, 0))
-                analysis_row.add_column(width=2)
-                analysis_row.add_column()
-                analysis_row.add_row(
-                    RichText("  ", style="dim"),
-                    RichText.from_markup(
-                        f"[{color}]{indicator_sym} Analysis:[/{color}] {a.summary}\n"
-                        f"[{color}]  Critique:[/{color}] {a.critique}"
-                    ),
-                )
-                parts.append(analysis_row)
             return RichGroup(*parts)
 
 
@@ -966,6 +846,49 @@ class PlanView(Static):
         md_content = Markdown(session.plan_content)
 
         self.update(RichGroup(RichText.from_markup(header), md_content))
+
+
+class AnalysisPanel(Static):
+    """Right-side panel for displaying turn analysis results."""
+
+    DEFAULT_CSS = """
+    AnalysisPanel {
+        dock: right;
+        width: 40;
+        height: 1fr;
+        display: none;
+        border: solid $success;
+        padding: 1 2;
+        overflow-y: auto;
+    }
+
+    AnalysisPanel.visible {
+        display: block;
+    }
+    """
+
+    def update_analysis(self, turn: Turn, analysis) -> None:
+        """Update the panel with analysis for the given turn."""
+        color = "#5fd787" if analysis.sentiment == "progress" else (
+            "#ffaf00" if analysis.sentiment == "concern" else "#ff5f5f"
+        )
+        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(
+            analysis.sentiment, "?"
+        )
+
+        role = turn.role.capitalize()
+        turn_num = turn.turn_number
+
+        lines = [
+            f"[bold]Analysis[/bold]  [dim]Turn {turn_num} · {role}[/dim]\n",
+            f"[{color}]{indicator} Sentiment: {analysis.sentiment}[/{color}]\n",
+            f"[bold]Summary[/bold]\n{analysis.summary}\n",
+            f"[bold]Critique[/bold]\n{analysis.critique}\n",
+            f"[dim]Turn words: {analysis.word_count:,}[/dim]",
+            f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
+        ]
+
+        self.update(RichText.from_markup("\n".join(lines)))
 
 
 class ConversationView(ScrollableContainer):
@@ -1215,6 +1138,7 @@ class CompanionApp(App):
         yield ConversationView(id="conversation")
         yield TaskListView(id="tasks-view")
         yield PlanView(id="plan-view")
+        yield AnalysisPanel(id="analysis-panel")
         yield AlertsPanel(id="alerts")
         yield InputPanel(id="inputs")
         yield Footer()
@@ -1242,6 +1166,7 @@ class CompanionApp(App):
         self._refresh_conversation()
         if self._auto_scroll:
             self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
+        self._refresh_analysis_panel()
 
     @on(AlertAdded)
     def handle_alert_added(self, message: AlertAdded) -> None:
@@ -1379,6 +1304,35 @@ class CompanionApp(App):
         if self._show_plan:
             plan_view.update_plan(session)
 
+    def _refresh_analysis_panel(self) -> None:
+        """Update the analysis panel based on the currently selected turn."""
+        panel = self.query_one("#analysis-panel", AnalysisPanel)
+        conversation = self.query_one("#conversation", ConversationView)
+        index = conversation.get_selected_index()
+
+        if index is None:
+            panel.remove_class("visible")
+            return
+
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        if not (0 <= index < len(widgets)):
+            panel.remove_class("visible")
+            return
+
+        widget = widgets[index]
+        if isinstance(widget, TurnWidget):
+            turn = widget.turn
+        elif isinstance(widget, ToolGroupWidget):
+            turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+        else:
+            turn = None
+
+        if turn and turn.analysis:
+            panel.update_analysis(turn, turn.analysis)
+            panel.add_class("visible")
+        else:
+            panel.remove_class("visible")
+
     def _show_status(self, message: str) -> None:
         """Show a status message in the footer."""
         self._status_message = message
@@ -1401,6 +1355,7 @@ class CompanionApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
+        self._refresh_analysis_panel()
 
     def action_nav_up(self) -> None:
         """Navigate up in conversation."""
@@ -1418,6 +1373,7 @@ class CompanionApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
+        self._refresh_analysis_panel()
 
     def action_go_top(self) -> None:
         """Go to top of conversation."""
@@ -1427,6 +1383,7 @@ class CompanionApp(App):
         if widgets:
             conversation.set_selected_index(0)
             conversation.scroll_home()
+        self._refresh_analysis_panel()
 
     def action_go_bottom(self) -> None:
         """Go to bottom of conversation."""
@@ -1436,6 +1393,7 @@ class CompanionApp(App):
         if widgets:
             conversation.set_selected_index(len(widgets) - 1)
             conversation.scroll_end()
+        self._refresh_analysis_panel()
 
     def action_toggle_expand(self) -> None:
         """Toggle expand on selected item."""
@@ -1576,7 +1534,8 @@ class CompanionApp(App):
             self._show_status("No historical turns need summarization")
 
     def action_analyze_turn(self) -> None:
-        """Analyze the selected turn."""
+        """Analyze the selected turn, or toggle the panel if already analyzed."""
+        panel = self.query_one("#analysis-panel", AnalysisPanel)
         conversation = self.query_one("#conversation", ConversationView)
         index = conversation.get_selected_index()
         if index is None:
@@ -1600,6 +1559,11 @@ class CompanionApp(App):
             self._show_status("Cannot analyze this item")
             return
 
+        # Toggle panel off if already showing analysis for this turn
+        if turn.analysis and panel.has_class("visible"):
+            panel.remove_class("visible")
+            return
+
         submitted = self.store.analyze_turn(turn)
         if submitted:
             self._show_status(f"Analyzing turn {turn.turn_number}...")
@@ -1610,6 +1574,7 @@ class CompanionApp(App):
             else:
                 self._show_status(f"Analysis loaded for turn {turn.turn_number}")
                 self._refresh_conversation()
+        self._refresh_analysis_panel()
 
     def action_delete_session(self) -> None:
         """Delete active session."""
@@ -1645,6 +1610,7 @@ class CompanionApp(App):
         else:
             conversation = self.query_one("#conversation", ConversationView)
             conversation.set_selected_index(None)
+        self._refresh_analysis_panel()
 
     def _select_session(self, index: int) -> None:
         """Select session by index (1-based)."""
@@ -1653,6 +1619,7 @@ class CompanionApp(App):
             self._auto_scroll = True
             self._group_expanded_state.clear()
             self._refresh_all()
+            self._refresh_analysis_panel()
 
     def action_select_session_1(self) -> None:
         self._select_session(1)
