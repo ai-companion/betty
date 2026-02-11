@@ -44,10 +44,21 @@ class LLMConfig:
 
 
 @dataclass
+class AnalyzerConfig:
+    """Configuration for the turn/range analyzer."""
+
+    context_budget: int = 20000       # Max chars for context window
+    small_range_max: int = 10         # Turns threshold for "small" range (full content)
+    large_range_min: int = 31         # Turns threshold for "large" range (span summaries)
+    per_turn_budget: int = 2000       # Max chars per turn in small ranges
+
+
+@dataclass
 class Config:
     """Claude Companion configuration."""
 
     llm: LLMConfig
+    analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     style: str = field(default=DEFAULT_STYLE)
     collapse_tools: bool = field(default=True)  # Collapse tool turns into groups
     debug_logging: bool = field(default=False)  # Enable debug logging to file (opt-in)
@@ -58,6 +69,7 @@ DEFAULT_CONFIG = Config(
     llm=LLMConfig(
         model="claude-code/haiku",
     ),
+    analyzer=AnalyzerConfig(),
     style=DEFAULT_STYLE,
     collapse_tools=True,
     debug_logging=False,
@@ -200,6 +212,18 @@ def load_config() -> Config:
         collapse_tools = data.get("collapse_tools", collapse_tools)
         debug_logging = data.get("debug_logging", debug_logging)
 
+    # Load analyzer config from file
+    analyzer_config = AnalyzerConfig()
+    if data is not None:
+        analyzer_data = data.get("analyzer", {})
+        if analyzer_data:
+            analyzer_config = AnalyzerConfig(
+                context_budget=analyzer_data.get("context_budget", 20000),
+                small_range_max=analyzer_data.get("small_range_max", 10),
+                large_range_min=analyzer_data.get("large_range_min", 31),
+                per_turn_budget=analyzer_data.get("per_turn_budget", 2000),
+            )
+
     # Environment variables override everything
     # Deprecation warning for old env var
     if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
@@ -225,6 +249,7 @@ def load_config() -> Config:
             model=llm_model,
             api_base=api_base,
         ),
+        analyzer=analyzer_config,
         style=style,
         collapse_tools=collapse_tools,
         debug_logging=debug_logging,
@@ -250,6 +275,16 @@ def save_config(config: Config) -> None:
     # Save api_base when set (for local/custom endpoints)
     if config.llm.api_base:
         data["llm"]["api_base"] = config.llm.api_base
+
+    # Save analyzer config only if non-default
+    default_analyzer = AnalyzerConfig()
+    if config.analyzer != default_analyzer:
+        data["analyzer"] = {
+            "context_budget": config.analyzer.context_budget,
+            "small_range_max": config.analyzer.small_range_max,
+            "large_range_min": config.analyzer.large_range_min,
+            "per_turn_budget": config.analyzer.per_turn_budget,
+        }
 
     with open(CONFIG_FILE, "wb") as f:
         tomli_w.dump(data, f)

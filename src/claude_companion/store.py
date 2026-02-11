@@ -61,6 +61,7 @@ class EventStore:
             model=config.llm.model,
             api_base=config.llm.api_base,
             api_key=config.llm.api_key,
+            analyzer_config=config.analyzer,
         )
         self._summary_cache = SummaryCache()  # single cache for both assistant and tool summaries
         self._annotation_cache = AnnotationCache()  # user annotations

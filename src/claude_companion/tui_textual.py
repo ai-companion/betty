@@ -23,6 +23,7 @@ from textual.widgets import Static, Footer, Input, Label
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
 from .models import Session, Turn, ToolGroup, compute_spans
+from .pricing import get_pricing, estimate_cost
 
 if TYPE_CHECKING:
     from .store import EventStore
@@ -715,9 +716,18 @@ class HeaderPanel(Static):
             historical_count = sum(1 for t in self._active.turns if t.is_historical)
             live_count = len(self._active.turns) - historical_count
             turns_info = f"h{historical_count}+{live_count}" if historical_count else str(live_count)
+
+            if self._active.has_token_data:
+                token_stats = f"in:{self._active.total_input_tokens:,}tok out:{self._active.total_output_tokens:,}tok"
+                cost = self._active.estimated_cost
+                if cost is not None:
+                    token_stats += f" ~${cost:.2f}"
+            else:
+                token_stats = f"in:{self._active.total_input_words:,} out:{self._active.total_output_words:,}"
+
             stats = (
                 f"{self._active.model} | "
-                f"in:{self._active.total_input_words:,} out:{self._active.total_output_words:,} | "
+                f"{token_stats} | "
                 f"turns:{turns_info} | "
                 f"{self._filter_label}{scroll_indicator}"
             )
@@ -908,6 +918,22 @@ class AnalysisPanel(Static):
             f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
         ]
 
+        if turn.input_tokens is not None:
+            token_line = f"[dim]Tokens: {turn.input_tokens:,} in / {turn.output_tokens or 0:,} out[/dim]"
+            lines.append(token_line)
+            # Cost for this turn
+            if turn.model_id:
+                pricing = get_pricing(turn.model_id)
+                if pricing:
+                    cost = estimate_cost(
+                        turn.input_tokens or 0,
+                        turn.output_tokens or 0,
+                        turn.cache_creation_tokens or 0,
+                        turn.cache_read_tokens or 0,
+                        pricing,
+                    )
+                    lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
+
         self.update(RichText.from_markup("\n".join(lines)))
 
     def update_range_analysis(self, turns: list[Turn], analysis, label: str) -> None:
@@ -931,6 +957,25 @@ class AnalysisPanel(Static):
             f"[dim]Total words: {total_words:,}[/dim]",
             f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
         ]
+
+        # Show token totals and cost if any turns have token data
+        has_tokens = any(t.input_tokens is not None for t in turns)
+        if has_tokens:
+            total_in = sum(t.input_tokens or 0 for t in turns)
+            total_out = sum(t.output_tokens or 0 for t in turns)
+            total_cache_create = sum(t.cache_creation_tokens or 0 for t in turns)
+            total_cache_read = sum(t.cache_read_tokens or 0 for t in turns)
+            lines.append(f"[dim]Tokens: {total_in:,} in / {total_out:,} out[/dim]")
+
+            # Find model from first turn with model_id
+            model_id = next((t.model_id for t in turns if t.model_id), None)
+            if model_id:
+                pricing = get_pricing(model_id)
+                if pricing:
+                    cost = estimate_cost(
+                        total_in, total_out, total_cache_create, total_cache_read, pricing,
+                    )
+                    lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
 
         self.update(RichText.from_markup("\n".join(lines)))
 

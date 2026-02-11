@@ -97,8 +97,10 @@ class GoalExtractor:
 class ContextManager:
     """Builds context for turn analysis."""
 
-    def __init__(self) -> None:
+    def __init__(self, analyzer_config: "AnalyzerConfig | None" = None) -> None:
+        from .config import AnalyzerConfig
         self._goal_extractor = GoalExtractor()
+        self._config = analyzer_config or AnalyzerConfig()
 
     def build_context(self, session: "Session", target_turn: Turn) -> dict:
         """Assemble context for analyzing a turn.
@@ -286,8 +288,8 @@ class ContextManager:
             if not task.is_deleted:
                 active_tasks.append(f"[{task.status}] {task.subject}")
 
-        # === Large range (>30 turns): span-level summaries ===
-        if n_turns > 30:
+        # === Large range (>=large_range_min turns): span-level summaries ===
+        if n_turns >= self._config.large_range_min:
             spans = compute_spans(turns)
             span_summaries = []
             for si, (s_start, s_end) in enumerate(spans):
@@ -311,12 +313,13 @@ class ContextManager:
                 "total_turns": len(session.turns),
             }
 
-        # === Medium range (11-30 turns): condensed per-turn ===
-        if n_turns > 10:
+        # === Medium range (>small_range_max turns): condensed per-turn ===
+        if n_turns > self._config.small_range_max:
             user_count = sum(1 for t in turns if t.role == "user")
             other_count = n_turns - user_count
             total_shares = user_count * 3 + other_count
-            per_share = max(50, 10000 // max(total_shares, 1))
+            medium_budget = self._config.context_budget // 2
+            per_share = max(50, medium_budget // max(total_shares, 1))
             user_budget = per_share * 3
             other_budget = per_share
         else:
@@ -329,12 +332,13 @@ class ContextManager:
             if role == "tool" and t.tool_name:
                 role = f"tool:{t.tool_name}"
 
-            if n_turns > 10:
+            if n_turns > self._config.small_range_max:
                 budget = user_budget if t.role == "user" else other_budget
                 content = self._condensed_turn(t, budget)
             else:
-                content = t.content_full[:2000]
-                if len(t.content_full) > 2000:
+                ptb = self._config.per_turn_budget
+                content = t.content_full[:ptb]
+                if len(t.content_full) > ptb:
                     content += "..."
 
             target_turns.append({
@@ -383,12 +387,14 @@ class Analyzer:
         api_base: str | None = None,
         api_key: str | None = None,
         max_workers: int = 1,
+        analyzer_config: "AnalyzerConfig | None" = None,
     ):
+        from .config import AnalyzerConfig
         self.model = model
         self.api_base = api_base.rstrip("/") if api_base else None
         self.api_key = api_key
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._context_manager = ContextManager()
+        self._context_manager = ContextManager(analyzer_config=analyzer_config)
 
         if self.model.startswith("claude-code/") and not shutil.which("claude"):
             logger.warning(

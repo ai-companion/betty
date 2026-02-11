@@ -22,6 +22,16 @@ def export_session_markdown(session: Session, output_path: Path | None = None) -
         f"- Input words: {session.total_input_words:,}",
         f"- Output words: {session.total_output_words:,}",
         f"- Tool calls: {session.total_tool_calls}",
+    ]
+
+    if session.has_token_data:
+        lines.append(f"- Input tokens: {session.total_input_tokens:,}")
+        lines.append(f"- Output tokens: {session.total_output_tokens:,}")
+        cost = session.estimated_cost
+        if cost is not None:
+            lines.append(f"- Estimated cost: ${cost:.2f}")
+
+    lines += [
         "",
         "## Turns",
         "",
@@ -74,6 +84,11 @@ def export_session_json(session: Session, output_path: Path | None = None) -> st
             "total_input_words": session.total_input_words,
             "total_output_words": session.total_output_words,
             "total_tool_calls": session.total_tool_calls,
+            "total_input_tokens": session.total_input_tokens,
+            "total_output_tokens": session.total_output_tokens,
+            "total_cache_creation_tokens": session.total_cache_creation_tokens,
+            "total_cache_read_tokens": session.total_cache_read_tokens,
+            "estimated_cost": session.estimated_cost,
         },
         "turns": [
             {
@@ -93,6 +108,11 @@ def export_session_json(session: Session, output_path: Path | None = None) -> st
                     "context_word_count": turn.analysis.context_word_count,
                 } if turn.analysis else None,
                 "word_count": turn.word_count,
+                "input_tokens": turn.input_tokens,
+                "output_tokens": turn.output_tokens,
+                "cache_creation_tokens": turn.cache_creation_tokens,
+                "cache_read_tokens": turn.cache_read_tokens,
+                "model_id": turn.model_id,
                 "timestamp": turn.timestamp.isoformat(),
             }
             for turn in session.turns

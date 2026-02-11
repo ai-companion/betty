@@ -1,7 +1,9 @@
 """Tests for the on-demand turn analyzer."""
 
 import json
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,7 +18,9 @@ from claude_companion.analyzer import (
     make_analysis_cache_key,
     make_range_cache_key,
 )
+from claude_companion.config import AnalyzerConfig
 from claude_companion.models import Session, TaskState, Turn, compute_spans
+from claude_companion.pricing import ModelPricing, get_pricing, estimate_cost, MODEL_PRICING
 
 
 def _make_turn(
@@ -605,3 +609,343 @@ class TestMakeRangeCacheKey:
         key_a = make_range_cache_key(turns, context, "model-a", RANGE_SYSTEM_PROMPT)
         key_b = make_range_cache_key(turns, context, "model-a", ANALYZER_SYSTEM_PROMPT)
         assert key_a != key_b
+
+
+# --- Pricing tests ---
+
+
+class TestGetPricing:
+    def test_exact_match(self):
+        pricing = get_pricing("claude-sonnet-4")
+        assert pricing is not None
+        assert pricing.input_per_mtok == 3.0
+        assert pricing.output_per_mtok == 15.0
+
+    def test_prefix_match_with_version(self):
+        pricing = get_pricing("claude-haiku-4-5-20251001")
+        assert pricing is not None
+        assert pricing.input_per_mtok == 0.80
+
+    def test_prefix_match_opus(self):
+        pricing = get_pricing("claude-opus-4-20250115")
+        assert pricing is not None
+        assert pricing.input_per_mtok == 15.0
+
+    def test_unknown_model(self):
+        assert get_pricing("unknown-model-123") is None
+
+    def test_empty_string(self):
+        assert get_pricing("") is None
+
+    def test_none_returns_none(self):
+        assert get_pricing(None) is None
+
+    def test_all_known_models_have_pricing(self):
+        for model_id in MODEL_PRICING:
+            assert get_pricing(model_id) is not None
+
+
+class TestEstimateCost:
+    def test_basic_cost(self):
+        pricing = ModelPricing(
+            input_per_mtok=3.0,
+            output_per_mtok=15.0,
+            cache_write_per_mtok=3.75,
+            cache_read_per_mtok=0.30,
+        )
+        cost = estimate_cost(1_000_000, 500_000, 0, 0, pricing)
+        # 1M * 3.0/M + 500K * 15.0/M = 3.0 + 7.5 = 10.5
+        assert cost == pytest.approx(10.5)
+
+    def test_zero_tokens(self):
+        pricing = ModelPricing(3.0, 15.0, 3.75, 0.30)
+        assert estimate_cost(0, 0, 0, 0, pricing) == 0.0
+
+    def test_with_cache_tokens(self):
+        pricing = ModelPricing(3.0, 15.0, 3.75, 0.30)
+        cost = estimate_cost(1000, 500, 2000, 3000, pricing)
+        expected = (1000 * 3.0 + 500 * 15.0 + 2000 * 3.75 + 3000 * 0.30) / 1_000_000
+        assert cost == pytest.approx(expected)
+
+    def test_haiku_pricing(self):
+        pricing = get_pricing("claude-haiku-4-5-20251001")
+        assert pricing is not None
+        cost = estimate_cost(1000, 500, 2000, 0, pricing)
+        expected = (1000 * 0.80 + 500 * 4.0 + 2000 * 1.0) / 1_000_000
+        assert cost == pytest.approx(expected)
+
+
+# --- Token parsing tests ---
+
+
+class TestTokenParsing:
+    def test_transcript_parse_entry_extracts_tokens(self):
+        from claude_companion.transcript import _parse_entry
+
+        entry = {
+            "type": "assistant",
+            "timestamp": "2025-01-01T12:00:00Z",
+            "message": {
+                "model": "claude-haiku-4-5-20251001",
+                "content": [{"type": "text", "text": "Hello"}],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 200,
+                    "cache_read_input_tokens": 300,
+                },
+            },
+        }
+        turns = _parse_entry(entry, 0)
+        assert len(turns) == 1
+        assert turns[0].input_tokens == 100
+        assert turns[0].output_tokens == 50
+        assert turns[0].cache_creation_tokens == 200
+        assert turns[0].cache_read_tokens == 300
+        assert turns[0].model_id == "claude-haiku-4-5-20251001"
+
+    def test_transcript_parse_entry_first_turn_only(self):
+        """Token data should only be on the first turn from an entry."""
+        from claude_companion.transcript import _parse_entry
+
+        entry = {
+            "type": "assistant",
+            "timestamp": "2025-01-01T12:00:00Z",
+            "message": {
+                "model": "claude-sonnet-4-20250115",
+                "content": [
+                    {"type": "text", "text": "I'll read the file"},
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "foo.py"}},
+                ],
+                "usage": {
+                    "input_tokens": 500,
+                    "output_tokens": 100,
+                },
+            },
+        }
+        turns = _parse_entry(entry, 0)
+        assert len(turns) == 2
+        # First turn gets the tokens
+        assert turns[0].input_tokens == 500
+        assert turns[0].output_tokens == 100
+        assert turns[0].model_id == "claude-sonnet-4-20250115"
+        # Second turn should NOT have tokens (avoid double-counting)
+        assert turns[1].input_tokens is None
+        assert turns[1].output_tokens is None
+        assert turns[1].model_id is None
+
+    def test_transcript_parse_entry_no_usage(self):
+        """Entries without usage data should have None tokens."""
+        from claude_companion.transcript import _parse_entry
+
+        entry = {
+            "type": "assistant",
+            "timestamp": "2025-01-01T12:00:00Z",
+            "message": {
+                "content": [{"type": "text", "text": "Hello"}],
+            },
+        }
+        turns = _parse_entry(entry, 0)
+        assert len(turns) == 1
+        assert turns[0].input_tokens is None
+        assert turns[0].output_tokens is None
+        assert turns[0].model_id is None
+
+    def test_user_entry_no_tokens(self):
+        """User entries should not have token data."""
+        from claude_companion.transcript import _parse_entry
+
+        entry = {
+            "type": "user",
+            "timestamp": "2025-01-01T12:00:00Z",
+            "message": {"content": "Hello there"},
+        }
+        turns = _parse_entry(entry, 0)
+        assert len(turns) == 1
+        assert turns[0].input_tokens is None
+
+    def test_watcher_parse_entry_extracts_tokens(self):
+        from claude_companion.watcher import TranscriptWatcher
+
+        watcher = TranscriptWatcher(on_turn=lambda t: None)
+        entry = {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-20250115",
+                "content": [{"type": "text", "text": "Hello"}],
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 200,
+                    "cache_creation_input_tokens": 5000,
+                    "cache_read_input_tokens": 0,
+                },
+            },
+        }
+        turns = watcher._parse_entry(entry)
+        assert len(turns) == 1
+        assert turns[0].input_tokens == 1000
+        assert turns[0].output_tokens == 200
+        assert turns[0].cache_creation_tokens == 5000
+        assert turns[0].cache_read_tokens == 0
+        assert turns[0].model_id == "claude-opus-4-20250115"
+
+
+# --- Session token properties tests ---
+
+
+class TestSessionTokenProperties:
+    def _make_token_turn(
+        self,
+        turn_number: int,
+        role: str = "assistant",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_creation: int | None = None,
+        cache_read: int | None = None,
+        model_id: str | None = None,
+    ) -> Turn:
+        from claude_companion.models import count_words
+        return Turn(
+            turn_number=turn_number,
+            role=role,
+            content_preview="test",
+            content_full="test content",
+            word_count=2,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation,
+            cache_read_tokens=cache_read,
+            model_id=model_id,
+        )
+
+    def test_total_tokens(self):
+        session = Session(
+            session_id="test",
+            turns=[
+                self._make_token_turn(1, input_tokens=100, output_tokens=50),
+                self._make_token_turn(2, input_tokens=200, output_tokens=100),
+            ],
+        )
+        assert session.total_input_tokens == 300
+        assert session.total_output_tokens == 150
+
+    def test_total_tokens_with_none(self):
+        session = Session(
+            session_id="test",
+            turns=[
+                self._make_token_turn(1, input_tokens=100, output_tokens=50),
+                self._make_token_turn(2),  # No token data
+            ],
+        )
+        assert session.total_input_tokens == 100
+        assert session.total_output_tokens == 50
+
+    def test_has_token_data_true(self):
+        session = Session(
+            session_id="test",
+            turns=[self._make_token_turn(1, input_tokens=100)],
+        )
+        assert session.has_token_data is True
+
+    def test_has_token_data_false(self):
+        session = Session(
+            session_id="test",
+            turns=[self._make_token_turn(1)],
+        )
+        assert session.has_token_data is False
+
+    def test_estimated_cost_with_known_model(self):
+        session = Session(
+            session_id="test",
+            turns=[
+                self._make_token_turn(
+                    1,
+                    input_tokens=1_000_000,
+                    output_tokens=500_000,
+                    cache_creation=0,
+                    cache_read=0,
+                    model_id="claude-sonnet-4-20250115",
+                ),
+            ],
+        )
+        cost = session.estimated_cost
+        assert cost is not None
+        # 1M * 3.0/M + 500K * 15.0/M = 3.0 + 7.5 = 10.5
+        assert cost == pytest.approx(10.5)
+
+    def test_estimated_cost_no_token_data(self):
+        session = Session(
+            session_id="test",
+            turns=[self._make_token_turn(1)],
+        )
+        assert session.estimated_cost is None
+
+    def test_estimated_cost_unknown_model(self):
+        session = Session(
+            session_id="test",
+            turns=[
+                self._make_token_turn(1, input_tokens=100, model_id="unknown-model"),
+            ],
+        )
+        assert session.estimated_cost is None
+
+    def test_cache_token_totals(self):
+        session = Session(
+            session_id="test",
+            turns=[
+                self._make_token_turn(1, cache_creation=1000, cache_read=2000),
+                self._make_token_turn(2, cache_creation=500, cache_read=3000),
+            ],
+        )
+        assert session.total_cache_creation_tokens == 1500
+        assert session.total_cache_read_tokens == 5000
+
+
+# --- AnalyzerConfig tests ---
+
+
+class TestAnalyzerConfig:
+    def test_defaults(self):
+        config = AnalyzerConfig()
+        assert config.context_budget == 20000
+        assert config.small_range_max == 10
+        assert config.large_range_min == 31
+        assert config.per_turn_budget == 2000
+
+    def test_custom_values(self):
+        config = AnalyzerConfig(
+            context_budget=30000,
+            small_range_max=15,
+            large_range_min=50,
+            per_turn_budget=3000,
+        )
+        assert config.context_budget == 30000
+        assert config.small_range_max == 15
+        assert config.large_range_min == 50
+        assert config.per_turn_budget == 3000
+
+    def test_context_manager_uses_config(self):
+        config = AnalyzerConfig(
+            small_range_max=5,
+            large_range_min=20,
+            per_turn_budget=1000,
+        )
+        cm = ContextManager(analyzer_config=config)
+        assert cm._config.small_range_max == 5
+        assert cm._config.large_range_min == 20
+        assert cm._config.per_turn_budget == 1000
+
+    def test_context_manager_default_config(self):
+        cm = ContextManager()
+        assert cm._config.small_range_max == 10
+        assert cm._config.large_range_min == 31
+
+    def test_equality(self):
+        a = AnalyzerConfig()
+        b = AnalyzerConfig()
+        assert a == b
+
+    def test_inequality(self):
+        a = AnalyzerConfig()
+        b = AnalyzerConfig(context_budget=50000)
+        assert a != b

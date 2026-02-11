@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig
+from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig, AnalyzerConfig
 from .store import EventStore
 from .tui_textual import CompanionApp
 
@@ -226,8 +226,11 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, config
 @click.option("--llm-preset", "preset", type=click.Choice(["claude-code", "vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
+@click.option("--analyzer-budget", type=int, help="Analyzer context budget (chars)")
+@click.option("--analyzer-small-range", type=int, help="Max turns for small range analysis")
+@click.option("--analyzer-large-range", type=int, help="Min turns for large range analysis")
 @click.option("--show", is_flag=True, help="Show current configuration")
-def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, show: bool) -> None:
+def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, show: bool) -> None:
     """Configure Claude Companion settings.
 
     Examples:
@@ -267,6 +270,15 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             has_key = "set" if os.getenv("ANTHROPIC_API_KEY") else "not set"
             console.print(f"  API Key:  [{'green' if os.getenv('ANTHROPIC_API_KEY') else 'red'}]{has_key}[/] (ANTHROPIC_API_KEY)")
 
+        # Show analyzer config if non-default
+        default_analyzer = AnalyzerConfig()
+        if current_config.analyzer != default_analyzer:
+            console.print("\n[bold]Analyzer Configuration:[/bold]")
+            console.print(f"  Context Budget:  [cyan]{current_config.analyzer.context_budget}[/cyan]")
+            console.print(f"  Small Range Max: [cyan]{current_config.analyzer.small_range_max}[/cyan]")
+            console.print(f"  Large Range Min: [cyan]{current_config.analyzer.large_range_min}[/cyan]")
+            console.print(f"  Per Turn Budget: [cyan]{current_config.analyzer.per_turn_budget}[/cyan]")
+
         console.print(f"\nConfig file: [dim]{CONFIG_FILE}[/dim]")
 
         # Show environment variable overrides if set
@@ -294,6 +306,14 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     new_collapse_tools = collapse_tools if collapse_tools is not None else current_config.collapse_tools
     new_debug_logging = debug_logging if debug_logging is not None else current_config.debug_logging
 
+    # Build analyzer config with any overrides
+    new_analyzer = AnalyzerConfig(
+        context_budget=analyzer_budget if analyzer_budget is not None else current_config.analyzer.context_budget,
+        small_range_max=analyzer_small_range if analyzer_small_range is not None else current_config.analyzer.small_range_max,
+        large_range_min=analyzer_large_range if analyzer_large_range is not None else current_config.analyzer.large_range_min,
+        per_turn_budget=current_config.analyzer.per_turn_budget,
+    )
+
     if preset:
         # Use preset configuration
         examples = get_example_configs()
@@ -312,6 +332,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
                 model=preset_model,
                 api_base=preset_api_base,
             ),
+            analyzer=new_analyzer,
             style=new_style,
             collapse_tools=new_collapse_tools,
             debug_logging=new_debug_logging,
@@ -336,11 +357,13 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
         return
 
-    # Non-LLM config change (style, collapse_tools, debug_logging only)
+    # Non-LLM config change (style, collapse_tools, debug_logging, analyzer only)
+    has_analyzer_change = any(x is not None for x in [analyzer_budget, analyzer_small_range, analyzer_large_range])
     if not url and not model and not preset:
-        if style or collapse_tools is not None or debug_logging is not None:
+        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change:
             new_config = Config(
                 llm=current_config.llm,
+                analyzer=new_analyzer,
                 style=new_style,
                 collapse_tools=new_collapse_tools,
                 debug_logging=new_debug_logging,
@@ -381,6 +404,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             model=new_model,
             api_base=new_api_base,
         ),
+        analyzer=new_analyzer,
         style=new_style,
         collapse_tools=new_collapse_tools,
         debug_logging=new_debug_logging,
