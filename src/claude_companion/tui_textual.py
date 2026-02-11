@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from rich.console import Group as RichGroup
 from rich.markdown import Markdown
 from rich.table import Table
+from rich.markup import escape as markup_escape
 from rich.text import Text as RichText
 from textual import on
 from textual.app import App, ComposeResult
@@ -21,7 +22,8 @@ from textual.widgets import Static, Footer, Input, Label
 
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
-from .models import Session, Turn, ToolGroup
+from .models import Session, Turn, ToolGroup, compute_spans
+from .pricing import get_pricing, estimate_cost
 
 if TYPE_CHECKING:
     from .store import EventStore
@@ -206,6 +208,11 @@ TurnWidget.selected, ToolGroupWidget.selected {
     background: $primary 30%;
 }
 
+/* Span highlight for range analysis */
+TurnWidget.span-highlight, ToolGroupWidget.span-highlight {
+    background: $success 15%;
+}
+
 .status-line {
     height: 1;
     padding: 0 1;
@@ -242,6 +249,7 @@ class TurnWidget(Static):
 
     expanded: reactive[bool] = reactive(False)
     selected: reactive[bool] = reactive(False)
+    span_highlight: reactive[bool] = reactive(False)
 
     def __init__(
         self,
@@ -273,10 +281,15 @@ class TurnWidget(Static):
         self._update_classes()
         self._update_content()  # Re-render to update bullet color
 
+    def watch_span_highlight(self, value: bool) -> None:
+        self._update_classes()
+
     def _update_classes(self) -> None:
-        self.remove_class("selected", "turn-user", "turn-assistant", "turn-tool", "rich-style")
+        self.remove_class("selected", "span-highlight", "turn-user", "turn-assistant", "turn-tool", "rich-style")
         if self.selected:
             self.add_class("selected")
+        elif self.span_highlight:
+            self.add_class("span-highlight")
         if self.ui_style == "rich":
             self.add_class("rich-style")
         if self.turn.role == "user":
@@ -511,6 +524,7 @@ class ToolGroupWidget(Static):
 
     expanded: reactive[bool] = reactive(False)
     selected: reactive[bool] = reactive(False)
+    span_highlight: reactive[bool] = reactive(False)
 
     def __init__(self, group: ToolGroup, ui_style: str = "rich", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -533,10 +547,15 @@ class ToolGroupWidget(Static):
         self._update_classes()
         self._update_content()  # Re-render to update bullet color
 
+    def watch_span_highlight(self, value: bool) -> None:
+        self._update_classes()
+
     def _update_classes(self) -> None:
-        self.remove_class("selected", "rich-style", "turn-group")
+        self.remove_class("selected", "span-highlight", "rich-style", "turn-group")
         if self.selected:
             self.add_class("selected")
+        elif self.span_highlight:
+            self.add_class("span-highlight")
         if self.ui_style == "rich":
             self.add_class("rich-style")
             self.add_class("turn-group")
@@ -710,9 +729,18 @@ class HeaderPanel(Static):
             historical_count = sum(1 for t in self._active.turns if t.is_historical)
             live_count = len(self._active.turns) - historical_count
             turns_info = f"h{historical_count}+{live_count}" if historical_count else str(live_count)
+
+            if self._active.has_token_data:
+                token_stats = f"in:{self._active.total_input_tokens:,}tok out:{self._active.total_output_tokens:,}tok"
+                cost = self._active.estimated_cost
+                if cost is not None:
+                    token_stats += f" ~${cost:.2f}"
+            else:
+                token_stats = f"in:{self._active.total_input_words:,} out:{self._active.total_output_words:,}"
+
             stats = (
                 f"{self._active.model} | "
-                f"in:{self._active.total_input_words:,} out:{self._active.total_output_words:,} | "
+                f"{token_stats} | "
                 f"turns:{turns_info} | "
                 f"{self._filter_label}{scroll_indicator}"
             )
@@ -859,6 +887,157 @@ class PlanView(Static):
         md_content = Markdown(session.plan_content)
 
         self.update(RichGroup(RichText.from_markup(header), md_content))
+
+
+class AnalysisPanel(Static):
+    """Right-side panel for displaying turn analysis results."""
+
+    DEFAULT_CSS = """
+    AnalysisPanel {
+        dock: right;
+        width: 40;
+        height: 1fr;
+        display: none;
+        border: solid $success;
+        padding: 1 2;
+        overflow-y: auto;
+    }
+
+    AnalysisPanel.visible {
+        display: block;
+    }
+    """
+
+    def update_analysis(self, turn: Turn, analysis, label: str = "") -> None:
+        """Update the panel with analysis for the given turn."""
+        color = "#5fd787" if analysis.sentiment == "progress" else (
+            "#ffaf00" if analysis.sentiment == "concern" else "#ff5f5f"
+        )
+        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(
+            analysis.sentiment, "?"
+        )
+
+        role = turn.role.capitalize()
+        header_label = label or f"Turn {turn.turn_number}"
+        summary = markup_escape(analysis.summary)
+        critique = markup_escape(analysis.critique)
+
+        lines = [
+            f"[bold]Analysis[/bold]  [dim]{header_label} · {role}[/dim]\n",
+            f"[{color}]{indicator} Sentiment: {analysis.sentiment}[/{color}]\n",
+            f"[bold]Summary[/bold]\n{summary}\n",
+            f"[bold]Critique[/bold]\n{critique}\n",
+            f"[dim]Turn words: {analysis.word_count:,}[/dim]",
+            f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
+        ]
+
+        if turn.input_tokens is not None:
+            token_line = f"[dim]Tokens: {turn.input_tokens:,} in / {turn.output_tokens or 0:,} out[/dim]"
+            lines.append(token_line)
+            # Cost for this turn
+            if turn.model_id:
+                pricing = get_pricing(turn.model_id)
+                if pricing:
+                    cost = estimate_cost(
+                        turn.input_tokens or 0,
+                        turn.output_tokens or 0,
+                        turn.cache_creation_tokens or 0,
+                        turn.cache_read_tokens or 0,
+                        pricing,
+                    )
+                    lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
+
+        self._append_goal_sources(lines, analysis)
+        self.update(RichText.from_markup("\n".join(lines)))
+
+    def update_range_analysis(self, turns: list[Turn], analysis, label: str) -> None:
+        """Update panel for multi-turn range analysis."""
+        color = "#5fd787" if analysis.sentiment == "progress" else (
+            "#ffaf00" if analysis.sentiment == "concern" else "#ff5f5f"
+        )
+        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(
+            analysis.sentiment, "?"
+        )
+
+        total_words = sum(t.word_count for t in turns)
+        summary = markup_escape(analysis.summary)
+        critique = markup_escape(analysis.critique)
+
+        lines = [
+            f"[bold]Analysis[/bold]  [dim]{label} · {len(turns)} turns[/dim]\n",
+            f"[{color}]{indicator} Sentiment: {analysis.sentiment}[/{color}]\n",
+            f"[bold]Summary[/bold]\n{summary}\n",
+            f"[bold]Critique[/bold]\n{critique}\n",
+            f"[dim]Total words: {total_words:,}[/dim]",
+            f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
+        ]
+
+        # Show token totals and cost if any turns have token data
+        has_tokens = any(t.input_tokens is not None for t in turns)
+        if has_tokens:
+            total_in = sum(t.input_tokens or 0 for t in turns)
+            total_out = sum(t.output_tokens or 0 for t in turns)
+            total_cache_create = sum(t.cache_creation_tokens or 0 for t in turns)
+            total_cache_read = sum(t.cache_read_tokens or 0 for t in turns)
+            lines.append(f"[dim]Tokens: {total_in:,} in / {total_out:,} out[/dim]")
+
+            # Find model from first turn with model_id
+            model_id = next((t.model_id for t in turns if t.model_id), None)
+            if model_id:
+                pricing = get_pricing(model_id)
+                if pricing:
+                    cost = estimate_cost(
+                        total_in, total_out, total_cache_create, total_cache_read, pricing,
+                    )
+                    lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
+
+        self._append_goal_sources(lines, analysis)
+        self.update(RichText.from_markup("\n".join(lines)))
+
+    def _append_goal_sources(self, lines: list[str], analysis) -> None:
+        """Append goal and objective information to display lines."""
+        goal_sources = getattr(analysis, "goal_sources", None)
+        synthesized_goal = getattr(analysis, "synthesized_goal", None)
+        local_goal = getattr(analysis, "local_goal", None)
+
+        has_content = goal_sources or synthesized_goal or local_goal
+        if not has_content:
+            return
+
+        lines.append("")
+
+        # Session Goal: synthesized if available, otherwise first user request
+        if synthesized_goal:
+            lines.append(
+                f"[bold]Session Goal[/bold]\n[dim]{markup_escape(synthesized_goal)}[/dim]"
+            )
+        elif goal_sources:
+            user_sources = [s for s in goal_sources if s.source_type == "user_request"]
+            if user_sources and user_sources[0].content != "[No user message found]":
+                preview = user_sources[0].content[:200].replace("\n", " ")
+                if len(user_sources[0].content) > 200:
+                    preview += "..."
+                lines.append(
+                    f"[bold]Session Goal[/bold]\n[dim]{markup_escape(preview)}[/dim]"
+                )
+
+        # Current Objective (local goal)
+        if local_goal:
+            lines.append(
+                f"[bold]Current Objective[/bold]\n[dim]{markup_escape(local_goal)}[/dim]"
+            )
+
+        # Detailed goal sources (when available)
+        if goal_sources:
+            lines.append(f"[bold]Goal Sources[/bold] ({len(goal_sources)})")
+            for gs in goal_sources:
+                indicator = "" if gs.fresh else " [dim italic](stale)[/dim italic]"
+                preview = gs.content[:80].replace("\n", " ")
+                if len(gs.content) > 80:
+                    preview += "..."
+                lines.append(
+                    f"  [dim]{markup_escape(gs.label)}{indicator}: {markup_escape(preview)}[/dim]"
+                )
 
 
 class SessionCard(Static):
@@ -1074,6 +1253,8 @@ class ConversationView(ScrollableContainer):
         super().__init__(**kwargs)
         self._selected_index: int | None = None
         self._auto_scroll: bool = True
+        self._span_start: int | None = None
+        self._span_end: int | None = None
 
     def get_selected_index(self) -> int | None:
         return self._selected_index
@@ -1082,11 +1263,25 @@ class ConversationView(ScrollableContainer):
         self._selected_index = index
         self._update_selection()
 
+    def set_span_range(self, start: int | None, end: int | None) -> None:
+        """Set the span highlight range (inclusive widget indices)."""
+        self._span_start = start
+        self._span_end = end
+        self._update_selection()
+
     def _update_selection(self) -> None:
-        """Update selection state on all turn widgets."""
+        """Update selection and span highlight state on all turn widgets."""
         widgets = list(self.query("TurnWidget, ToolGroupWidget"))
         for i, widget in enumerate(widgets):
             widget.selected = (i == self._selected_index)
+            # Span highlight: in range but not the primary selected widget
+            in_span = (
+                self._span_start is not None
+                and self._span_end is not None
+                and self._span_start <= i <= self._span_end
+                and i != self._selected_index
+            )
+            widget.span_highlight = in_span
 
     def scroll_to_selected(self) -> None:
         """Scroll to keep selected item visible."""
@@ -1232,6 +1427,9 @@ class CompanionApp(App):
         Binding("a", "toggle_alerts", "Alerts", show=False),
         Binding("s", "toggle_summary", "Summary", show=False),
         Binding("S", "summarize_all", "Summarize All", show=False),
+        Binding("A", "analyze_turn", "Analyze", show=False),
+        Binding("]", "zoom_out", "Zoom Out", show=False),
+        Binding("[", "zoom_in", "Zoom In", show=False),
         Binding("D", "delete_session", "Delete", show=False),
         Binding("M", "toggle_manager", "Manager", show=False),
         Binding("h", "nav_left", "Left", show=False),
@@ -1302,6 +1500,8 @@ class CompanionApp(App):
         self._refresh_counter: int = 0  # Used to generate unique widget IDs
         self._annotating_turn_number: int | None = None  # Turn being annotated
         self._annotating_scroll_y: float = 0  # Scroll position before annotating
+        self._analysis_level: str = "turn"  # "turn" | "span" | "session"
+        self._analysis_radius: int = 0  # 0 = single span, 1 = ±1, etc.
 
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
@@ -1309,6 +1509,7 @@ class CompanionApp(App):
         yield ConversationView(id="conversation")
         yield TaskListView(id="tasks-view")
         yield PlanView(id="plan-view")
+        yield AnalysisPanel(id="analysis-panel")
         yield AlertsPanel(id="alerts")
         yield InputPanel(id="inputs")
         yield Footer()
@@ -1342,6 +1543,7 @@ class CompanionApp(App):
             self._refresh_conversation()
             if self._auto_scroll:
                 self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
+            self._refresh_analysis_panel()
 
     @on(AlertAdded)
     def handle_alert_added(self, message: AlertAdded) -> None:
@@ -1489,6 +1691,229 @@ class CompanionApp(App):
         if self._show_plan and not self._manager_view_active:
             plan_view.update_plan(session)
 
+    def _refresh_analysis_panel(self) -> None:
+        """Update the analysis panel based on the currently selected turn and analysis level."""
+        panel = self.query_one("#analysis-panel", AnalysisPanel)
+        conversation = self.query_one("#conversation", ConversationView)
+        index = conversation.get_selected_index()
+
+        if index is None:
+            panel.remove_class("visible")
+            return
+
+        result = self._get_analysis_turn_range()
+        if result is None:
+            panel.remove_class("visible")
+            return
+
+        turns, label = result
+
+        if len(turns) == 1 and turns[0].analysis:
+            # Single turn — existing behavior
+            panel.update_analysis(turns[0], turns[0].analysis, label)
+            panel.add_class("visible")
+        elif len(turns) > 1:
+            # Multi-turn: check if store has a range analysis
+            range_key = (turns[0].turn_number, turns[-1].turn_number)
+            range_analysis = self.store.get_range_analysis(range_key)
+            if range_analysis:
+                panel.update_range_analysis(turns, range_analysis, label)
+                panel.add_class("visible")
+            else:
+                panel.remove_class("visible")
+        else:
+            panel.remove_class("visible")
+
+        # Update span highlighting in conversation
+        self._update_span_highlighting()
+
+    def _get_analysis_turn_range(self) -> tuple[list[Turn], str] | None:
+        """Get turns and label for the current analysis level.
+
+        Returns:
+            (turns_in_range, label) or None if no selection
+        """
+        conversation = self.query_one("#conversation", ConversationView)
+        index = conversation.get_selected_index()
+        if index is None:
+            return None
+
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        if not (0 <= index < len(widgets)):
+            return None
+
+        widget = widgets[index]
+        if isinstance(widget, TurnWidget):
+            selected_turn = widget.turn
+        elif isinstance(widget, ToolGroupWidget):
+            selected_turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+        else:
+            selected_turn = None
+
+        if not selected_turn:
+            return None
+
+        if self._analysis_level == "turn":
+            return [selected_turn], f"Turn {selected_turn.turn_number}"
+
+        # For span/session levels, we need the session's turns
+        session = self.store.get_active_session()
+        if not session or not session.turns:
+            return [selected_turn], f"Turn {selected_turn.turn_number}"
+
+        spans = compute_spans(session.turns)
+        if not spans:
+            return [selected_turn], f"Turn {selected_turn.turn_number}"
+
+        # Find which span contains the selected turn
+        selected_span_idx = 0
+        for si, (start, end) in enumerate(spans):
+            for ti in range(start, end + 1):
+                if session.turns[ti] is selected_turn:
+                    selected_span_idx = si
+                    break
+
+        if self._analysis_level == "session":
+            return list(session.turns), "Session"
+
+        # Span level with radius
+        span_start = max(0, selected_span_idx - self._analysis_radius)
+        span_end = min(len(spans) - 1, selected_span_idx + self._analysis_radius)
+
+        # Collect all turns in the span range
+        turn_start = spans[span_start][0]
+        turn_end = spans[span_end][1]
+        range_turns = session.turns[turn_start:turn_end + 1]
+
+        if self._analysis_radius == 0:
+            label = f"Span {selected_span_idx + 1}"
+        else:
+            label = f"Spans {span_start + 1}\u2013{span_end + 1}"
+
+        return range_turns, label
+
+    def _get_analysis_widget_range(self) -> tuple[int, int] | None:
+        """Get widget index range for the current analysis level.
+
+        Returns the (start_widget_idx, end_widget_idx) inclusive, or None.
+        """
+        result = self._get_analysis_turn_range()
+        if result is None:
+            return None
+
+        turns, _ = result
+        if len(turns) <= 1:
+            return None
+
+        # Map turns to widget indices
+        conversation = self.query_one("#conversation", ConversationView)
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+
+        turn_set = set(id(t) for t in turns)
+        widget_indices = []
+
+        for i, widget in enumerate(widgets):
+            if isinstance(widget, TurnWidget):
+                if id(widget.turn) in turn_set:
+                    widget_indices.append(i)
+            elif isinstance(widget, ToolGroupWidget):
+                for tt in widget.group.tool_turns:
+                    if id(tt) in turn_set:
+                        widget_indices.append(i)
+                        break
+
+        if not widget_indices:
+            return None
+
+        return (min(widget_indices), max(widget_indices))
+
+    def _update_span_highlighting(self) -> None:
+        """Update span highlighting on conversation widgets."""
+        conversation = self.query_one("#conversation", ConversationView)
+
+        if self._analysis_level == "turn":
+            conversation.set_span_range(None, None)
+            return
+
+        widget_range = self._get_analysis_widget_range()
+        if widget_range:
+            conversation.set_span_range(widget_range[0], widget_range[1])
+        else:
+            conversation.set_span_range(None, None)
+
+    def _reset_analysis_level(self) -> None:
+        """Reset analysis level to turn."""
+        self._analysis_level = "turn"
+        self._analysis_radius = 0
+        conversation = self.query_one("#conversation", ConversationView)
+        conversation.set_span_range(None, None)
+
+    def action_zoom_out(self) -> None:
+        """Zoom out analysis level: turn → span → span±1 → ... → session."""
+        conversation = self.query_one("#conversation", ConversationView)
+        if conversation.get_selected_index() is None:
+            return
+
+        session = self.store.get_active_session()
+        if not session or not session.turns:
+            return
+
+        spans = compute_spans(session.turns)
+        max_radius = len(spans) - 1  # Max meaningful radius
+
+        if self._analysis_level == "turn":
+            self._analysis_level = "span"
+            self._analysis_radius = 0
+        elif self._analysis_level in ("span",):
+            self._analysis_radius += 1
+            # Check if radius covers all spans
+            if self._analysis_radius >= max_radius:
+                self._analysis_level = "session"
+                self._analysis_radius = 0
+        elif self._analysis_level == "session":
+            return  # Already at max
+
+        self._update_span_highlighting()
+        self._refresh_analysis_panel()
+        # Show level label
+        result = self._get_analysis_turn_range()
+        if result:
+            _, label = result
+            self._show_status(f"Analysis level: {label}")
+
+    def action_zoom_in(self) -> None:
+        """Zoom in analysis level: session → span±N → span → turn."""
+        conversation = self.query_one("#conversation", ConversationView)
+        if conversation.get_selected_index() is None:
+            return
+
+        if self._analysis_level == "session":
+            session = self.store.get_active_session()
+            if session and session.turns:
+                spans = compute_spans(session.turns)
+                # Set to max non-session radius
+                self._analysis_level = "span"
+                self._analysis_radius = max(0, len(spans) - 2)
+            else:
+                self._analysis_level = "turn"
+                self._analysis_radius = 0
+        elif self._analysis_level == "span":
+            if self._analysis_radius > 0:
+                self._analysis_radius -= 1
+            else:
+                self._analysis_level = "turn"
+                self._analysis_radius = 0
+        elif self._analysis_level == "turn":
+            return  # Already at min
+
+        self._update_span_highlighting()
+        self._refresh_analysis_panel()
+        # Show level label
+        result = self._get_analysis_turn_range()
+        if result:
+            _, label = result
+            self._show_status(f"Analysis level: {label}")
+
     def _refresh_manager(self) -> None:
         """Refresh the manager view with current sessions."""
         if not self._manager_view_active:
@@ -1531,6 +1956,7 @@ class CompanionApp(App):
             manager.move_selection(3)  # Move down one row (3 columns)
             return
         self._auto_scroll = False
+        self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
         if not widgets:
@@ -1544,6 +1970,7 @@ class CompanionApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
+        self._refresh_analysis_panel()
 
     def action_nav_up(self) -> None:
         """Navigate up in conversation or manager grid."""
@@ -1552,6 +1979,7 @@ class CompanionApp(App):
             manager.move_selection(-3)  # Move up one row (3 columns)
             return
         self._auto_scroll = False
+        self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
         if not widgets:
@@ -1565,6 +1993,7 @@ class CompanionApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
+        self._refresh_analysis_panel()
 
     def action_nav_left(self) -> None:
         """Navigate left in manager grid."""
@@ -1581,20 +2010,24 @@ class CompanionApp(App):
     def action_go_top(self) -> None:
         """Go to top of conversation."""
         self._auto_scroll = False
+        self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
         if widgets:
             conversation.set_selected_index(0)
             conversation.scroll_home()
+        self._refresh_analysis_panel()
 
     def action_go_bottom(self) -> None:
         """Go to bottom of conversation."""
         self._auto_scroll = True
+        self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
         if widgets:
             conversation.set_selected_index(len(widgets) - 1)
             conversation.scroll_end()
+        self._refresh_analysis_panel()
 
     def action_toggle_expand(self) -> None:
         """Toggle expand on selected item, or open session in manager view."""
@@ -1757,6 +2190,56 @@ class CompanionApp(App):
         else:
             self._show_status("No historical turns need summarization")
 
+    def action_analyze_turn(self) -> None:
+        """Analyze the selected turn or range, or toggle the panel if already analyzed."""
+        panel = self.query_one("#analysis-panel", AnalysisPanel)
+        conversation = self.query_one("#conversation", ConversationView)
+        index = conversation.get_selected_index()
+        if index is None:
+            self._show_status("Select a turn first (j/k to navigate)")
+            return
+
+        result = self._get_analysis_turn_range()
+        if result is None:
+            return
+
+        turns, label = result
+
+        if len(turns) == 1:
+            # Single-turn analysis (existing logic)
+            turn = turns[0]
+
+            # Toggle panel off if already showing analysis for this turn
+            if turn.analysis and panel.has_class("visible"):
+                panel.remove_class("visible")
+                return
+
+            submitted = self.store.analyze_turn(turn)
+            if submitted:
+                self._show_status(f"Analyzing {label}...")
+            else:
+                if turn.analysis and not turn.analysis.summary.startswith("["):
+                    self._show_status(f"{label} already analyzed")
+                    self._refresh_conversation()
+                else:
+                    self._show_status(f"Analysis loaded for {label}")
+                    self._refresh_conversation()
+        else:
+            # Multi-turn range analysis
+            range_key = (turns[0].turn_number, turns[-1].turn_number)
+            existing = self.store.get_range_analysis(range_key)
+            if existing and panel.has_class("visible"):
+                panel.remove_class("visible")
+                return
+
+            submitted = self.store.analyze_range(turns)
+            if submitted:
+                self._show_status(f"Analyzing {label}...")
+            else:
+                self._show_status(f"Analysis loaded for {label}")
+
+        self._refresh_analysis_panel()
+
     def action_delete_session(self) -> None:
         """Delete active session."""
         session = self.store.get_active_session()
@@ -1781,6 +2264,7 @@ class CompanionApp(App):
 
     def action_escape(self) -> None:
         """Handle escape key."""
+        self._reset_analysis_level()
         # Always close tasks/plan overlays first, regardless of mode
         if self._show_tasks:
             self._show_tasks = False
@@ -1801,6 +2285,7 @@ class CompanionApp(App):
         # Clear selection
         conversation = self.query_one("#conversation", ConversationView)
         conversation.set_selected_index(None)
+        self._refresh_analysis_panel()
 
     def _select_session(self, index: int) -> None:
         """Select session by index (1-based)."""
@@ -1808,7 +2293,10 @@ class CompanionApp(App):
             self._filter_index = 0
             self._auto_scroll = True
             self._group_expanded_state.clear()
+            self._reset_analysis_level()
+            self.store.clear_range_analyses()
             self._refresh_all()
+            self._refresh_analysis_panel()
 
     def action_select_session_1(self) -> None:
         self._select_session(1)

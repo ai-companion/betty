@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .analyzer import Analysis
 
 
 def count_words(text: str) -> int:
@@ -21,6 +24,11 @@ class Turn:
     content_preview: str
     content_full: str
     word_count: int
+    input_tokens: int | None = None       # From usage.input_tokens
+    output_tokens: int | None = None      # From usage.output_tokens
+    cache_creation_tokens: int | None = None  # From usage.cache_creation_input_tokens
+    cache_read_tokens: int | None = None  # From usage.cache_read_input_tokens
+    model_id: str | None = None           # From message.model
     tool_name: str | None = None
     timestamp: datetime = field(default_factory=datetime.now)
     expanded: bool = False
@@ -30,6 +38,7 @@ class Turn:
     critic_sentiment: str | None = None  # "progress" | "concern" | "critical"
     task_operation: tuple[str, dict[str, Any]] | None = None  # (operation_type, data) for task tools
     annotation: str | None = None  # User-provided annotation
+    analysis: "Analysis | None" = None  # On-demand LLM analysis
 
 
 @dataclass
@@ -149,6 +158,31 @@ class ToolGroup:
         return ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
 
 
+def compute_spans(turns: list[Turn]) -> list[tuple[int, int]]:
+    """Return list of (start_idx, end_idx) spans.
+
+    A span starts at each user turn and extends to just before the next user turn.
+    If the session starts with non-user turns, they form a span of their own.
+    Returns inclusive ranges into session.turns.
+    """
+    if not turns:
+        return []
+
+    spans: list[tuple[int, int]] = []
+    current_start = 0
+
+    for i, turn in enumerate(turns):
+        if turn.role == "user" and i > current_start:
+            # Close previous span
+            spans.append((current_start, i - 1))
+            current_start = i
+
+    # Close final span
+    spans.append((current_start, len(turns) - 1))
+
+    return spans
+
+
 @dataclass
 class Session:
     """A Claude Code session."""
@@ -210,3 +244,53 @@ class Session:
     def total_tool_calls(self) -> int:
         """Total tool calls."""
         return sum(1 for t in self.turns if t.role == "tool")
+
+    @property
+    def total_input_tokens(self) -> int:
+        """Total input tokens across all turns with usage data."""
+        return sum(t.input_tokens or 0 for t in self.turns)
+
+    @property
+    def total_output_tokens(self) -> int:
+        """Total output tokens across all turns with usage data."""
+        return sum(t.output_tokens or 0 for t in self.turns)
+
+    @property
+    def total_cache_creation_tokens(self) -> int:
+        """Total cache creation tokens across all turns."""
+        return sum(t.cache_creation_tokens or 0 for t in self.turns)
+
+    @property
+    def total_cache_read_tokens(self) -> int:
+        """Total cache read tokens across all turns."""
+        return sum(t.cache_read_tokens or 0 for t in self.turns)
+
+    @property
+    def has_token_data(self) -> bool:
+        """Whether any turns have real token usage data."""
+        return any(t.input_tokens is not None for t in self.turns)
+
+    @property
+    def estimated_cost(self) -> float | None:
+        """Estimated session cost in USD, or None if no pricing data."""
+        if not self.has_token_data:
+            return None
+        # Find model from first turn with model_id
+        model_id = None
+        for t in self.turns:
+            if t.model_id:
+                model_id = t.model_id
+                break
+        if not model_id:
+            return None
+        from .pricing import get_pricing, estimate_cost
+        pricing = get_pricing(model_id)
+        if not pricing:
+            return None
+        return estimate_cost(
+            self.total_input_tokens,
+            self.total_output_tokens,
+            self.total_cache_creation_tokens,
+            self.total_cache_read_tokens,
+            pricing,
+        )

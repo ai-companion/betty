@@ -177,6 +177,15 @@ class TranscriptWatcher:
             message = entry.get("message", {})
             content = message.get("content", [])
 
+            # Extract model and usage from message (shared across all blocks)
+            model_id = message.get("model")
+            usage = message.get("usage", {})
+            input_tokens = usage.get("input_tokens")
+            output_tokens = usage.get("output_tokens")
+            cache_creation = usage.get("cache_creation_input_tokens")
+            cache_read = usage.get("cache_read_input_tokens")
+            first_turn_created = False
+
             if isinstance(content, list):
                 for block in content:
                     block_type = block.get("type", "")
@@ -187,13 +196,22 @@ class TranscriptWatcher:
                             with self._lock:
                                 self._turn_number += 1
                                 turn_num = self._turn_number
-                            turns.append(Turn(
+                            turn = Turn(
                                 turn_number=turn_num,
                                 role="assistant",
                                 content_preview=_truncate(text, 100),
                                 content_full=text,
                                 word_count=count_words(text),
-                            ))
+                            )
+                            # Attach token data to first turn only
+                            if not first_turn_created:
+                                turn.input_tokens = input_tokens
+                                turn.output_tokens = output_tokens
+                                turn.cache_creation_tokens = cache_creation
+                                turn.cache_read_tokens = cache_read
+                                turn.model_id = model_id
+                                first_turn_created = True
+                            turns.append(turn)
 
                     elif block_type == "tool_use":
                         tool_name = block.get("name", "")
@@ -206,7 +224,7 @@ class TranscriptWatcher:
                         with self._lock:
                             self._turn_number += 1
                             turn_num = self._turn_number
-                        turns.append(Turn(
+                        turn = Turn(
                             turn_number=turn_num,
                             role="tool",
                             content_preview=_truncate(content_str, 100),
@@ -214,7 +232,16 @@ class TranscriptWatcher:
                             word_count=count_words(content_str),
                             tool_name=tool_name,
                             task_operation=task_op,
-                        ))
+                        )
+                        # Attach token data to first turn only
+                        if not first_turn_created:
+                            turn.input_tokens = input_tokens
+                            turn.output_tokens = output_tokens
+                            turn.cache_creation_tokens = cache_creation
+                            turn.cache_read_tokens = cache_read
+                            turn.model_id = model_id
+                            first_turn_created = True
+                        turns.append(turn)
 
         return turns
 

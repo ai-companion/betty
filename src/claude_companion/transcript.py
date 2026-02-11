@@ -92,6 +92,15 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
         message = entry.get("message", {})
         content = message.get("content", [])
 
+        # Extract model and usage from message (shared across all blocks)
+        model_id = message.get("model")
+        usage = message.get("usage", {})
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        cache_creation = usage.get("cache_creation_input_tokens")
+        cache_read = usage.get("cache_read_input_tokens")
+        first_turn_created = False
+
         if isinstance(content, list):
             for block in content:
                 block_type = block.get("type", "")
@@ -99,14 +108,23 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                 if block_type == "text":
                     text = block.get("text", "")
                     if text:
-                        turns.append(Turn(
+                        turn = Turn(
                             turn_number=current_turn,
                             role="assistant",
                             content_preview=_truncate(text, 100),
                             content_full=text,
                             word_count=count_words(text),
                             timestamp=timestamp,
-                        ))
+                        )
+                        # Attach token data to first turn only (avoid double-counting)
+                        if not first_turn_created:
+                            turn.input_tokens = input_tokens
+                            turn.output_tokens = output_tokens
+                            turn.cache_creation_tokens = cache_creation
+                            turn.cache_read_tokens = cache_read
+                            turn.model_id = model_id
+                            first_turn_created = True
+                        turns.append(turn)
 
                 elif block_type == "tool_use":
                     tool_name = block.get("name", "")
@@ -116,7 +134,7 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                     task_op = parse_task_operation(tool_name, tool_input)
 
                     content_str = _extract_tool_content(tool_name, tool_input)
-                    turns.append(Turn(
+                    turn = Turn(
                         turn_number=current_turn,
                         role="tool",
                         content_preview=_truncate(content_str, 100),
@@ -125,7 +143,16 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                         tool_name=tool_name,
                         timestamp=timestamp,
                         task_operation=task_op,
-                    ))
+                    )
+                    # Attach token data to first turn only (avoid double-counting)
+                    if not first_turn_created:
+                        turn.input_tokens = input_tokens
+                        turn.output_tokens = output_tokens
+                        turn.cache_creation_tokens = cache_creation
+                        turn.cache_read_tokens = cache_read
+                        turn.model_id = model_id
+                        first_turn_created = True
+                    turns.append(turn)
 
     return turns
 

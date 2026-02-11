@@ -476,6 +476,7 @@ class TUI:
             "[dim]o[/dim]:open "
             "[dim]T[/dim]:tasks "
             "[dim]P[/dim]:plan "
+            "[dim]A[/dim]:analyze "
             "[dim]s/S[/dim]:summary "
             "[dim]f[/dim]:filter "
             "[dim]m[/dim]:monitor "
@@ -729,6 +730,30 @@ class TUI:
             else:
                 self._show_status("No historical turns need summarization")
             self._refresh_event.set()
+
+        elif key == "A":  # Analyze selected turn
+            if (
+                self._selected_index is not None
+                and 0 <= self._selected_index < total_turns
+            ):
+                item = turns[self._selected_index]
+                if isinstance(item, ToolGroup):
+                    turn = item.tool_turns[0] if item.tool_turns else None
+                else:
+                    turn = item
+
+                if turn:
+                    submitted = self.store.analyze_turn(turn)
+                    if submitted:
+                        self._show_status(f"Analyzing turn {turn.turn_number}...")
+                    elif turn.analysis and not turn.analysis.summary.startswith("["):
+                        self._show_status(f"Turn {turn.turn_number} already analyzed")
+                    else:
+                        self._show_status(f"Analysis loaded for turn {turn.turn_number}")
+                    self._refresh_event.set()
+            else:
+                self._show_status("Select a turn first (j/k to navigate)")
+                self._refresh_event.set()
 
         elif key == "D":  # Delete active session
             session = self.store.get_active_session()
