@@ -934,6 +934,7 @@ class AnalysisPanel(Static):
                     )
                     lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
 
+        self._append_goal_sources(lines, analysis)
         self.update(RichText.from_markup("\n".join(lines)))
 
     def update_range_analysis(self, turns: list[Turn], analysis, label: str) -> None:
@@ -977,7 +978,27 @@ class AnalysisPanel(Static):
                     )
                     lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
 
+        self._append_goal_sources(lines, analysis)
         self.update(RichText.from_markup("\n".join(lines)))
+
+    def _append_goal_sources(self, lines: list[str], analysis) -> None:
+        """Append goal source information to display lines."""
+        if not getattr(analysis, "goal_sources", None):
+            return
+        lines.append("")
+        if analysis.synthesized_goal:
+            lines.append(
+                f"[bold]Goal[/bold]\n[dim]{markup_escape(analysis.synthesized_goal)}[/dim]"
+            )
+        lines.append(f"[bold]Goal Sources[/bold] ({len(analysis.goal_sources)})")
+        for gs in analysis.goal_sources:
+            indicator = "" if gs.fresh else " [dim italic](stale)[/dim italic]"
+            preview = gs.content[:80].replace("\n", " ")
+            if len(gs.content) > 80:
+                preview += "..."
+            lines.append(
+                f"  [dim]{markup_escape(gs.label)}{indicator}: {markup_escape(preview)}[/dim]"
+            )
 
 
 class ConversationView(ScrollableContainer):
