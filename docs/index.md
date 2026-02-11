@@ -1,28 +1,12 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/ai-companion/claude-companion/main/docs/assets/logo.jpg" alt="Claude Companion" width="120">
-</p>
+---
+layout: default
+---
 
-# Claude Companion
-
-A real-time TUI monitor for Claude Code sessions.
-
-## Install
+## Quick Start
 
 ```bash
+# Install and run
 uvx claude-companion
-```
-
-Or with pip:
-
-```bash
-pip install claude-companion
-```
-
-## Use
-
-```bash
-# Start the companion
-claude-companion
 
 # In another terminal, run Claude Code as usual
 claude
@@ -65,7 +49,3 @@ The companion auto-detects your session. No hooks or configuration needed.
 | `q` | Quit |
 
 See all keybindings in the TUI status bar.
-
-## License
-
-MIT

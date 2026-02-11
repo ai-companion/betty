@@ -36,3 +36,7 @@ htmlcov/
 
 # Plan files
 PLAN.md
+
+# Jekyll
+_site/
+.jekyll-cache/

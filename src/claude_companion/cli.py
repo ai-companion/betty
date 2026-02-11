@@ -119,12 +119,13 @@ def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Pa
 @click.group(invoke_without_command=True)
 @click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects (not just current directory)")
 @click.option("--worktree", "-w", "worktree_mode", is_flag=True, help="Watch all git worktrees of the current repository")
+@click.option("--manager", "-M", "manager_mode", is_flag=True, help="Start in manager view showing all session cards")
 @click.option("--style", type=click.Choice(["rich", "claude-code"]), default=None, help="UI style override for this run")
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
-def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
     """Claude Companion - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"claude-companion v{__version__}")
@@ -143,10 +144,10 @@ def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, style: str 
             config.collapse_tools = collapse_tools
         if debug_logging is not None:
             config.debug_logging = debug_logging
-        run_companion(global_mode=global_mode, worktree_mode=worktree_mode, config=config)
+        run_companion(global_mode=global_mode, worktree_mode=worktree_mode, manager_mode=manager_mode, config=config)
 
 
-def run_companion(global_mode: bool = False, worktree_mode: bool = False, config: Config | None = None) -> None:
+def run_companion(global_mode: bool = False, worktree_mode: bool = False, manager_mode: bool = False, config: Config | None = None) -> None:
     """Run the main companion TUI with directory-based session discovery."""
     if config is None:
         config = load_config()
@@ -190,8 +191,8 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, config
         raise SystemExit(1)
 
     # Create store and start watching
-    # Load only most recent session by default; new sessions auto-detected while running
-    max_sessions = 1
+    # Manager mode loads all sessions; normal mode loads only most recent
+    max_sessions = None if manager_mode else 1
     store = EventStore()
     store.start_watching(
         project_paths,
@@ -210,7 +211,7 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, config
 
     try:
         # Run Textual TUI
-        app = CompanionApp(store, collapse_tools=config.collapse_tools, ui_style=config.style)
+        app = CompanionApp(store, collapse_tools=config.collapse_tools, ui_style=config.style, manager_mode=manager_mode)
         app.run()
     except KeyboardInterrupt:
         pass
