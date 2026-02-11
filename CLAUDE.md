@@ -19,11 +19,16 @@ claude-companion --global       # Watch all projects
 # Run with uv (no install needed)
 uv run claude-companion
 
-# LLM configuration (for summarization)
+# LLM configuration (for summarization and analysis)
 claude-companion config --show                    # Show current config
 claude-companion config --llm-preset lm-studio    # Use LM Studio preset
 claude-companion config --llm-preset ollama       # Use Ollama preset
 claude-companion config --url URL --model MODEL   # Custom configuration
+
+# Analyzer configuration (for on-demand analysis)
+claude-companion config --analyzer-budget N         # Set context budget in chars
+claude-companion config --analyzer-small-range N    # Max turns for small range
+claude-companion config --analyzer-large-range N    # Min turns for large range
 
 # Test imports
 uv run python -c "from claude_companion import tui, store, models; print('OK')"
@@ -40,7 +45,7 @@ uv run python -c "from claude_companion import tui, store, models; print('OK')"
 
 ### Key Components
 
-- **`store.py`** - Central `EventStore` class: thread-safe session/turn storage, coordinates watchers/alerts/summarizer
+- **`store.py`** - Central `EventStore` class: thread-safe session/turn storage, coordinates watchers/alerts/summarizer/analyzer
 - **`project_watcher.py`** - `ProjectWatcher`: scans project directories for session files, notifies on new sessions
 - **`watcher.py`** - `TranscriptWatcher`: polls transcript file, parses JSONL entries into `Turn` objects
 - **`transcript.py`** - Parses `session.jsonl` files to load conversation history on session start
@@ -52,6 +57,8 @@ uv run python -c "from claude_companion import tui, store, models; print('OK')"
 - **`config.py`** - Configuration management for LLM server settings (supports env vars, config file, defaults)
 - **`export.py`** - Export session data to Markdown or JSON formats
 - **`mock_session.py`** - Mock session generator for development: creates realistic Claude Code session files for testing and cloud-based development without Claude Code
+- **`analyzer.py`** - On-demand LLM analysis: structured analysis (summary, critique, sentiment), multi-level analysis (turn/span/session), multi-source goal extraction, cost tracking
+- **`pricing.py`** - Model pricing database and cost estimation utilities for token usage tracking
 - **`cli.py`** - Click-based CLI with commands: `config`, `mock`
 
 ### Session Discovery
@@ -66,6 +73,7 @@ By default, only sessions for the current directory are shown. Use `--global` to
 - Project watcher thread: Directory scanning (daemon)
 - Watcher threads: Transcript file polling (daemon, one per session)
 - Summarizer threads: ThreadPoolExecutor for async LLM calls (2 workers)
+- Analyzer threads: ThreadPoolExecutor for async LLM analysis (1 worker)
 - All shared state in `EventStore` protected by `threading.Lock`
 
 ### Optional Features
@@ -81,5 +89,7 @@ Configuration priority:
 3. Hardcoded defaults (vLLM)
 
 Use `claude-companion config` to set up your LLM server. Summaries are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
+
+**On-Demand Analysis**: Turns, spans, and sessions can be analyzed on-demand using any OpenAI-compatible local LLM server. The analyzer provides structured analysis (summary, critique, sentiment) with multi-source goal extraction (first user message, GitHub issues, plan files, active tasks). Triggered via `A` keybinding in the TUI, with `[`/`]` to zoom between turn, span, and session levels. Analysis results are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
 
 **Export**: Sessions can be exported to Markdown or JSON via the `export.py` module (used by TUI keyboard shortcuts).
