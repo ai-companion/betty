@@ -707,6 +707,7 @@ class EventStore:
                     sentiment=data["sentiment"],
                     word_count=data["word_count"],
                     context_word_count=data["context_word_count"],
+                    local_goal=data.get("local_goal"),
                 )
                 # Notify listeners so TUI refreshes
                 for listener in self._turn_listeners:
@@ -785,6 +786,7 @@ class EventStore:
                     sentiment=data["sentiment"],
                     word_count=data["word_count"],
                     context_word_count=data["context_word_count"],
+                    local_goal=data.get("local_goal"),
                 )
                 self._range_analyses[range_key] = analysis
                 # Notify turn listeners so TUI refreshes
@@ -820,6 +822,7 @@ class EventStore:
                         "sentiment": analysis.sentiment,
                         "word_count": analysis.word_count,
                         "context_word_count": analysis.context_word_count,
+                        "local_goal": analysis.local_goal,
                     }),
                 )
             # Notify turn listeners so TUI refreshes (same pattern as single-turn)
@@ -846,6 +849,7 @@ class EventStore:
                         "sentiment": analysis.sentiment,
                         "word_count": analysis.word_count,
                         "context_word_count": analysis.context_word_count,
+                        "local_goal": analysis.local_goal,
                     }),
                 )
             # Notify turn listeners to refresh TUI

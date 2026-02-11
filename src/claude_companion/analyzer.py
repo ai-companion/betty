@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 VALID_SENTIMENTS = {"progress", "concern", "critical"}
+LOCAL_GOAL_MIN_WORDS = 4  # Skip "yes", "ok", "try again", etc.
 
 ANALYZER_SYSTEM_PROMPT = (
     "You are a supervisor analyzing an AI coding assistant's conversation. "
@@ -33,7 +34,7 @@ ANALYZER_SYSTEM_PROMPT = (
     "with surrounding context.\n\n"
     "Analyze the target turn and return valid JSON with exactly these fields:\n"
     '- "summary": 1-2 sentence summary of what happened in this turn\n'
-    '- "critique": 1-2 sentence evaluation of this turn relative to the goal\n'
+    '- "critique": 1-2 sentence evaluation of this turn relative to the current objective (if provided) and session goal\n'
     '- "sentiment": one of "progress", "concern", or "critical"\n\n'
     "Sentiment guide:\n"
     '- "progress": on track, making forward progress, successful actions\n'
@@ -51,7 +52,7 @@ RANGE_SYSTEM_PROMPT = (
     "You will be given multiple turns (a conversation segment) with context.\n\n"
     "Analyze the segment as a whole and return valid JSON with exactly these fields:\n"
     '- "summary": 2-3 sentence summary of what happened in this segment\n'
-    '- "critique": 1-2 sentence evaluation of progress relative to the goal\n'
+    '- "critique": 1-2 sentence evaluation of progress relative to the current objective (if provided) and session goal\n'
     '- "sentiment": one of "progress", "concern", or "critical"\n\n'
     "Sentiment guide:\n"
     '- "progress": on track, making forward progress, successful actions\n'
@@ -72,6 +73,7 @@ class Analysis:
     context_word_count: int  # word count of context sent to LLM
     goal_sources: list["GoalSource"] | None = None
     synthesized_goal: str | None = None
+    local_goal: str | None = None  # Most recent substantive user message before target
 
 
 @dataclass
@@ -330,6 +332,9 @@ class ContextManager:
         # Goal: first user turn's content
         goal = self._goal_extractor.extract(session)
 
+        # Local goal: most recent substantive user message before target
+        local_goal = self._find_local_goal(session, target_index)
+
         # Sliding window: ~5 before, ~4 after target
         window_start = max(0, target_index - 5)
         window_end = min(len(session.turns), target_index + 5)
@@ -356,6 +361,7 @@ class ContextManager:
 
         return {
             "goal": goal,
+            "local_goal": local_goal,
             "window": window,
             "active_tasks": active_tasks,
             "target_turn": {
@@ -366,6 +372,39 @@ class ContextManager:
             "target_index": target_index,
             "total_turns": len(session.turns),
         }
+
+    def _find_local_goal(self, session: "Session", target_index: int) -> str | None:
+        """Find the most recent substantive user message before target_index.
+
+        Returns None if:
+        - No user message exists before the target
+        - The only candidate is the first user message (avoid duplicating session goal)
+        - All candidates are below LOCAL_GOAL_MIN_WORDS (reactions like "ok")
+
+        Walks backward past short messages to find the last real objective.
+        """
+        first_user_index = None
+        for i, t in enumerate(session.turns):
+            if t.role == "user":
+                first_user_index = i
+                break
+        if first_user_index is None:
+            return None
+
+        for i in range(target_index - 1, -1, -1):
+            t = session.turns[i]
+            if t.role != "user":
+                continue
+            if i == first_user_index:
+                return None  # Don't duplicate session goal
+            if t.word_count < LOCAL_GOAL_MIN_WORDS:
+                continue  # Skip short reactions, keep walking back
+            content = t.content_full[:500]
+            if len(t.content_full) > 500:
+                content += "..."
+            return content
+
+        return None
 
     def _condensed_turn(self, t: Turn, budget: int) -> str:
         """Return a condensed representation of a turn.
@@ -487,6 +526,11 @@ class ContextManager:
 
         n_turns = len(turns)
 
+        # Local goal: only if range doesn't start with a user message
+        local_goal = None
+        if turns and turns[0].role != "user":
+            local_goal = self._find_local_goal(session, range_start)
+
         # Active tasks
         active_tasks = []
         for task in session.tasks.values():
@@ -509,6 +553,7 @@ class ContextManager:
 
             return {
                 "goal": goal,
+                "local_goal": local_goal,
                 "target_turns": [],  # Empty — using span_summaries instead
                 "span_summaries": span_summaries,
                 "surrounding": [],  # No surrounding for session-level
@@ -573,6 +618,7 @@ class ContextManager:
 
         return {
             "goal": goal,
+            "local_goal": local_goal,
             "target_turns": target_turns,
             "span_summaries": [],  # Empty — using target_turns instead
             "surrounding": surrounding,
@@ -647,6 +693,7 @@ class Analyzer:
             analysis = self._parse_response(raw, turn.word_count, context_word_count)
             analysis.goal_sources = self._context_manager._goal_extractor.get_sources(session)
             analysis.synthesized_goal = self._context_manager._goal_extractor.get_synthesized_goal(session)
+            analysis.local_goal = context.get("local_goal")
             callback(analysis, True)
 
         except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):
@@ -711,6 +758,7 @@ class Analyzer:
             analysis = self._parse_response(raw, total_words, context_word_count)
             analysis.goal_sources = self._context_manager._goal_extractor.get_sources(session)
             analysis.synthesized_goal = self._context_manager._goal_extractor.get_synthesized_goal(session)
+            analysis.local_goal = context.get("local_goal")
             callback(analysis, True)
 
         except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):
@@ -810,7 +858,11 @@ class Analyzer:
         parts = []
 
         # Goal
-        parts.append(f"## Goal (first user message)\n{context['goal']}")
+        parts.append(f"## Session Goal\n{context['goal']}")
+
+        # Current objective (local goal)
+        if context.get("local_goal"):
+            parts.append(f"## Current Objective\n{context['local_goal']}")
 
         # Active tasks
         if context["active_tasks"]:
@@ -852,7 +904,11 @@ class Analyzer:
         parts = []
 
         # Goal
-        parts.append(f"## Goal (first user message)\n{context['goal']}")
+        parts.append(f"## Session Goal\n{context['goal']}")
+
+        # Current objective (local goal)
+        if context.get("local_goal"):
+            parts.append(f"## Current Objective\n{context['local_goal']}")
 
         # Active tasks
         if context["active_tasks"]:
@@ -980,8 +1036,10 @@ def make_analysis_cache_key(
     fingerprint = _prompt_fingerprint(model, system_prompt)
     content_sig = hashlib.sha256(turn.content_full.encode()).hexdigest()[:12]
 
-    # Context signature from goal + window content
+    # Context signature from goal + local_goal + window content
     context_parts = [context["goal"]]
+    if context.get("local_goal"):
+        context_parts.append(context["local_goal"])
     for w in context.get("window", []):
         context_parts.append(w["content"])
     context_str = "|".join(context_parts)
@@ -1018,8 +1076,10 @@ def make_range_cache_key(
     content_str = "|".join(content_parts)
     content_sig = hashlib.sha256(content_str.encode()).hexdigest()[:12]
 
-    # Context signature from goal + surrounding content + span summaries
+    # Context signature from goal + local_goal + surrounding content + span summaries
     context_parts = [context["goal"]]
+    if context.get("local_goal"):
+        context_parts.append(context["local_goal"])
     for w in context.get("surrounding", []):
         context_parts.append(w["content"])
     for s in context.get("span_summaries", []):

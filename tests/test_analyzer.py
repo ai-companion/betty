@@ -13,6 +13,7 @@ import pytest
 from claude_companion.analyzer import (
     ANALYZER_SYSTEM_PROMPT,
     GOAL_SYNTHESIS_PROMPT,
+    LOCAL_GOAL_MIN_WORDS,
     RANGE_SYSTEM_PROMPT,
     Analysis,
     Analyzer,
@@ -382,7 +383,7 @@ class TestAnalyzerIntegration:
         context = analyzer._context_manager.build_context(session, turns[2])
         prompt = analyzer._build_prompt(context)
 
-        assert "## Goal" in prompt
+        assert "## Session Goal" in prompt
         assert "Build a REST API" in prompt
         assert "## Active Tasks" in prompt
         assert "Build API" in prompt
@@ -1303,3 +1304,198 @@ class TestAnalysisGoalFields:
         )
         assert len(a.goal_sources) == 2
         assert a.synthesized_goal == "Fix the authentication bug"
+
+
+# --- Local goal tests ---
+
+
+class TestLocalGoal:
+    """Tests for local goal (most recent substantive user message) feature."""
+
+    def setup_method(self):
+        self.cm = ContextManager()
+
+    def test_local_goal_basic(self):
+        """User("Build API"), asst, user("Add auth"), asst → local_goal = "Add auth"."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "I'll start building it"),
+            _make_turn(3, "user", "Add auth to the endpoints"),
+            _make_turn(4, "assistant", "Adding authentication now"),
+        ]
+        session = _make_session(turns)
+        result = self.cm._find_local_goal(session, 3)  # analyzing turn at index 3
+        assert result == "Add auth to the endpoints"
+
+    def test_local_goal_is_first_message(self):
+        """User("Build API"), asst → local_goal = None (avoid duplication)."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "I'll start building it"),
+        ]
+        session = _make_session(turns)
+        result = self.cm._find_local_goal(session, 1)
+        assert result is None
+
+    def test_local_goal_short_filtered(self):
+        """User("Build API"), asst, user("ok"), asst → local_goal = None."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "Working on it"),
+            _make_turn(3, "user", "ok"),
+            _make_turn(4, "assistant", "Done"),
+        ]
+        session = _make_session(turns)
+        result = self.cm._find_local_goal(session, 3)
+        # Walks past "ok" (< 4 words), hits first user, returns None
+        assert result is None
+
+    def test_local_goal_short_skipped_to_substantive(self):
+        """User("Build API"), asst, user("Add error handling"), asst, user("ok"), asst → local_goal = "Add error handling"."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "Working on it"),
+            _make_turn(3, "user", "Add error handling to all routes"),
+            _make_turn(4, "assistant", "Adding error handling"),
+            _make_turn(5, "user", "ok"),
+            _make_turn(6, "assistant", "Done with error handling"),
+        ]
+        session = _make_session(turns)
+        result = self.cm._find_local_goal(session, 5)
+        assert result == "Add error handling to all routes"
+
+    def test_local_goal_no_user_before(self):
+        """asst, tool → local_goal = None."""
+        turns = [
+            _make_turn(1, "assistant", "I'll read the file"),
+            _make_turn(2, "tool", "file contents", "Read"),
+        ]
+        session = _make_session(turns)
+        result = self.cm._find_local_goal(session, 1)
+        assert result is None
+
+    def test_local_goal_in_context_dict(self):
+        """Verify build_context() returns local_goal key."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "Starting"),
+            _make_turn(3, "user", "Add auth to the endpoints"),
+            _make_turn(4, "assistant", "Adding auth"),
+        ]
+        session = _make_session(turns)
+        ctx = self.cm.build_context(session, turns[3])
+        assert "local_goal" in ctx
+        assert ctx["local_goal"] == "Add auth to the endpoints"
+
+    def test_local_goal_range_starts_with_user(self):
+        """Range starting with user turn → local_goal = None."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "Starting"),
+            _make_turn(3, "user", "Add auth to the endpoints"),
+            _make_turn(4, "assistant", "Adding auth"),
+        ]
+        session = _make_session(turns)
+        # Range starts with user turn at index 2
+        ctx = self.cm.build_context_for_range(session, turns[2:4])
+        assert ctx["local_goal"] is None
+
+    def test_local_goal_range_mid_span(self):
+        """Range starting with asst turn → local_goal = preceding user message."""
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "Starting"),
+            _make_turn(3, "user", "Add auth to the endpoints"),
+            _make_turn(4, "assistant", "Adding auth"),
+            _make_turn(5, "tool", "read auth.py", "Read"),
+        ]
+        session = _make_session(turns)
+        # Range is [turns[3], turns[4]] — starts with assistant, not user
+        ctx = self.cm.build_context_for_range(session, turns[3:5])
+        assert ctx["local_goal"] == "Add auth to the endpoints"
+
+    def test_local_goal_in_prompt(self):
+        """Prompt contains '## Current Objective' when local_goal present, absent when not."""
+        analyzer = Analyzer(model="test-model")
+
+        # With local goal
+        turns = [
+            _make_turn(1, "user", "Build a REST API for the project"),
+            _make_turn(2, "assistant", "Starting"),
+            _make_turn(3, "user", "Add auth to the endpoints"),
+            _make_turn(4, "assistant", "Adding auth"),
+        ]
+        session = _make_session(turns)
+        ctx = analyzer._context_manager.build_context(session, turns[3])
+        prompt = analyzer._build_prompt(ctx)
+        assert "## Current Objective" in prompt
+        assert "Add auth to the endpoints" in prompt
+
+        # Without local goal (analyzing right after first user message)
+        ctx2 = analyzer._context_manager.build_context(session, turns[1])
+        prompt2 = analyzer._build_prompt(ctx2)
+        assert "## Current Objective" not in prompt2
+
+    def test_prompt_session_goal_header(self):
+        """Prompt says '## Session Goal' not '## Goal (first user message)'."""
+        analyzer = Analyzer(model="test-model")
+        turns = [
+            _make_turn(1, "user", "Build a REST API"),
+            _make_turn(2, "assistant", "Working on it"),
+        ]
+        session = _make_session(turns)
+        ctx = analyzer._context_manager.build_context(session, turns[1])
+        prompt = analyzer._build_prompt(ctx)
+        assert "## Session Goal" in prompt
+        assert "## Goal (first user message)" not in prompt
+
+        # Also check range prompt
+        ctx_range = analyzer._context_manager.build_context_for_range(session, turns)
+        prompt_range = analyzer._build_prompt_for_range(ctx_range)
+        assert "## Session Goal" in prompt_range
+        assert "## Goal (first user message)" not in prompt_range
+
+    def test_local_goal_cache_key_differs(self):
+        """Different local_goal → different cache key."""
+        turn = _make_turn(1, "assistant", "Hello world")
+        ctx_a = {"goal": "Fix bug", "window": [], "local_goal": "Add auth"}
+        ctx_b = {"goal": "Fix bug", "window": [], "local_goal": "Add tests"}
+        key_a = make_analysis_cache_key(turn, ctx_a, "model-a", ANALYZER_SYSTEM_PROMPT)
+        key_b = make_analysis_cache_key(turn, ctx_b, "model-a", ANALYZER_SYSTEM_PROMPT)
+        assert key_a != key_b
+
+        # None vs present should also differ
+        ctx_c = {"goal": "Fix bug", "window": [], "local_goal": None}
+        key_c = make_analysis_cache_key(turn, ctx_c, "model-a", ANALYZER_SYSTEM_PROMPT)
+        assert key_a != key_c
+
+    def test_local_goal_truncation(self):
+        """1000-char message truncated to 500 + '...'."""
+        long_msg = "word " * 200  # 1000 chars
+        turns = [
+            _make_turn(1, "user", "Build an API for the project"),
+            _make_turn(2, "assistant", "Starting"),
+            _make_turn(3, "user", long_msg),
+            _make_turn(4, "assistant", "Done"),
+        ]
+        session = _make_session(turns)
+        result = self.cm._find_local_goal(session, 3)
+        assert result is not None
+        assert len(result) == 503  # 500 + "..."
+        assert result.endswith("...")
+
+    def test_analysis_local_goal_field(self):
+        """Analysis dataclass preserves local_goal value."""
+        a = Analysis(
+            summary="test", critique="ok", sentiment="progress",
+            word_count=10, context_word_count=100,
+            local_goal="Add error handling to all routes",
+        )
+        assert a.local_goal == "Add error handling to all routes"
+
+        # Default is None
+        b = Analysis(
+            summary="test", critique="ok", sentiment="progress",
+            word_count=10, context_word_count=100,
+        )
+        assert b.local_goal is None

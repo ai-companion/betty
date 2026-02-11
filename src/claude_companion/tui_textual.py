@@ -982,23 +982,49 @@ class AnalysisPanel(Static):
         self.update(RichText.from_markup("\n".join(lines)))
 
     def _append_goal_sources(self, lines: list[str], analysis) -> None:
-        """Append goal source information to display lines."""
-        if not getattr(analysis, "goal_sources", None):
+        """Append goal and objective information to display lines."""
+        goal_sources = getattr(analysis, "goal_sources", None)
+        synthesized_goal = getattr(analysis, "synthesized_goal", None)
+        local_goal = getattr(analysis, "local_goal", None)
+
+        has_content = goal_sources or synthesized_goal or local_goal
+        if not has_content:
             return
+
         lines.append("")
-        if analysis.synthesized_goal:
+
+        # Session Goal: synthesized if available, otherwise first user request
+        if synthesized_goal:
             lines.append(
-                f"[bold]Goal[/bold]\n[dim]{markup_escape(analysis.synthesized_goal)}[/dim]"
+                f"[bold]Session Goal[/bold]\n[dim]{markup_escape(synthesized_goal)}[/dim]"
             )
-        lines.append(f"[bold]Goal Sources[/bold] ({len(analysis.goal_sources)})")
-        for gs in analysis.goal_sources:
-            indicator = "" if gs.fresh else " [dim italic](stale)[/dim italic]"
-            preview = gs.content[:80].replace("\n", " ")
-            if len(gs.content) > 80:
-                preview += "..."
+        elif goal_sources:
+            user_sources = [s for s in goal_sources if s.source_type == "user_request"]
+            if user_sources and user_sources[0].content != "[No user message found]":
+                preview = user_sources[0].content[:200].replace("\n", " ")
+                if len(user_sources[0].content) > 200:
+                    preview += "..."
+                lines.append(
+                    f"[bold]Session Goal[/bold]\n[dim]{markup_escape(preview)}[/dim]"
+                )
+
+        # Current Objective (local goal)
+        if local_goal:
             lines.append(
-                f"  [dim]{markup_escape(gs.label)}{indicator}: {markup_escape(preview)}[/dim]"
+                f"[bold]Current Objective[/bold]\n[dim]{markup_escape(local_goal)}[/dim]"
             )
+
+        # Detailed goal sources (when available)
+        if goal_sources:
+            lines.append(f"[bold]Goal Sources[/bold] ({len(goal_sources)})")
+            for gs in goal_sources:
+                indicator = "" if gs.fresh else " [dim italic](stale)[/dim italic]"
+                preview = gs.content[:80].replace("\n", " ")
+                if len(gs.content) > 80:
+                    preview += "..."
+                lines.append(
+                    f"  [dim]{markup_escape(gs.label)}{indicator}: {markup_escape(preview)}[/dim]"
+                )
 
 
 class ConversationView(ScrollableContainer):
