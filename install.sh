@@ -83,6 +83,14 @@ try_install() {
     local tool="$1"
     local upgrade_flag="$2"
 
+    # uv uses "uv tool install", pipx uses "pipx install"
+    local install_cmd
+    if [[ "$tool" == "uv" ]]; then
+        install_cmd="uv tool install"
+    else
+        install_cmd="pipx install"
+    fi
+
     if [[ "$FROM_GITHUB" == "1" ]]; then
         local https_source ssh_source
         https_source="$(github_source_https)"
@@ -90,18 +98,18 @@ try_install() {
 
         info "Trying HTTPS: ${https_source}"
         # shellcheck disable=SC2086
-        if "$tool" tool install $upgrade_flag "$https_source" 2>/dev/null; then
+        if $install_cmd $upgrade_flag "$https_source" 2>/dev/null; then
             return 0
         fi
 
         info "HTTPS failed, trying SSH: ${ssh_source}"
         # shellcheck disable=SC2086
-        "$tool" tool install $upgrade_flag "$ssh_source"
+        $install_cmd $upgrade_flag "$ssh_source"
     else
         local source
         source="$(pypi_source)"
         # shellcheck disable=SC2086
-        "$tool" tool install $upgrade_flag "$source"
+        $install_cmd $upgrade_flag "$source"
     fi
 }
 
