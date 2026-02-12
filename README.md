@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ai-companion/claude-companion/main/docs/assets/logo.jpg" alt="Claude Companion" width="120">
+  <img src="docs/assets/logo.jpg" alt="Claude Companion" width="120">
 </p>
 
 # Claude Companion
@@ -9,13 +9,15 @@ A real-time TUI monitor for Claude Code sessions.
 ## Install
 
 ```bash
-uvx claude-companion
+curl -fsSL https://raw.githubusercontent.com/ai-companion/claude-companion/main/install.sh | bash
 ```
 
-Or with pip:
+Or directly with uv / pip:
 
 ```bash
-pip install claude-companion
+uvx claude-companion              # run without installing
+uv tool install claude-companion  # install permanently
+pip install claude-companion      # with pip
 ```
 
 ## Use
