@@ -1,6 +1,6 @@
 [project]
 name = "claude-companion"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A CLI supervisor for Claude Code sessions"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,8 +18,14 @@ dependencies = [
 claude-companion = "claude_companion.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/claude_companion/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_companion"]
