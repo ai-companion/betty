@@ -3,4 +3,6 @@
 try:
     from ._version import __version__
 except ImportError:
-    __version__ = "0.0.0+unknown"
+    from importlib.metadata import version
+
+    __version__ = version("claude-companion")
