@@ -14,6 +14,14 @@ claude
 
 The companion auto-detects your session. No hooks or configuration needed.
 
+### Alternative: install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ai-companion/claude-companion/main/install.sh | bash
+```
+
+This installs `claude-companion` to `~/.local/bin/` using `uv` (auto-bootstrapped if needed).
+
 ## Options
 
 | Flag | Description |

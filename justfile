@@ -1,3 +1,11 @@
+# Install from PyPI (or GitHub pre-PyPI)
+install *args="":
+    bash install.sh {{args}}
+
+# Uninstall
+uninstall:
+    bash install.sh --uninstall
+
 # Tag a specific release version as "latest"
 # Usage: just tag-latest v0.8.0
 tag-latest release-ver:
