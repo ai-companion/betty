@@ -42,16 +42,21 @@ err()   { printf '\033[1;31m::\033[0m %s\n' "$*" >&2; }
 
 has() { command -v "$1" >/dev/null 2>&1; }
 
-resolve_source() {
-    if [[ "$FROM_GITHUB" == "1" ]]; then
-        local ref="${VERSION:-latest}"
-        echo "${PACKAGE_NAME} @ git+https://github.com/${GITHUB_REPO}@${ref}"
+github_source_https() {
+    local ref="${VERSION:-latest}"
+    echo "${PACKAGE_NAME} @ git+https://github.com/${GITHUB_REPO}@${ref}"
+}
+
+github_source_ssh() {
+    local ref="${VERSION:-latest}"
+    echo "${PACKAGE_NAME} @ git+ssh://git@github.com/${GITHUB_REPO}@${ref}"
+}
+
+pypi_source() {
+    if [[ -n "$VERSION" ]]; then
+        echo "${PACKAGE_NAME}==${VERSION}"
     else
-        if [[ -n "$VERSION" ]]; then
-            echo "${PACKAGE_NAME}==${VERSION}"
-        else
-            echo "${PACKAGE_NAME}"
-        fi
+        echo "${PACKAGE_NAME}"
     fi
 }
 
@@ -71,9 +76,36 @@ do_uninstall() {
 }
 
 # ── Install / Upgrade ────────────────────────────────────────────────
+
+# Try to install a source with a given tool, with HTTPS→SSH fallback for GitHub.
+# Usage: try_install <tool> <upgrade_flag>
+try_install() {
+    local tool="$1"
+    local upgrade_flag="$2"
+
+    if [[ "$FROM_GITHUB" == "1" ]]; then
+        local https_source ssh_source
+        https_source="$(github_source_https)"
+        ssh_source="$(github_source_ssh)"
+
+        info "Trying HTTPS: ${https_source}"
+        # shellcheck disable=SC2086
+        if "$tool" tool install $upgrade_flag "$https_source" 2>/dev/null; then
+            return 0
+        fi
+
+        info "HTTPS failed, trying SSH: ${ssh_source}"
+        # shellcheck disable=SC2086
+        "$tool" tool install $upgrade_flag "$ssh_source"
+    else
+        local source
+        source="$(pypi_source)"
+        # shellcheck disable=SC2086
+        "$tool" tool install $upgrade_flag "$source"
+    fi
+}
+
 do_install() {
-    local source
-    source="$(resolve_source)"
     local upgrade_flag=""
     [[ "$ACTION" == "upgrade" ]] && upgrade_flag="--upgrade"
 
@@ -82,24 +114,22 @@ do_install() {
     else
         info "Installing ${PACKAGE_NAME}..."
     fi
-    info "Source: ${source}"
 
     # Try uv first
     if has uv; then
         info "Using uv..."
-        # shellcheck disable=SC2086
-        uv tool install $upgrade_flag "$source"
+        try_install uv "$upgrade_flag"
         ok "Installed via uv."
         return
     fi
 
-    # Try pipx
+    # Try pipx (no HTTPS→SSH fallback — pipx uses same source strings)
     if has pipx; then
         info "Using pipx..."
         if [[ "$ACTION" == "upgrade" ]]; then
             pipx upgrade "$PACKAGE_NAME"
         else
-            pipx install "$source"
+            try_install pipx "$upgrade_flag"
         fi
         ok "Installed via pipx."
         return
@@ -116,8 +146,7 @@ do_install() {
     fi
 
     info "Using uv..."
-    # shellcheck disable=SC2086
-    uv tool install $upgrade_flag "$source"
+    try_install uv "$upgrade_flag"
     ok "Installed via uv."
 }
 
