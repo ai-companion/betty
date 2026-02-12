@@ -107,9 +107,9 @@ try_install() {
 
 do_install() {
     local upgrade_flag=""
-    [[ "$ACTION" == "upgrade" ]] && upgrade_flag="--upgrade"
-
     if [[ "$ACTION" == "upgrade" ]]; then
+        # --reinstall ensures a fresh fetch (important for git sources)
+        upgrade_flag="--reinstall"
         info "Upgrading ${PACKAGE_NAME}..."
     else
         info "Installing ${PACKAGE_NAME}..."
@@ -123,11 +123,11 @@ do_install() {
         return
     fi
 
-    # Try pipx (no HTTPS→SSH fallback — pipx uses same source strings)
+    # Try pipx
     if has pipx; then
         info "Using pipx..."
         if [[ "$ACTION" == "upgrade" ]]; then
-            pipx upgrade "$PACKAGE_NAME"
+            pipx reinstall "$PACKAGE_NAME"
         else
             try_install pipx "$upgrade_flag"
         fi
