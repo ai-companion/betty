@@ -32,3 +32,8 @@ packages = ["src/betty"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/betty"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
