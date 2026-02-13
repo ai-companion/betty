@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig, AnalyzerConfig
+from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig, AnalyzerConfig, SummaryConfig
 from .store import EventStore
 from .tui_textual import BettyApp
 
@@ -234,8 +234,10 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 @click.option("--analyzer-small-range", type=int, help="Max turns for small range analysis")
 @click.option("--analyzer-large-range", type=int, help="Min turns for large range analysis")
 @click.option("--manager-open-mode", type=click.Choice(["swap", "expand", "auto"]), default=None, help="Manager view open mode")
+@click.option("--summary-style", type=click.Choice(["default", "brief", "detailed", "technical", "explanatory", "custom"]), default=None, help="Summarization style preset")
+@click.option("--summary-prompt", default=None, help="Custom summarization prompt (sets style to 'custom')")
 @click.option("--show", is_flag=True, help="Show current configuration")
-def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, manager_open_mode: str | None, show: bool) -> None:
+def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, manager_open_mode: str | None, summary_style: str | None, summary_prompt: str | None, show: bool) -> None:
     """Configure Betty settings.
 
     Examples:
@@ -276,6 +278,15 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             has_key = "set" if os.getenv("ANTHROPIC_API_KEY") else "not set"
             console.print(f"  API Key:  [{'green' if os.getenv('ANTHROPIC_API_KEY') else 'red'}]{has_key}[/] (ANTHROPIC_API_KEY)")
 
+        # Show summary config
+        console.print("\n[bold]Summary Configuration:[/bold]")
+        console.print(f"  Style:          [cyan]{current_config.summary.style}[/cyan]")
+        if current_config.summary.custom_prompt:
+            preview = current_config.summary.custom_prompt[:60]
+            if len(current_config.summary.custom_prompt) > 60:
+                preview += "..."
+            console.print(f"  Custom Prompt:  [cyan]{preview}[/cyan]")
+
         # Show analyzer config if non-default
         default_analyzer = AnalyzerConfig()
         if current_config.analyzer != default_analyzer:
@@ -305,6 +316,10 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             console.print(f"[yellow]Note:[/yellow] BETTY_LLM_URL is set: {os.getenv('BETTY_LLM_URL')}")
         if os.getenv("BETTY_LLM_MODEL"):
             console.print(f"[yellow]Note:[/yellow] BETTY_LLM_MODEL is set: {os.getenv('BETTY_LLM_MODEL')}")
+        if os.getenv("BETTY_SUMMARY_STYLE"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_SUMMARY_STYLE is set: {os.getenv('BETTY_SUMMARY_STYLE')}")
+        if os.getenv("BETTY_SUMMARY_PROMPT"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_SUMMARY_PROMPT is set: {os.getenv('BETTY_SUMMARY_PROMPT')}")
 
         return
 
@@ -314,6 +329,14 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     new_collapse_tools = collapse_tools if collapse_tools is not None else current_config.collapse_tools
     new_debug_logging = debug_logging if debug_logging is not None else current_config.debug_logging
     new_manager_open_mode = manager_open_mode if manager_open_mode is not None else current_config.manager_open_mode
+
+    # Build summary config with any overrides
+    if summary_prompt is not None:
+        new_summary = SummaryConfig(style="custom", custom_prompt=summary_prompt)
+    elif summary_style is not None:
+        new_summary = SummaryConfig(style=summary_style, custom_prompt=current_config.summary.custom_prompt if summary_style == "custom" else None)
+    else:
+        new_summary = current_config.summary
 
     # Build analyzer config with any overrides
     new_analyzer = AnalyzerConfig(
@@ -342,6 +365,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
                 api_base=preset_api_base,
             ),
             analyzer=new_analyzer,
+            summary=new_summary,
             style=new_style,
             collapse_tools=new_collapse_tools,
             debug_logging=new_debug_logging,
@@ -367,13 +391,15 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         console.print(f"\nSaved to: [dim]{CONFIG_FILE}[/dim]")
         return
 
-    # Non-LLM config change (style, collapse_tools, debug_logging, analyzer only)
+    # Non-LLM config change (style, collapse_tools, debug_logging, analyzer, summary)
     has_analyzer_change = any(x is not None for x in [analyzer_budget, analyzer_small_range, analyzer_large_range])
+    has_summary_change = summary_style is not None or summary_prompt is not None
     if not url and not model and not preset:
-        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change or manager_open_mode is not None:
+        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change or manager_open_mode is not None or has_summary_change:
             new_config = Config(
                 llm=current_config.llm,
                 analyzer=new_analyzer,
+                summary=new_summary,
                 style=new_style,
                 collapse_tools=new_collapse_tools,
                 debug_logging=new_debug_logging,
@@ -401,8 +427,17 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
                 console.print(f"               API Base: {cfg['api_base']}")
             console.print(f"               Model:    {cfg['model']}\n")
 
-        console.print("Use --style to set UI style.")
+        console.print("\n[bold]Summary Styles:[/bold]")
+        console.print("  [cyan]default[/cyan]       1-sentence summary (default)")
+        console.print("  [cyan]brief[/cyan]         Ultra-short, under 15 words")
+        console.print("  [cyan]detailed[/cyan]      2-3 sentences with reasoning")
+        console.print("  [cyan]technical[/cyan]     File paths, function names, line numbers")
+        console.print("  [cyan]explanatory[/cyan]   Focus on intent and reasoning")
+        console.print("  [cyan]custom[/cyan]        Use --summary-prompt to set a custom prompt")
+
+        console.print("\nUse --style to set UI style.")
         console.print("Use --llm-preset to apply an LLM preset.")
+        console.print("Use --summary-style to set summarization style.")
         console.print("Use --show to view current configuration.")
         return
 
@@ -416,6 +451,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             api_base=new_api_base,
         ),
         analyzer=new_analyzer,
+        summary=new_summary,
         style=new_style,
         collapse_tools=new_collapse_tools,
         debug_logging=new_debug_logging,

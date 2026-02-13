@@ -51,6 +51,91 @@ CRITIC_SYSTEM_PROMPT = (
 )
 
 
+# Style presets for summarization
+SUMMARY_STYLES: dict[str, dict[str, str]] = {
+    "default": {
+        "system": SYSTEM_PROMPT,
+        "tool": TOOL_SYSTEM_PROMPT,
+    },
+    "brief": {
+        "system": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize what the assistant communicated in 1 short sentence, under 15 words. "
+            "Use third person. Be extremely concise."
+        ),
+        "tool": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize the tool actions in 1 short sentence, under 15 words. "
+            "Use third person. Be extremely concise."
+        ),
+    },
+    "detailed": {
+        "system": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize what the assistant communicated in 2-3 sentences. "
+            "Include reasoning, caveats, or trade-offs mentioned. "
+            "Use third person (e.g., 'Explained...'). "
+        ),
+        "tool": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize the tool actions in 2-3 sentences. "
+            "Include file names, outcomes, and any errors encountered. "
+            "Use third person (e.g., 'Read config.py, then edited...'). "
+        ),
+    },
+    "technical": {
+        "system": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize what the assistant communicated in 1 sentence. "
+            "Include specific file paths, function names, and line numbers when mentioned. "
+            "Use third person. Be precise and technical."
+        ),
+        "tool": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize the tool actions in 1 sentence. "
+            "Include file paths, line counts, exit codes, and command details. "
+            "Use third person. Be precise and technical."
+        ),
+    },
+    "explanatory": {
+        "system": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize WHY the assistant said what it said - focus on intent and reasoning. "
+            "Use third person. 1-2 sentences."
+        ),
+        "tool": (
+            "You are a supervisor observing an AI coding assistant at work. "
+            "Summarize WHY these tool actions were taken - focus on the intent behind each action. "
+            "Use third person. 1-2 sentences."
+        ),
+    },
+}
+
+VALID_SUMMARY_STYLES = set(SUMMARY_STYLES.keys()) | {"custom"}
+
+
+def get_summary_prompts(style: str = "default", custom_prompt: str | None = None) -> tuple[str, str]:
+    """Get the system and tool prompts for a given summarization style.
+
+    Args:
+        style: Style name ("default", "brief", "detailed", "technical", "explanatory", "custom")
+        custom_prompt: Custom prompt text, used as both system and tool prompt when style="custom"
+
+    Returns:
+        Tuple of (system_prompt, tool_system_prompt)
+    """
+    if style == "custom" and custom_prompt:
+        return custom_prompt, custom_prompt
+
+    if style in SUMMARY_STYLES:
+        prompts = SUMMARY_STYLES[style]
+        return prompts["system"], prompts["tool"]
+
+    # Fallback to default for unknown styles
+    logger.warning(f"Unknown summary style '{style}', falling back to 'default'")
+    return SUMMARY_STYLES["default"]["system"], SUMMARY_STYLES["default"]["tool"]
+
+
 def _prompt_fingerprint(model: str, system_prompt: str) -> str:
     """Create a short fingerprint from model name and system prompt.
 
@@ -206,11 +291,18 @@ class Summarizer:
         api_base: str | None = None,
         api_key: str | None = None,
         max_workers: int = 2,
+        summary_style: str = "default",
+        custom_summary_prompt: str | None = None,
     ):
         self.model = model
         self.api_base = api_base.rstrip("/") if api_base else None
         self.api_key = api_key
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+        # Resolve summary prompts from style
+        self.system_prompt, self.tool_system_prompt = get_summary_prompts(
+            summary_style, custom_summary_prompt
+        )
 
         # Preflight check for claude-code provider
         if self.model.startswith("claude-code/") and not shutil.which("claude"):
@@ -338,7 +430,7 @@ class Summarizer:
                 tool_lines.append(f"- {t.tool_name}: {content}")
             prompt = "Actions taken:\n" + "\n".join(tool_lines) + "\n\nSummarize these actions."
 
-            summary = self._call_llm(prompt, TOOL_SYSTEM_PROMPT)
+            summary = self._call_llm(prompt, self.tool_system_prompt)
             callback(summary, True)
 
         except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):
@@ -427,7 +519,7 @@ Evaluate: Is the assistant making progress? Did tool actions succeed? Any critic
             # Build prompt for assistant-only summarization
             prompt = f"What is the assistant communicating in this response?\n\n{content}"
 
-            summary = self._call_llm(prompt, SYSTEM_PROMPT)
+            summary = self._call_llm(prompt, self.system_prompt)
             callback(summary, True)
 
         except (litellm.exceptions.APIConnectionError, openai.APIConnectionError, ConnectionError):

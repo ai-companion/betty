@@ -22,8 +22,6 @@ from .models import Session, TaskState, Turn
 from .project_watcher import ProjectWatcher
 from .summarizer import (
     CRITIC_SYSTEM_PROMPT,
-    SYSTEM_PROMPT,
-    TOOL_SYSTEM_PROMPT,
     Summarizer,
     _get_turn_context,
     _get_critic_context,
@@ -58,6 +56,8 @@ class EventStore:
             model=config.llm.model,
             api_base=config.llm.api_base,
             api_key=config.llm.api_key,
+            summary_style=config.summary.style,
+            custom_summary_prompt=config.summary.custom_prompt,
         )
         self._analyzer = Analyzer(
             model=config.llm.model,
@@ -170,6 +170,16 @@ class EventStore:
                         if session:
                             session.branch = branch
                     self._pr_detector.detect_async(project_dir, branch)
+
+            if project_dir:
+                plan_watcher = PlanFileWatcher(
+                    project_dir,
+                    lambda content, path, sid=session_id: self._on_plan_update(sid, content, path, source="file")
+                )
+                plan_watcher.start()
+                with self._lock:
+                    self._plan_watchers[session_id] = plan_watcher
+
 
     @staticmethod
     def _detect_git_branch(project_dir: str) -> str | None:
@@ -380,13 +390,14 @@ class EventStore:
                 if block_id not in task.blocks:
                     task.blocks.append(block_id)
 
-    def _on_plan_update(self, session_id: str, content: str, file_path: str) -> None:
-        """Handle plan updates extracted from the transcript stream.
+    def _on_plan_update(self, session_id: str, content: str, file_path: str, source: str = "transcript") -> None:
+        """Handle plan updates from transcript or file watcher.
 
         Args:
             session_id: Session to update
             content: Plan markdown content (empty string = plan deleted)
-            file_path: Path to the plan file or "plan mode" label
+            file_path: Path or label for the plan source
+            source: "transcript" (from transcript stream) or "file" (from PlanFileWatcher)
         """
         with self._lock:
             session = self._sessions.get(session_id)
@@ -394,9 +405,17 @@ class EventStore:
                 logging.debug(f"Plan update ignored for unknown session: {session_id}")
                 return
 
+            # Don't let file-watcher plans overwrite transcript-sourced plans.
+            # Transcript plans (from ~/.claude/plans/) are more authoritative than
+            # stale PLAN.md files found by PlanFileWatcher in the project root.
+            if source == "file" and session.plan_source == "transcript":
+                return
+
+            # Update plan state
             session.plan_content = content if content else None
             session.plan_file_path = file_path if file_path else None
             session.plan_updated_at = datetime.now() if content else None
+            session.plan_source = source if content else None
 
         # Plan updates will be picked up on next render cycle (TUI polls every 0.2s)
 
@@ -431,7 +450,7 @@ class EventStore:
 
                 # Summarize tool group (if there are tools)
                 if tool_turns:
-                    tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
+                    tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, self._summarizer.tool_system_prompt)
                     cached_tool = self._summary_cache.get(tool_cache_key)
                     if cached_tool:
                         # Store on first tool turn
@@ -503,7 +522,10 @@ class EventStore:
             conditions with stop().
         """
         # Create watcher with session_id captured in callback
-        watcher = TranscriptWatcher(lambda turn, sid=session_id: self._on_watcher_turn(turn, sid))
+        watcher = TranscriptWatcher(
+            on_turn=lambda turn, sid=session_id: self._on_watcher_turn(turn, sid),
+            on_plan_update=lambda content, path, sid=session_id: self._on_plan_update(sid, content, path),
+        )
         # Register watcher under lock, but start watching outside to avoid blocking.
         # Use cancellation flag to handle race with delete_session().
         with self._lock:
@@ -524,7 +546,7 @@ class EventStore:
         Returns:
             Cache key that uniquely identifies this assistant text
         """
-        fingerprint = _prompt_fingerprint(self._summarizer.model, SYSTEM_PROMPT)
+        fingerprint = _prompt_fingerprint(self._summarizer.model, self._summarizer.system_prompt)
         return f"ASST::{fingerprint}::{content}"
 
     def _make_summary_callback(self, turn: Turn, cache_key: str) -> Callable[[str, bool], None]:
@@ -601,7 +623,7 @@ class EventStore:
         if tool_turns[0].summary:
             return False
 
-        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
+        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, self._summarizer.tool_system_prompt)
         cached_tool = self._summary_cache.get(tool_cache_key)
         if cached_tool:
             tool_turns[0].summary = cached_tool
@@ -636,7 +658,7 @@ class EventStore:
                     _, tool_turns = _get_turn_context(session, turn)
 
                     if tool_turns and (not tool_turns[0].summary):
-                        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
+                        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, self._summarizer.tool_system_prompt)
                         cached_tool = self._summary_cache.get(tool_cache_key)
                         if cached_tool:
                             tool_turns[0].summary = cached_tool
@@ -677,7 +699,7 @@ class EventStore:
                     break
 
             if trailing_tools and not trailing_tools[0].summary:
-                tool_cache_key = make_tool_cache_key(trailing_tools, self._summarizer.model, TOOL_SYSTEM_PROMPT)
+                tool_cache_key = make_tool_cache_key(trailing_tools, self._summarizer.model, self._summarizer.tool_system_prompt)
                 cached_tool = self._summary_cache.get(tool_cache_key)
                 if cached_tool:
                     trailing_tools[0].summary = cached_tool
@@ -987,6 +1009,11 @@ class EventStore:
                 for turn in transcript_turns:
                     self._process_task_operation(session, turn)
 
+            # Apply plan from transcript history if found
+            if plan_info:
+                content, plan_path = plan_info
+                self._on_plan_update(session_id, content, plan_path)
+
             # Apply cached summaries or submit for summarization
             for turn in transcript_turns:
                 # Summarize tools before user or assistant turns
@@ -994,7 +1021,7 @@ class EventStore:
                     _, tool_turns = _get_turn_context(session, turn)
 
                     if tool_turns:
-                        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, TOOL_SYSTEM_PROMPT)
+                        tool_cache_key = make_tool_cache_key(tool_turns, self._summarizer.model, self._summarizer.tool_system_prompt)
                         cached_tool = self._summary_cache.get(tool_cache_key)
                         if cached_tool:
                             tool_turns[0].summary = cached_tool
