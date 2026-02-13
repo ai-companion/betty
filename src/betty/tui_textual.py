@@ -26,6 +26,7 @@ from .models import Session, Turn, ToolGroup, compute_spans
 from .pricing import get_pricing, estimate_cost
 
 if TYPE_CHECKING:
+    from .github import PRInfo
     from .store import EventStore
 
 
@@ -132,7 +133,7 @@ ManagerView.expand-visible.panel-focused {
     border: solid $accent;
 }
 
-ManagerView.expand-visible #manager-grid {
+ManagerView.expand-visible .project-grid {
     grid-size: 1;
 }
 
@@ -1099,6 +1100,33 @@ class AnalysisPanel(Static):
                 )
 
 
+class ProjectGroupHeader(Static):
+    """Header widget for a project group in the manager view."""
+
+    DEFAULT_CSS = """
+    ProjectGroupHeader {
+        height: auto;
+        padding: 0 2;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, project_label: str, pr_info: "PRInfo | None" = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._project_label = project_label
+        self._pr_info = pr_info
+
+    def on_mount(self) -> None:
+        lines = [f"[bold]{markup_escape(self._project_label)}[/bold]"]
+        if self._pr_info:
+            pr = self._pr_info
+            pr_title = pr.title[:50] + ("..." if len(pr.title) > 50 else "")
+            pr_title = markup_escape(pr_title)
+            state_color = {"OPEN": "green", "MERGED": "magenta", "CLOSED": "red"}.get(pr.state, "dim")
+            lines.append(f"[{state_color}]#{pr.number}[/{state_color}] {pr_title}")
+        self.update(RichText.from_markup("\n".join(lines)))
+
+
 class SessionCard(Static):
     """Widget for displaying a session card in the manager view."""
 
@@ -1188,17 +1216,17 @@ class ManagerView(ScrollableContainer):
         display: none;
         overflow-y: auto;
         scrollbar-gutter: stable;
+        padding: 0 2;
     }
 
     ManagerView.visible {
         display: block;
     }
 
-    #manager-grid {
+    .project-grid {
         layout: grid;
         grid-size: 3;
         grid-gutter: 1;
-        padding: 1 2;
         height: auto;
     }
     """
@@ -1210,17 +1238,40 @@ class ManagerView(ScrollableContainer):
         self._refresh_counter: int = 0
         self._last_snapshot: str = ""  # fingerprint to skip no-op rebuilds
 
-    def compose(self) -> ComposeResult:
-        yield Container(id="manager-grid")
+    @staticmethod
+    def _group_sessions_by_project(
+        sessions: list[Session],
+    ) -> list[tuple[str, "PRInfo | None", list[Session]]]:
+        """Group sessions by project_path.
+
+        Returns list of (project_path, pr_info, sessions) tuples.
+        Groups ordered by most recent last_activity across their sessions.
+        Sessions within each group ordered by started_at (most recent first).
+        """
+        from collections import defaultdict
+
+        groups: dict[str, list[Session]] = defaultdict(list)
+        for s in sessions:
+            groups[s.project_path or ""].append(s)
+
+        result: list[tuple[str, "PRInfo | None", list[Session]]] = []
+        for project_path, group_sessions in groups.items():
+            # Sort sessions within group by started_at (most recent first)
+            group_sessions.sort(key=lambda s: s.started_at, reverse=True)
+            # Find first non-None pr_info in this group
+            pr_info = next((s.pr_info for s in group_sessions if s.pr_info), None)
+            result.append((project_path, pr_info, group_sessions))
+
+        # Sort groups by most recent last_activity (most recent first)
+        result.sort(key=lambda g: max(s.last_activity for s in g[2]), reverse=True)
+        return result
 
     def refresh_cards(self, sessions: list[Session], active_session_id: str | None) -> None:
         """Rebuild session cards from current sessions."""
         # Build a fingerprint of relevant data to skip no-op rebuilds.
-        # Include minute-resolution timestamp so relative time labels refresh.
-        # Include display_name/branch so cards update promptly when detected.
         now_minute = int(datetime.now().timestamp() // 60)
         snapshot = "|".join(
-            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}"
+            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}:{s.project_path}"
             for s in sessions
         ) + f"||{active_session_id}||{now_minute}"
         if snapshot == self._last_snapshot:
@@ -1231,7 +1282,15 @@ class ManagerView(ScrollableContainer):
         # the selection even if the list order changes.
         previous_selected_id = self.get_selected_session_id()
 
-        self._session_ids = [s.session_id for s in sessions]
+        # Group sessions by project
+        grouped = self._group_sessions_by_project(sessions)
+
+        # Build flat session_ids list (for selection) in group order
+        self._session_ids = [
+            s.session_id
+            for _, _, group_sessions in grouped
+            for s in group_sessions
+        ]
 
         # Restore selection by session_id if possible; otherwise clamp index.
         if self._session_ids:
@@ -1245,27 +1304,46 @@ class ManagerView(ScrollableContainer):
         self._refresh_counter += 1
         rc = self._refresh_counter
 
-        # Clear children of the grid and rebuild
-        try:
-            grid = self.query_one("#manager-grid", Container)
-        except NoMatches:
-            return
-
-        grid.remove_children()
+        # Clear all children and rebuild
+        self.remove_children()
 
         if not sessions:
-            grid.mount(Static("[dim]No sessions found. Waiting...[/dim]"))
+            self.mount(Static("[dim]No sessions found. Waiting...[/dim]"))
             return
 
-        for i, session in enumerate(sessions):
-            is_active = (session.session_id == active_session_id)
-            card = SessionCard(
-                session,
-                is_active=is_active,
-                id=f"card-{rc}-{i}",
-            )
-            card.selected = (i == self._selected_index)
-            grid.mount(card)
+        card_index = 0
+        for gi, (project_path, pr_info, group_sessions) in enumerate(grouped):
+            # Compute project label (last 2 path segments)
+            if project_path:
+                from .utils import decode_project_path
+                decoded = decode_project_path(project_path)
+                if decoded:
+                    parts = [p for p in decoded.split("/") if p]
+                    project_label = "/".join(parts[-2:]) if len(parts) >= 2 else decoded
+                else:
+                    project_label = project_path
+            else:
+                project_label = "unknown"
+
+            self.mount(ProjectGroupHeader(
+                project_label,
+                pr_info=pr_info,
+                id=f"group-{rc}-{gi}",
+            ))
+
+            grid = Container(id=f"grid-{rc}-{gi}", classes="project-grid")
+            self.mount(grid)
+
+            for session in group_sessions:
+                is_active = (session.session_id == active_session_id)
+                card = SessionCard(
+                    session,
+                    is_active=is_active,
+                    id=f"card-{rc}-{card_index}",
+                )
+                card.selected = (card_index == self._selected_index)
+                grid.mount(card)
+                card_index += 1
 
     def get_selected_session_id(self) -> str | None:
         """Get the session ID of the currently selected card."""
@@ -1492,6 +1570,7 @@ class BettyApp(App):
         Binding("I", "toggle_analysis_panel", "Insights", show=False),
         Binding("D", "delete_session", "Delete", show=False),
         Binding("M", "toggle_manager", "Manager", show=False),
+        Binding("O", "open_pr", "Open PR", show=False),
         Binding("h", "nav_left", "Left", show=False),
         Binding("l", "nav_right", "Right", show=False),
         Binding("left", "nav_left", "Left", show=False),
@@ -1636,6 +1715,7 @@ class BettyApp(App):
 
     def _check_for_updates(self) -> None:
         """Periodic check for updates (summaries, plan changes, etc.)."""
+        self.store.update_pr_info()
         self._refresh_header()
         if self._manager_expanded:
             self._refresh_manager()
@@ -2471,6 +2551,42 @@ class BettyApp(App):
         self._refresh_analysis_panel()
         label = "shown" if self._show_analysis_panel else "hidden"
         self._show_status(f"Insights panel {label}")
+
+    def action_open_pr(self) -> None:
+        """Open the PR associated with the selected/active session in a browser."""
+        import webbrowser
+
+        session = None
+        if self._manager_view_active and not self._manager_expanded:
+            # Manager mode: use selected card's session
+            manager_view = self.query_one("#manager-view", ManagerView)
+            sid = manager_view.get_selected_session_id()
+            if sid:
+                for s in self.store.get_sessions():
+                    if s.session_id == sid:
+                        session = s
+                        break
+        else:
+            session = self.store.get_active_session()
+
+        if not session:
+            self._show_status("No session selected")
+            return
+
+        pr_info = session.pr_info
+        # Cross-session fallback: look for a PR in the same project
+        if not pr_info and session.project_path:
+            for s in self.store.get_sessions():
+                if s.project_path == session.project_path and s.pr_info:
+                    pr_info = s.pr_info
+                    break
+
+        if not pr_info:
+            self._show_status("No PR linked to this session")
+            return
+
+        webbrowser.open(pr_info.url)
+        self._show_status(f"Opened PR #{pr_info.number}")
 
     def action_delete_session(self) -> None:
         """Delete active session."""

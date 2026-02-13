@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from .alerts import Alert, AlertLevel, check_turn_for_alerts, send_system_notification
+from .github import PRDetector
 from .analyzer import (
     ANALYZER_SYSTEM_PROMPT,
     RANGE_SYSTEM_PROMPT,
@@ -50,6 +51,7 @@ class EventStore:
         self._project_watcher: ProjectWatcher | None = None
         self._initial_load_done = False  # Set after initial scan completes
         self._branch_cache: dict[str, str | None] = {}  # project_dir -> branch name
+        self._pr_detector = PRDetector()
 
         # Load config and initialize summarizer + analyzer
         config = load_config()
@@ -168,6 +170,7 @@ class EventStore:
                         session = self._sessions.get(session_id)
                         if session:
                             session.branch = branch
+                    self._pr_detector.detect_async(project_dir, branch)
 
             if project_dir:
                 plan_watcher = PlanFileWatcher(
@@ -195,6 +198,20 @@ class EventStore:
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return None  # git not available or timed out
         return None
+
+    def update_pr_info(self) -> None:
+        """Propagate background PR detection results to session objects."""
+        with self._lock:
+            for session in self._sessions.values():
+                if session.pr_info or not session.branch or not session.project_path:
+                    continue
+                from .utils import decode_project_path
+                project_dir = decode_project_path(session.project_path)
+                if not project_dir:
+                    continue
+                pr = self._pr_detector.get_pr(project_dir, session.branch)
+                if pr:
+                    session.pr_info = pr
 
     def _add_alert(self, alert: Alert) -> None:
         """Add an alert and notify listeners."""
