@@ -32,7 +32,7 @@ from .summarizer import (
     make_critic_cache_key,
 )
 from .transcript import parse_transcript
-from .watcher import TranscriptWatcher, PlanFileWatcher
+from .watcher import TranscriptWatcher
 
 
 class EventStore:
@@ -47,7 +47,6 @@ class EventStore:
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
         self._transcript_watchers: dict[str, TranscriptWatcher] = {}  # session_id -> watcher
-        self._plan_watchers: dict[str, PlanFileWatcher] = {}  # session_id -> watcher
         self._project_watcher: ProjectWatcher | None = None
         self._initial_load_done = False  # Set after initial scan completes
         self._branch_cache: dict[str, str | None] = {}  # project_dir -> branch name
@@ -172,15 +171,6 @@ class EventStore:
                             session.branch = branch
                     self._pr_detector.detect_async(project_dir, branch)
 
-            if project_dir:
-                plan_watcher = PlanFileWatcher(
-                    project_dir,
-                    lambda content, path, sid=session_id: self._on_plan_update(sid, content, path)
-                )
-                plan_watcher.start()
-                with self._lock:
-                    self._plan_watchers[session_id] = plan_watcher
-
     @staticmethod
     def _detect_git_branch(project_dir: str) -> str | None:
         """Detect the current git branch for a project directory.
@@ -301,11 +291,6 @@ class EventStore:
             if transcript_watcher:
                 transcript_watcher.stop()
 
-            # Stop and remove plan watcher if exists
-            plan_watcher = self._plan_watchers.pop(session_id, None)
-            if plan_watcher:
-                plan_watcher.stop()
-
             # Remove session
             del self._sessions[session_id]
 
@@ -396,14 +381,19 @@ class EventStore:
                     task.blocks.append(block_id)
 
     def _on_plan_update(self, session_id: str, content: str, file_path: str) -> None:
-        """Handle plan file changes."""
+        """Handle plan updates extracted from the transcript stream.
+
+        Args:
+            session_id: Session to update
+            content: Plan markdown content (empty string = plan deleted)
+            file_path: Path to the plan file or "plan mode" label
+        """
         with self._lock:
             session = self._sessions.get(session_id)
             if not session:
                 logging.debug(f"Plan update ignored for unknown session: {session_id}")
                 return
 
-            # Update plan state
             session.plan_content = content if content else None
             session.plan_file_path = file_path if file_path else None
             session.plan_updated_at = datetime.now() if content else None
@@ -946,13 +936,6 @@ class EventStore:
             transcript_watchers = list(self._transcript_watchers.values())
             self._transcript_watchers.clear()
         for watcher in transcript_watchers:
-            watcher.stop()
-
-        # Stop all plan watchers (copy to avoid race condition)
-        with self._lock:
-            plan_watchers = list(self._plan_watchers.values())
-            self._plan_watchers.clear()
-        for watcher in plan_watchers:
             watcher.stop()
 
         self._summarizer.shutdown()
