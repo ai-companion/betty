@@ -110,6 +110,40 @@ Screen {
     display: none;
 }
 
+#main-content {
+    height: 1fr;
+}
+
+#detail-pane {
+    height: 1fr;
+    width: 1fr;
+}
+
+#detail-pane.hidden {
+    display: none;
+}
+
+ManagerView.expand-visible {
+    width: 27%;
+    border: solid $surface;
+}
+
+ManagerView.expand-visible.panel-focused {
+    border: solid $accent;
+}
+
+ManagerView.expand-visible #manager-grid {
+    grid-size: 1;
+}
+
+#detail-pane.expand-active {
+    border: solid $surface;
+}
+
+#detail-pane.expand-active.panel-focused {
+    border: solid $accent;
+}
+
 #alerts {
     height: auto;
     max-height: 5;
@@ -687,6 +721,8 @@ class HeaderPanel(Static):
         self._active: Session | None = None
         self._filter_label: str = "All"
         self._auto_scroll: bool = True
+        self._manager_expanded: bool = False
+        self._focus_panel: str = "manager"
 
     def update_header(
         self,
@@ -695,19 +731,33 @@ class HeaderPanel(Static):
         filter_label: str,
         auto_scroll: bool,
         manager_active: bool = False,
+        manager_expanded: bool = False,
+        focus_panel: str = "manager",
     ) -> None:
         self._sessions = sessions
         self._active = active
         self._filter_label = filter_label
         self._auto_scroll = auto_scroll
         self._manager_active = manager_active
+        self._manager_expanded = manager_expanded
+        self._focus_panel = focus_panel
         self._render_header()
 
     def _render_header(self) -> None:
+        if self._manager_active and self._manager_expanded:
+            n = sum(1 for s in self._sessions if s.turns)
+            focus_label = "manager" if self._focus_panel == "manager" else "detail"
+            content = (
+                f"[bold]Betty[/bold] — Manager \\[Expanded] focus:{focus_label}\n"
+                f"[dim]{n} session{'s' if n != 1 else ''} | "
+                f"h/l:switch panel  j/k:navigate  enter:select  Esc:collapse[/dim]"
+            )
+            self.update(RichText.from_markup(content))
+            return
         if self._manager_active:
             n = sum(1 for s in self._sessions if s.turns)
             content = (
-                f"[bold]Claude Companion[/bold] — Manager View\n"
+                f"[bold]Betty[/bold] — Manager View\n"
                 f"[dim]{n} session{'s' if n != 1 else ''} | "
                 f"j/k/h/l:navigate  enter:open  M:toggle  q:quit[/dim]"
             )
@@ -1473,7 +1523,7 @@ class BettyApp(App):
             super().__init__()
             self.alert = alert
 
-    def __init__(self, store: "EventStore", collapse_tools: bool = True, ui_style: str = "rich", manager_mode: bool = False) -> None:
+    def __init__(self, store: "EventStore", collapse_tools: bool = True, ui_style: str = "rich", manager_mode: bool = False, manager_open_mode: str = "auto") -> None:
         super().__init__()
         self.store = store
         self._collapse_tools = collapse_tools
@@ -1482,6 +1532,9 @@ class BettyApp(App):
         self._ui_style = ui_style  # "rich" or "claude-code"
         self._manager_mode = manager_mode  # Started with --manager flag
         self._manager_view_active = manager_mode  # Currently showing manager view
+        self._manager_open_mode = manager_open_mode  # "swap" | "expand" | "auto"
+        self._manager_expanded = False  # True = side-by-side mode active
+        self._focus_panel = "manager"  # "manager" | "detail" — which panel j/k controls
         # Filters differ by style
         if ui_style == "rich":
             self._turn_filters = [
@@ -1514,12 +1567,20 @@ class BettyApp(App):
         self._analysis_radius: int = 0  # 0 = single span, 1 = ±1, etc.
         self._show_analysis_panel: bool = False
 
+    def _resolve_open_mode(self) -> str:
+        """Resolve 'auto' manager open mode based on terminal width."""
+        if self._manager_open_mode != "auto":
+            return self._manager_open_mode
+        return "expand" if self.size.width >= 120 else "swap"
+
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
-        yield ManagerView(id="manager-view")
-        yield ConversationView(id="conversation")
-        yield TaskListView(id="tasks-view")
-        yield PlanView(id="plan-view")
+        with Horizontal(id="main-content"):
+            yield ManagerView(id="manager-view")
+            with Vertical(id="detail-pane"):
+                yield ConversationView(id="conversation")
+                yield TaskListView(id="tasks-view")
+                yield PlanView(id="plan-view")
         yield AnalysisPanel(id="analysis-panel")
         yield AlertsPanel(id="alerts")
         yield InputPanel(id="inputs")
@@ -1537,6 +1598,11 @@ class BettyApp(App):
         # Set up periodic refresh for summaries
         self.set_interval(0.5, self._check_for_updates)
 
+    def on_resize(self, event) -> None:
+        """Handle terminal resize — collapse expand mode if too narrow in auto mode."""
+        if self._manager_expanded and self._manager_open_mode == "auto" and self.size.width < 120:
+            self._exit_expand_mode()
+
     def _on_store_turn(self, turn: Turn) -> None:
         """Called from watcher thread - post message for thread safety."""
         self.post_message(self.TurnAdded(turn))
@@ -1548,7 +1614,14 @@ class BettyApp(App):
     @on(TurnAdded)
     def handle_turn_added(self, message: TurnAdded) -> None:
         """Handle new turn on main thread."""
-        if self._manager_view_active:
+        if self._manager_expanded:
+            # Expand mode: refresh both manager cards and conversation
+            self._refresh_manager()
+            self._refresh_conversation()
+            if self._auto_scroll:
+                self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
+            self._refresh_analysis_panel()
+        elif self._manager_view_active:
             self._refresh_manager()
         else:
             self._refresh_conversation()
@@ -1564,7 +1637,10 @@ class BettyApp(App):
     def _check_for_updates(self) -> None:
         """Periodic check for updates (summaries, plan changes, etc.)."""
         self._refresh_header()
-        if self._manager_view_active:
+        if self._manager_expanded:
+            self._refresh_manager()
+            self._refresh_views()
+        elif self._manager_view_active:
             self._refresh_manager()
         else:
             self._refresh_views()  # Refresh plan/tasks in case they changed
@@ -1585,7 +1661,12 @@ class BettyApp(App):
         active = self.store.get_active_session()
         _, filter_label = self._turn_filters[self._filter_index]
         header = self.query_one("#header", HeaderPanel)
-        header.update_header(sessions, active, filter_label, self._auto_scroll, manager_active=self._manager_view_active)
+        header.update_header(
+            sessions, active, filter_label, self._auto_scroll,
+            manager_active=self._manager_view_active,
+            manager_expanded=self._manager_expanded,
+            focus_panel=self._focus_panel,
+        )
 
     def _refresh_conversation(self) -> None:
         """Refresh conversation view."""
@@ -1688,14 +1769,44 @@ class BettyApp(App):
         plan_view = self.query_one("#plan-view", PlanView)
         manager_view = self.query_one("#manager-view", ManagerView)
         conversation = self.query_one("#conversation", ConversationView)
+        detail_pane = self.query_one("#detail-pane", Vertical)
 
-        # Update visibility - manager view hides conversation and other views
-        manager_view.set_class(self._manager_view_active, "visible")
-        tasks_view.set_class(self._show_tasks and not self._manager_view_active, "visible")
-        plan_view.set_class(self._show_plan and not self._manager_view_active, "visible")
-        conversation.set_class(
-            self._show_tasks or self._show_plan or self._manager_view_active, "hidden"
-        )
+        if self._manager_expanded:
+            # Side-by-side: manager (left) + detail pane (right)
+            manager_view.set_class(True, "visible")
+            manager_view.add_class("expand-visible")
+            detail_pane.remove_class("hidden")
+            detail_pane.add_class("expand-active")
+            conversation.remove_class("hidden")
+            tasks_view.set_class(False, "visible")
+            plan_view.set_class(False, "visible")
+            # Focus indicator (border color changes, no layout shift)
+            manager_view.set_class(self._focus_panel == "manager", "panel-focused")
+            detail_pane.set_class(self._focus_panel == "detail", "panel-focused")
+        elif self._manager_view_active:
+            # Full-screen manager
+            manager_view.set_class(True, "visible")
+            manager_view.remove_class("expand-visible")
+            manager_view.remove_class("panel-focused")
+            detail_pane.add_class("hidden")
+            detail_pane.remove_class("expand-active")
+            detail_pane.remove_class("panel-focused")
+            conversation.remove_class("hidden")
+            tasks_view.set_class(False, "visible")
+            plan_view.set_class(False, "visible")
+        else:
+            # Normal conversation view (no manager)
+            manager_view.set_class(False, "visible")
+            manager_view.remove_class("expand-visible")
+            manager_view.remove_class("panel-focused")
+            detail_pane.remove_class("hidden")
+            detail_pane.remove_class("expand-active")
+            detail_pane.remove_class("panel-focused")
+            tasks_view.set_class(self._show_tasks, "visible")
+            plan_view.set_class(self._show_plan, "visible")
+            conversation.set_class(
+                self._show_tasks or self._show_plan, "hidden"
+            )
 
         if self._show_tasks and not self._manager_view_active:
             tasks_view.update_tasks(session)
@@ -1958,9 +2069,30 @@ class BettyApp(App):
     def _hide_manager_view(self) -> None:
         """Hide the manager view and return to conversation."""
         self._manager_view_active = False
+        self._manager_expanded = False
+        self._focus_panel = "manager"
         self._refresh_views()
         self._refresh_header()
         self._refresh_conversation()
+
+    def _enter_expand_mode(self) -> None:
+        """Enter side-by-side expand mode (manager + detail)."""
+        self._manager_expanded = True
+        self._manager_view_active = True
+        self._focus_panel = "detail"
+        self._show_tasks = False
+        self._show_plan = False
+        self._refresh_manager()
+        self._refresh_views()
+        self._refresh_header()
+        self._refresh_conversation()
+
+    def _exit_expand_mode(self) -> None:
+        """Exit expand mode back to full-width manager."""
+        self._manager_expanded = False
+        self._focus_panel = "manager"
+        self._refresh_views()
+        self._refresh_header()
 
     def _show_status(self, message: str) -> None:
         """Show a status message in the footer."""
@@ -1968,12 +2100,8 @@ class BettyApp(App):
         self.notify(message, timeout=3)
 
     # Action handlers
-    def action_nav_down(self) -> None:
-        """Navigate down in conversation or manager grid."""
-        if self._manager_view_active:
-            manager = self.query_one("#manager-view", ManagerView)
-            manager.move_selection(3)  # Move down one row (3 columns)
-            return
+    def _nav_conversation_down(self) -> None:
+        """Navigate down in conversation view."""
         self._auto_scroll = False
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
@@ -1991,12 +2119,8 @@ class BettyApp(App):
         conversation.scroll_to_selected()
         self._refresh_analysis_panel()
 
-    def action_nav_up(self) -> None:
-        """Navigate up in conversation or manager grid."""
-        if self._manager_view_active:
-            manager = self.query_one("#manager-view", ManagerView)
-            manager.move_selection(-3)  # Move up one row (3 columns)
-            return
+    def _nav_conversation_up(self) -> None:
+        """Navigate up in conversation view."""
         self._auto_scroll = False
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
@@ -2014,20 +2138,74 @@ class BettyApp(App):
         conversation.scroll_to_selected()
         self._refresh_analysis_panel()
 
+    def action_nav_down(self) -> None:
+        """Navigate down in conversation or manager grid."""
+        if self._manager_expanded and self._focus_panel == "detail":
+            self._nav_conversation_down()
+            return
+        if self._manager_view_active:
+            manager = self.query_one("#manager-view", ManagerView)
+            cols = 1 if self._manager_expanded else 3
+            manager.move_selection(cols)
+            return
+        self._nav_conversation_down()
+
+    def action_nav_up(self) -> None:
+        """Navigate up in conversation or manager grid."""
+        if self._manager_expanded and self._focus_panel == "detail":
+            self._nav_conversation_up()
+            return
+        if self._manager_view_active:
+            manager = self.query_one("#manager-view", ManagerView)
+            cols = 1 if self._manager_expanded else 3
+            manager.move_selection(-cols)
+            return
+        self._nav_conversation_up()
+
     def action_nav_left(self) -> None:
-        """Navigate left in manager grid."""
+        """Navigate left in manager grid or switch focus panel."""
+        if self._manager_expanded:
+            if self._focus_panel == "detail":
+                self._focus_panel = "manager"
+                self._refresh_header()
+                self._refresh_views()
+            else:
+                manager = self.query_one("#manager-view", ManagerView)
+                manager.move_selection(-1)
+            return
         if self._manager_view_active:
             manager = self.query_one("#manager-view", ManagerView)
             manager.move_selection(-1)
 
     def action_nav_right(self) -> None:
-        """Navigate right in manager grid."""
+        """Navigate right in manager grid or switch focus panel."""
+        if self._manager_expanded:
+            if self._focus_panel == "manager":
+                self._focus_panel = "detail"
+                self._refresh_header()
+                self._refresh_views()
+            else:
+                # Already in detail, no-op for right
+                pass
+            return
         if self._manager_view_active:
             manager = self.query_one("#manager-view", ManagerView)
             manager.move_selection(1)
 
     def action_go_top(self) -> None:
-        """Go to top of conversation."""
+        """Go to top of conversation or manager grid."""
+        if self._manager_expanded and self._focus_panel == "manager":
+            manager = self.query_one("#manager-view", ManagerView)
+            if manager._session_ids:
+                manager._selected_index = 0
+                manager._update_card_selection()
+            return
+        if self._manager_view_active and not self._manager_expanded:
+            manager = self.query_one("#manager-view", ManagerView)
+            if manager._session_ids:
+                manager._selected_index = 0
+                manager._update_card_selection()
+            return
         self._auto_scroll = False
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
@@ -2038,7 +2216,19 @@ class BettyApp(App):
         self._refresh_analysis_panel()
 
     def action_go_bottom(self) -> None:
-        """Go to bottom of conversation."""
+        """Go to bottom of conversation or manager grid."""
+        if self._manager_expanded and self._focus_panel == "manager":
+            manager = self.query_one("#manager-view", ManagerView)
+            if manager._session_ids:
+                manager._selected_index = len(manager._session_ids) - 1
+                manager._update_card_selection()
+            return
+        if self._manager_view_active and not self._manager_expanded:
+            manager = self.query_one("#manager-view", ManagerView)
+            if manager._session_ids:
+                manager._selected_index = len(manager._session_ids) - 1
+                manager._update_card_selection()
+            return
         self._auto_scroll = True
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
@@ -2050,7 +2240,7 @@ class BettyApp(App):
 
     def action_toggle_expand(self) -> None:
         """Toggle expand on selected item, or open session in manager view."""
-        if self._manager_view_active:
+        if self._manager_view_active and not (self._manager_expanded and self._focus_panel == "detail"):
             self._open_selected_session()
             return
         conversation = self.query_one("#conversation", ConversationView)
@@ -2072,9 +2262,29 @@ class BettyApp(App):
         """Open the selected session from manager view."""
         manager = self.query_one("#manager-view", ManagerView)
         session_id = manager.get_selected_session_id()
-        if session_id and self.store.set_active_session_by_id(session_id):
-            self._auto_scroll = True
-            self._group_expanded_state.clear()
+        if not session_id:
+            return
+
+        if self._manager_expanded and self._focus_panel == "manager":
+            # In expand mode with manager focus: switch active session in place
+            if self.store.set_active_session_by_id(session_id):
+                self._auto_scroll = True
+                self._group_expanded_state.clear()
+                self._refresh_conversation()
+                self._refresh_manager()
+                self._refresh_header()
+            return
+
+        if not self.store.set_active_session_by_id(session_id):
+            return
+
+        self._auto_scroll = True
+        self._group_expanded_state.clear()
+
+        mode = self._resolve_open_mode()
+        if mode == "expand":
+            self._enter_expand_mode()
+        else:
             self._hide_manager_view()
 
     def action_toggle_manager(self) -> None:
@@ -2294,6 +2504,10 @@ class BettyApp(App):
         if self._show_plan:
             self._show_plan = False
             self._refresh_views()
+            return
+        # Exit expand mode back to full-width manager
+        if self._manager_expanded:
+            self._exit_expand_mode()
             return
         # Return to manager view if started with --manager and viewing a session
         if not self._manager_view_active and self._manager_mode:
