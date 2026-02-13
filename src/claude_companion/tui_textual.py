@@ -2250,6 +2250,8 @@ class CompanionApp(App):
     def action_toggle_analysis_panel(self) -> None:
         """Toggle the insights panel on/off."""
         self._show_analysis_panel = not self._show_analysis_panel
+        if not self._show_analysis_panel:
+            self._reset_analysis_level()
         self._refresh_analysis_panel()
         label = "shown" if self._show_analysis_panel else "hidden"
         self._show_status(f"Insights panel {label}")
