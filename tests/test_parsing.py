@@ -86,7 +86,7 @@ class TestTranscriptCommandMerge:
         turns, _ = parse_transcript(path)
         assert len(turns) == 1
         assert turns[0].role == "user"
-        assert turns[0].content_full.startswith("/agent-review\n")
+        assert turns[0].content_full.startswith("/agent-review\n\n")
         assert "Run the agent code review script" in turns[0].content_full
 
     def test_command_without_name_not_merged(self):
@@ -482,7 +482,7 @@ class TestWatcherCommandMerge:
 
         watcher._check_for_updates()
         assert len(received) == 1
-        assert received[0].content_full.startswith("/commit\n")
+        assert received[0].content_full.startswith("/commit\n\n")
         assert "commit the staged changes" in received[0].content_full
 
 

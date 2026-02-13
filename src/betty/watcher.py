@@ -142,7 +142,7 @@ class TranscriptWatcher:
                         # Prepend pending command name to next user turn
                         if self._pending_command and turns and turns[0].role == "user":
                             t = turns[0]
-                            merged = f"{self._pending_command}\n{t.content_full}"
+                            merged = f"{self._pending_command}\n\n{t.content_full}"
                             t.content_full = merged
                             t.content_preview = _truncate(merged, 100)
                             t.word_count = count_words(merged)

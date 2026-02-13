@@ -90,7 +90,7 @@ def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int]:
                     # Prepend pending command name to next user turn
                     if pending_command and new_turns and new_turns[0].role == "user":
                         t = new_turns[0]
-                        merged = f"{pending_command}\n{t.content_full}"
+                        merged = f"{pending_command}\n\n{t.content_full}"
                         t.content_full = merged
                         t.content_preview = _truncate(merged, 100)
                         t.word_count = count_words(merged)
