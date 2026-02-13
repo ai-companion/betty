@@ -1,4 +1,4 @@
-"""UI style renderers for Claude Companion TUI."""
+"""UI style renderers for Betty TUI."""
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING

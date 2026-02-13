@@ -1,5 +1,5 @@
 [project]
-name = "claude-companion"
+name = "betty"
 dynamic = ["version"]
 description = "A CLI supervisor for Claude Code sessions"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-claude-companion = "claude_companion.cli:main"
+betty = "betty.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -25,10 +25,10 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/claude_companion/_version.py"
+version-file = "src/betty/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_companion"]
+packages = ["src/betty"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/claude_companion"]
+include = ["src/betty"]

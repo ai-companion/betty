@@ -1,4 +1,4 @@
-"""Utility functions for Claude Companion."""
+"""Utility functions for Betty."""
 
 from pathlib import Path
 
@@ -7,7 +7,7 @@ def decode_project_path(encoded_path: str) -> str:
     """Decode project path from Claude's encoded format.
 
     Example: -Users-akash-src-foo → /Users/akash/src/foo
-    Example: -Users-akash-cursor-projects-claude-companion → /Users/akash/cursor-projects/claude-companion
+    Example: -Users-akash-cursor-projects-my-app → /Users/akash/cursor-projects/my-app
 
     Claude encodes paths by replacing '/' with '-' and prepending '-'.
     Decoding is tricky because dashes in directory names must be preserved.

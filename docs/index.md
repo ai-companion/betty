@@ -2,25 +2,14 @@
 layout: default
 ---
 
-## Quick Start
+## Quick Start (for the Shannons)
 
 ```bash
-# Install and run
-uvx claude-companion
-
-# In another terminal, run Claude Code as usual
-claude
+betty            # run the wife in one terminal
+claude           # run the husband in another
 ```
 
-The companion auto-detects your session. No hooks or configuration needed.
-
-### Alternative: install script
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ai-companion/claude-companion/main/install.sh | bash
-```
-
-This installs `claude-companion` to `~/.local/bin/` using `uv` (auto-bootstrapped if needed).
+Betty auto-detects your session. No hooks or configuration needed.
 
 ## Options
 

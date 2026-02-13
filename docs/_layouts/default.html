@@ -7,20 +7,28 @@
   <meta name="description" content="{{ site.description }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="icon" href="{{ '/favicon.ico' | relative_url }}" type="image/x-icon">
   <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
 </head>
 <body>
   <header class="hero">
     <div class="hero-content">
-      <img src="{{ '/assets/logo.jpg' | relative_url }}" alt="{{ site.title }}" class="hero-logo">
+      <img src="{{ '/assets/logo.png' | relative_url }}" alt="{{ site.title }}" class="hero-logo">
       <h1 class="hero-title">{{ site.title }}</h1>
-      <p class="hero-tagline">{{ site.description }}</p>
-      <div class="hero-install">
-        <code>uvx claude-companion</code>
+      <p class="hero-tagline">Behind every great Claude there is a greater <a href="https://en.wikipedia.org/wiki/Betty_Shannon">Betty</a></p>
+      <p class="hero-slogan"><em>{{ site.description }}</em></p>
+      <div class="hero-install-row">
+        <div class="hero-install" onclick="navigator.clipboard.writeText('curl -fsSL https://betty4.sh/install.sh | bash');this.classList.add('copied');setTimeout(()=>this.classList.remove('copied'),1500)" title="Click to copy">
+          <code>curl -fsSL https://betty4.sh/install.sh | bash</code>
+        </div>
+        <span class="hero-install-or">or</span>
+        <div class="hero-install" onclick="navigator.clipboard.writeText('uvx betty');this.classList.add('copied');setTimeout(()=>this.classList.remove('copied'),1500)" title="Click to copy">
+          <code>uvx betty</code>
+        </div>
       </div>
       <div class="hero-links">
-        <a href="https://github.com/ai-companion/claude-companion" class="btn btn-primary">GitHub</a>
-        <a href="https://pypi.org/project/claude-companion/" class="btn btn-secondary">PyPI</a>
+        <a href="https://github.com/ai-companion/betty" class="btn btn-primary">GitHub</a>
+        <a href="https://pypi.org/project/betty/" class="btn btn-secondary">PyPI</a>
       </div>
     </div>
   </header>

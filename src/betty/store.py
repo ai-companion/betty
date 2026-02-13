@@ -1,4 +1,4 @@
-"""Thread-safe session store for Claude Companion."""
+"""Thread-safe session store for Betty."""
 
 import logging
 import threading

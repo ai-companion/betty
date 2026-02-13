@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from claude_companion.analyzer import (
+from betty.analyzer import (
     ANALYZER_SYSTEM_PROMPT,
     GOAL_SYNTHESIS_PROMPT,
     LOCAL_GOAL_MIN_WORDS,
@@ -24,9 +24,9 @@ from claude_companion.analyzer import (
     make_analysis_cache_key,
     make_range_cache_key,
 )
-from claude_companion.config import AnalyzerConfig
-from claude_companion.models import Session, TaskState, Turn, compute_spans
-from claude_companion.pricing import ModelPricing, get_pricing, estimate_cost, MODEL_PRICING
+from betty.config import AnalyzerConfig
+from betty.models import Session, TaskState, Turn, compute_spans
+from betty.pricing import ModelPricing, get_pricing, estimate_cost, MODEL_PRICING
 
 
 def _make_turn(
@@ -36,7 +36,7 @@ def _make_turn(
     tool_name: str | None = None,
 ) -> Turn:
     """Create a Turn for testing."""
-    from claude_companion.models import count_words
+    from betty.models import count_words
 
     return Turn(
         turn_number=turn_number,
@@ -688,7 +688,7 @@ class TestEstimateCost:
 
 class TestTokenParsing:
     def test_transcript_parse_entry_extracts_tokens(self):
-        from claude_companion.transcript import _parse_entry
+        from betty.transcript import _parse_entry
 
         entry = {
             "type": "assistant",
@@ -714,7 +714,7 @@ class TestTokenParsing:
 
     def test_transcript_parse_entry_first_turn_only(self):
         """Token data should only be on the first turn from an entry."""
-        from claude_companion.transcript import _parse_entry
+        from betty.transcript import _parse_entry
 
         entry = {
             "type": "assistant",
@@ -744,7 +744,7 @@ class TestTokenParsing:
 
     def test_transcript_parse_entry_no_usage(self):
         """Entries without usage data should have None tokens."""
-        from claude_companion.transcript import _parse_entry
+        from betty.transcript import _parse_entry
 
         entry = {
             "type": "assistant",
@@ -761,7 +761,7 @@ class TestTokenParsing:
 
     def test_user_entry_no_tokens(self):
         """User entries should not have token data."""
-        from claude_companion.transcript import _parse_entry
+        from betty.transcript import _parse_entry
 
         entry = {
             "type": "user",
@@ -773,7 +773,7 @@ class TestTokenParsing:
         assert turns[0].input_tokens is None
 
     def test_watcher_parse_entry_extracts_tokens(self):
-        from claude_companion.watcher import TranscriptWatcher
+        from betty.watcher import TranscriptWatcher
 
         watcher = TranscriptWatcher(on_turn=lambda t: None)
         entry = {
@@ -812,7 +812,7 @@ class TestSessionTokenProperties:
         cache_read: int | None = None,
         model_id: str | None = None,
     ) -> Turn:
-        from claude_companion.models import count_words
+        from betty.models import count_words
         return Turn(
             turn_number=turn_number,
             role=role,
@@ -1118,7 +1118,7 @@ class TestGitHubIssueDetection:
             "body": "Users can't log in since yesterday",
             "labels": [{"name": "bug"}, {"name": "P1"}],
         })
-        with patch("claude_companion.analyzer.subprocess.run") as mock_run:
+        with patch("betty.analyzer.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0, stdout=mock_output
             )
@@ -1135,7 +1135,7 @@ class TestGitHubIssueDetection:
     def test_gh_fetch_failure(self):
         """Failed gh call handled silently."""
         ge = GoalExtractor()
-        with patch("claude_companion.analyzer.subprocess.run") as mock_run:
+        with patch("betty.analyzer.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
             ge._fetch_gh_issue("sess:999", "999", None)
 
@@ -1146,7 +1146,7 @@ class TestGitHubIssueDetection:
     def test_gh_not_installed(self):
         """Missing gh binary handled silently."""
         ge = GoalExtractor()
-        with patch("claude_companion.analyzer.subprocess.run", side_effect=FileNotFoundError("gh")):
+        with patch("betty.analyzer.subprocess.run", side_effect=FileNotFoundError("gh")):
             ge._fetch_gh_issue("sess:100", "100", None)
         # Should not raise, cache stays None
         with ge._gh_lock:
@@ -1159,7 +1159,7 @@ class TestGitHubIssueDetection:
             ge._gh_cache["sess:42"] = "#42: Cached issue"
 
         # _detect_and_fetch_issues should skip already-cached keys
-        with patch("claude_companion.analyzer.subprocess.run") as mock_run:
+        with patch("betty.analyzer.subprocess.run") as mock_run:
             ge._detect_and_fetch_issues("sess", "Fix #42 please")
             mock_run.assert_not_called()
 
@@ -1171,7 +1171,7 @@ class TestGitHubIssueDetection:
             "body": "Body text",
             "labels": [],
         })
-        with patch("claude_companion.analyzer.subprocess.run") as mock_run:
+        with patch("betty.analyzer.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=mock_output)
             ge._fetch_gh_issue("sess:77", "77", "owner/repo")
 

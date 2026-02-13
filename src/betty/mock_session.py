@@ -248,7 +248,7 @@ def run_interactive(project_path: str | None = None) -> None:
     print(f"Mock session created: {session_file}")
     print(f"Session ID: {session.session_id}")
     print(f"Project path: {session.project_path}")
-    print("\nRun 'claude-companion' in another terminal to watch this session.")
+    print("\nRun 'betty' in another terminal to watch this session.")
     print("\nPress Enter to add messages, 'u' for user message, 'a' for assistant, 'q' to quit.\n")
 
     message_index = 0
@@ -349,7 +349,7 @@ def run_demo(project_path: str | None = None, delay: float = 1.5, on_entry: Call
         print("\n\nDemo stopped.")
 
     print(f"\nSession file: {session_file}")
-    print("Run 'claude-companion' to view the session.")
+    print("Run 'betty' to view the session.")
 
 
 def main() -> None:

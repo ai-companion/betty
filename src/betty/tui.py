@@ -1,4 +1,4 @@
-"""Rich TUI for Claude Companion."""
+"""Rich TUI for Betty."""
 
 import sys
 import threading

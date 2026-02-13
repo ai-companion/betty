@@ -30,9 +30,7 @@ body {
 }
 
 .hero-logo {
-  width: 120px;
-  height: 120px;
-  border-radius: 16px;
+  width: 200px;
   margin-bottom: 1.5rem;
 }
 
@@ -46,14 +44,63 @@ body {
 .hero-tagline {
   font-size: 1.25rem;
   color: var(--text-secondary);
-  margin-bottom: 2rem;
+  margin-bottom: 0.75rem;
   max-width: 480px;
   margin-left: auto;
   margin-right: auto;
 }
 
-.hero-install {
+.hero-tagline a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 2px solid var(--accent);
+  transition: border-color 0.2s ease;
+}
+
+.hero-tagline a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.hero-slogan {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
   margin-bottom: 2rem;
+}
+
+.hero-install-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.hero-install-or {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  display: inline-block;
+}
+
+.hero-install {
+  cursor: pointer;
+  position: relative;
+}
+
+.hero-install::after {
+  content: 'Copied!';
+  position: absolute;
+  top: -1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.75rem;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.hero-install.copied::after {
+  opacity: 1;
 }
 
 .hero-install code {
@@ -65,6 +112,12 @@ body {
   border-radius: 8px;
   color: var(--accent);
   display: inline-block;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.hero-install:hover code {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.05);
 }
 
 .hero-links {
