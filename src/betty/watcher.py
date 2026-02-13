@@ -172,6 +172,26 @@ class TranscriptWatcher:
                     content_full=content,
                     word_count=count_words(content),
                 ))
+            elif isinstance(content, list):
+                # Extract text from list-content (slash command expansions, etc.)
+                text_parts = []
+                for block in content:
+                    if block.get("type") == "text":
+                        t = block.get("text", "")
+                        if t.strip():
+                            text_parts.append(t)
+                if text_parts:
+                    combined = "\n".join(text_parts)
+                    with self._lock:
+                        self._turn_number += 1
+                        turn_num = self._turn_number
+                    turns.append(Turn(
+                        turn_number=turn_num,
+                        role="user",
+                        content_preview=_truncate(combined, 100),
+                        content_full=combined,
+                        word_count=count_words(combined),
+                    ))
 
         elif entry_type == "assistant":
             message = entry.get("message", {})
@@ -192,7 +212,7 @@ class TranscriptWatcher:
 
                     if block_type == "text":
                         text = block.get("text", "")
-                        if text:
+                        if text.strip():
                             with self._lock:
                                 self._turn_number += 1
                                 turn_num = self._turn_number

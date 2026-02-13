@@ -86,6 +86,24 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
                 word_count=count_words(content),
                 timestamp=timestamp,
             ))
+        elif isinstance(content, list):
+            # Extract text from list-content (slash command expansions, etc.)
+            text_parts = []
+            for block in content:
+                if block.get("type") == "text":
+                    t = block.get("text", "")
+                    if t.strip():
+                        text_parts.append(t)
+            if text_parts:
+                combined = "\n".join(text_parts)
+                turns.append(Turn(
+                    turn_number=current_turn,
+                    role="user",
+                    content_preview=_truncate(combined, 100),
+                    content_full=combined,
+                    word_count=count_words(combined),
+                    timestamp=timestamp,
+                ))
 
     elif entry_type == "assistant":
         # Assistant message - may contain text and/or tool_use
@@ -107,7 +125,7 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
 
                 if block_type == "text":
                     text = block.get("text", "")
-                    if text:
+                    if text.strip():
                         turn = Turn(
                             turn_number=current_turn,
                             role="assistant",
