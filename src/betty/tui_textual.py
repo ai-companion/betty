@@ -22,7 +22,7 @@ from textual.widgets import Static, Footer, Input, Label
 
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
-from .models import Session, Turn, ToolGroup, compute_spans
+from .models import Session, Turn, ToolGroup, SpanGroup, compute_spans
 from .pricing import get_pricing, estimate_cost
 
 if TYPE_CHECKING:
@@ -73,6 +73,36 @@ def group_turns_for_display(
             result.append(turn)
 
     flush_tool_buffer()
+    return result
+
+
+def group_turns_into_spans(
+    session: Session,
+    span_expanded_state: dict[int, bool],
+) -> list[SpanGroup]:
+    """Group turns into SpanGroups (one per user turn + its responses)."""
+    if not session.turns:
+        return []
+
+    spans = compute_spans(session.turns)
+    result: list[SpanGroup] = []
+
+    for start, end in spans:
+        turns_in_span = session.turns[start:end + 1]
+        if turns_in_span[0].role == "user":
+            user_turn = turns_in_span[0]
+            response_turns = turns_in_span[1:]
+        else:
+            user_turn = None
+            response_turns = turns_in_span
+
+        group = SpanGroup(
+            user_turn=user_turn,
+            response_turns=response_turns,
+        )
+        group.expanded = span_expanded_state.get(group.first_turn_number, False)
+        result.append(group)
+
     return result
 
 
@@ -239,12 +269,12 @@ ManagerView.expand-visible .project-grid {
 }
 
 /* Selection highlighting - only change background, no border to avoid layout shift */
-TurnWidget.selected, ToolGroupWidget.selected {
+TurnWidget.selected, ToolGroupWidget.selected, SpanGroupWidget.selected {
     background: $primary 30%;
 }
 
 /* Span highlight for range analysis */
-TurnWidget.span-highlight, ToolGroupWidget.span-highlight {
+TurnWidget.span-highlight, ToolGroupWidget.span-highlight, SpanGroupWidget.span-highlight {
     background: $success 15%;
 }
 
@@ -702,6 +732,198 @@ class ToolGroupWidget(Static):
                 )
                 parts.append(annotation_row)
             return RichGroup(*parts)
+
+
+class SpanGroupWidget(Static):
+    """Widget for displaying a span (user turn + collapsed responses)."""
+
+    DEFAULT_CSS = """
+    SpanGroupWidget {
+        height: auto;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    """
+
+    BULLET = "⏺"
+    ROLE_ICONS = TurnWidget.ROLE_ICONS
+    TOOL_ICONS = TurnWidget.TOOL_ICONS
+    TOOL_INDICATORS = TurnWidget.TOOL_INDICATORS
+
+    expanded: reactive[bool] = reactive(False)
+    selected: reactive[bool] = reactive(False)
+    span_highlight: reactive[bool] = reactive(False)
+
+    def __init__(self, group: SpanGroup, ui_style: str = "rich", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.group = group
+        self.ui_style = ui_style
+        self.expanded = group.expanded
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="span-content")
+
+    def on_mount(self) -> None:
+        self._update_content()
+        self._update_classes()
+
+    def watch_expanded(self, value: bool) -> None:
+        self.group.expanded = value
+        self._update_content()
+
+    def watch_selected(self, value: bool) -> None:
+        self._update_classes()
+        self._update_content()
+
+    def watch_span_highlight(self, value: bool) -> None:
+        self._update_classes()
+
+    def _update_classes(self) -> None:
+        self.remove_class("selected", "span-highlight", "rich-style", "turn-group", "turn-user")
+        if self.selected:
+            self.add_class("selected")
+        elif self.span_highlight:
+            self.add_class("span-highlight")
+        if self.ui_style == "rich":
+            self.add_class("rich-style")
+            self.add_class("turn-user")
+
+    def _update_content(self) -> None:
+        if self.ui_style == "rich":
+            renderable = self._render_rich_style()
+        else:
+            renderable = self._render_claude_code_style()
+        try:
+            content_widget = self.query_one("#span-content", Static)
+            content_widget.update(renderable)
+        except NoMatches:
+            pass
+
+    def _render_rich_style(self):
+        group = self.group
+        select_prefix = "► " if self.selected else ""
+        parts = []
+
+        # User turn header
+        if group.user_turn:
+            turn = group.user_turn
+            icon = self.ROLE_ICONS["user"]
+            timestamp_str = turn.timestamp.strftime("%H:%M:%S")
+            history_prefix = "◷ " if turn.is_historical else ""
+            header = f"{select_prefix}{history_prefix}Turn {turn.turn_number} │ {icon} User │ {timestamp_str}"
+            parts.append(RichText.from_markup(f"[bold blue]{header}[/bold blue]"))
+            content = turn.content_full if self.expanded else turn.content_preview
+            parts.append(RichText(content))
+            if turn.annotation:
+                parts.append(RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"))
+        else:
+            parts.append(RichText.from_markup(f"[bold blue]{select_prefix}(no user turn)[/bold blue]"))
+
+        if not self.expanded:
+            # Collapsed summary
+            summary = group.response_summary
+            indicator = f"[+] {group.total_turns - (1 if group.user_turn else 0)} responses"
+            parts.append(RichText.from_markup(f"[dim]{indicator}: {markup_escape(summary)}[/dim]"))
+        else:
+            # Expanded: render each response turn
+            for resp_turn in group.response_turns:
+                if resp_turn.role == "assistant":
+                    icon = self.ROLE_ICONS["assistant"]
+                    ts = resp_turn.timestamp.strftime("%H:%M:%S")
+                    h = f"  Turn {resp_turn.turn_number} │ {icon} Assistant │ {ts}"
+                    parts.append(RichText.from_markup(f"[bold green]{h}[/bold green] [dim]{resp_turn.word_count:,} words[/dim]"))
+                    parts.append(Markdown(f"  {resp_turn.content_preview}"))
+                else:
+                    tool_name = resp_turn.tool_name or "Tool"
+                    icon = self.TOOL_ICONS.get(tool_name, self.TOOL_ICONS["default"])
+                    ts = resp_turn.timestamp.strftime("%H:%M:%S")
+                    h = f"  Turn {resp_turn.turn_number} │ {icon} {tool_name} │ {ts}"
+                    parts.append(RichText.from_markup(f"[bold yellow]{h}[/bold yellow]"))
+                    parts.append(RichText(f"  {resp_turn.content_preview}", style="dim"))
+
+        return RichGroup(*parts)
+
+    def _render_claude_code_style(self):
+        group = self.group
+        selected_style = "light_steel_blue" if self.selected else ""
+        parts = []
+
+        # User turn
+        if group.user_turn:
+            turn = group.user_turn
+            content = turn.content_full if self.expanded else turn.content_preview
+            content_style = selected_style or "on grey15"
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                RichText("❯ ", style=selected_style or "dim"),
+                RichText(content, style=content_style),
+            )
+            parts.append(row)
+            if turn.annotation:
+                annotation_row = Table.grid(padding=(0, 0))
+                annotation_row.add_column(width=2)
+                annotation_row.add_column()
+                annotation_row.add_row(
+                    RichText("  ", style="dim"),
+                    RichText.from_markup(f"[yellow]📝 {turn.annotation}[/yellow]"),
+                )
+                parts.append(annotation_row)
+        else:
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=2)
+            row.add_column()
+            row.add_row(
+                RichText("❯ ", style="dim"),
+                RichText("(no user turn)", style="dim"),
+            )
+            parts.append(row)
+
+        if not self.expanded:
+            # Collapsed summary line
+            summary = group.response_summary
+            resp_count = group.total_turns - (1 if group.user_turn else 0)
+            summary_row = Table.grid(padding=(0, 0))
+            summary_row.add_column(width=2)
+            summary_row.add_column()
+            summary_row.add_row(
+                RichText("  ", style="dim"),
+                RichText(f"[+] {resp_count} responses: {summary}", style="dim"),
+            )
+            parts.append(summary_row)
+        else:
+            # Expanded: render each response turn
+            for resp_turn in group.response_turns:
+                if resp_turn.role == "assistant":
+                    bullet_style = selected_style or "white"
+                    row = Table.grid(padding=(0, 0))
+                    row.add_column(width=2)
+                    row.add_column()
+                    row.add_row(
+                        RichText(f"{self.BULLET} ", style=bullet_style),
+                        Markdown(resp_turn.content_preview),
+                    )
+                    parts.append(row)
+                    status = f"── turn {resp_turn.turn_number}, {resp_turn.word_count} words ──"
+                    parts.append(RichText(status, style="dim"))
+                else:
+                    tool_name = resp_turn.tool_name or "Tool"
+                    indicator = self.TOOL_INDICATORS.get(tool_name, self.TOOL_INDICATORS["default"])
+                    bullet_style = selected_style or "#5fd787"
+                    row = Table.grid(padding=(0, 0))
+                    row.add_column(width=2)
+                    row.add_column()
+                    tool_text = RichText()
+                    tool_text.append(f"[{indicator}] ", style="bold" if not selected_style else selected_style)
+                    tool_text.append(resp_turn.content_preview, style=selected_style or "dim")
+                    row.add_row(
+                        RichText(f"{self.BULLET} ", style=bullet_style),
+                        tool_text,
+                    )
+                    parts.append(row)
+
+        return RichGroup(*parts) if len(parts) > 1 else parts[0]
 
 
 class HeaderPanel(Static):
@@ -1408,7 +1630,7 @@ class ConversationView(ScrollableContainer):
 
     def _update_selection(self) -> None:
         """Update selection and span highlight state on all turn widgets."""
-        widgets = list(self.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         for i, widget in enumerate(widgets):
             widget.selected = (i == self._selected_index)
             # Span highlight: in range but not the primary selected widget
@@ -1424,7 +1646,7 @@ class ConversationView(ScrollableContainer):
         """Scroll to keep selected item visible."""
         if self._selected_index is None:
             return
-        widgets = list(self.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if 0 <= self._selected_index < len(widgets):
             widgets[self._selected_index].scroll_visible()
 
@@ -1618,6 +1840,7 @@ class BettyApp(App):
         if ui_style == "rich":
             self._turn_filters = [
                 ("all", "All"),
+                ("spans", "Spans"),
                 ("tool", "Tools only"),
                 ("Read", "📄 Read"),
                 ("Write", "✏️ Write"),
@@ -1627,6 +1850,7 @@ class BettyApp(App):
         else:
             self._turn_filters = [
                 ("all", "All"),
+                ("spans", "Spans"),
                 ("tool", "Tools"),
                 ("Read", "Read"),
                 ("Write", "Write"),
@@ -1638,6 +1862,7 @@ class BettyApp(App):
         self._show_alerts = True
         self._auto_scroll = True
         self._group_expanded_state: dict[int, bool] = {}
+        self._span_expanded_state: dict[int, bool] = {}
         self._status_message: str | None = None
         self._refresh_counter: int = 0  # Used to generate unique widget IDs
         self._annotating_turn_number: int | None = None  # Turn being annotated
@@ -1783,7 +2008,7 @@ class BettyApp(App):
         conv_turn_map: dict[int, int] = {}
         conv_turn = 0
         for item in items:
-            if isinstance(item, ToolGroup):
+            if isinstance(item, (ToolGroup, SpanGroup)):
                 pass
             elif item.role in ("user", "assistant"):
                 conv_turn += 1
@@ -1791,7 +2016,14 @@ class BettyApp(App):
 
         # Create widgets with unique IDs using refresh counter
         for i, item in enumerate(items):
-            if isinstance(item, ToolGroup):
+            if isinstance(item, SpanGroup):
+                widget = SpanGroupWidget(
+                    item,
+                    ui_style=self._ui_style,
+                    id=f"span-{rc}-{item.first_turn_number}",
+                )
+                widget.selected = (i == selected_index)
+            elif isinstance(item, ToolGroup):
                 widget = ToolGroupWidget(
                     item,
                     ui_style=self._ui_style,
@@ -1813,12 +2045,15 @@ class BettyApp(App):
         if self._auto_scroll:
             conversation.call_after_refresh(conversation.scroll_end)
 
-    def _get_filtered_turns(self, session: Session | None) -> list[Turn | ToolGroup]:
+    def _get_filtered_turns(self, session: Session | None) -> list[Turn | ToolGroup | SpanGroup]:
         """Get turns filtered by current filter, with optional grouping."""
         if not session:
             return []
 
         filter_key, _ = self._turn_filters[self._filter_index]
+
+        if filter_key == "spans":
+            return group_turns_into_spans(session, self._span_expanded_state)
 
         if self._collapse_tools and self._use_summary and filter_key == "all":
             return group_turns_for_display(
@@ -1946,7 +2181,7 @@ class BettyApp(App):
         if index is None:
             return None
 
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if not (0 <= index < len(widgets)):
             return None
 
@@ -1955,6 +2190,8 @@ class BettyApp(App):
             selected_turn = widget.turn
         elif isinstance(widget, ToolGroupWidget):
             selected_turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+        elif isinstance(widget, SpanGroupWidget):
+            selected_turn = widget.group.user_turn or (widget.group.response_turns[0] if widget.group.response_turns else None)
         else:
             selected_turn = None
 
@@ -2015,7 +2252,7 @@ class BettyApp(App):
 
         # Map turns to widget indices
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
 
         turn_set = set(id(t) for t in turns)
         widget_indices = []
@@ -2027,6 +2264,13 @@ class BettyApp(App):
             elif isinstance(widget, ToolGroupWidget):
                 for tt in widget.group.tool_turns:
                     if id(tt) in turn_set:
+                        widget_indices.append(i)
+                        break
+            elif isinstance(widget, SpanGroupWidget):
+                sg = widget.group
+                all_turns = ([sg.user_turn] if sg.user_turn else []) + sg.response_turns
+                for st in all_turns:
+                    if id(st) in turn_set:
                         widget_indices.append(i)
                         break
 
@@ -2191,7 +2435,7 @@ class BettyApp(App):
         self._auto_scroll = False
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if not widgets:
             return
         current = conversation.get_selected_index()
@@ -2210,7 +2454,7 @@ class BettyApp(App):
         self._auto_scroll = False
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if not widgets:
             return
         current = conversation.get_selected_index()
@@ -2295,7 +2539,7 @@ class BettyApp(App):
         self._auto_scroll = False
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if widgets:
             conversation.set_selected_index(0)
             conversation.scroll_home()
@@ -2318,7 +2562,7 @@ class BettyApp(App):
         self._auto_scroll = True
         self._reset_analysis_level()
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if widgets:
             conversation.set_selected_index(len(widgets) - 1)
             conversation.scroll_end()
@@ -2333,7 +2577,7 @@ class BettyApp(App):
         index = conversation.get_selected_index()
         if index is None:
             return
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if 0 <= index < len(widgets):
             widget = widgets[index]
             # Trigger summarization for unsummarized tool groups
@@ -2343,6 +2587,8 @@ class BettyApp(App):
             # Persist group state
             if isinstance(widget, ToolGroupWidget):
                 self._group_expanded_state[widget.group.first_turn_number] = widget.expanded
+            elif isinstance(widget, SpanGroupWidget):
+                self._span_expanded_state[widget.group.first_turn_number] = widget.expanded
 
     def _open_selected_session(self) -> None:
         """Open the selected session from manager view."""
@@ -2356,6 +2602,7 @@ class BettyApp(App):
             if self.store.set_active_session_by_id(session_id):
                 self._auto_scroll = True
                 self._group_expanded_state.clear()
+                self._span_expanded_state.clear()
                 self._refresh_conversation()
                 self._refresh_manager()
                 self._refresh_header()
@@ -2366,6 +2613,7 @@ class BettyApp(App):
 
         self._auto_scroll = True
         self._group_expanded_state.clear()
+        self._span_expanded_state.clear()
 
         mode = self._resolve_open_mode()
         if mode == "expand":
@@ -2383,18 +2631,22 @@ class BettyApp(App):
     def action_expand_all(self) -> None:
         """Expand all items."""
         conversation = self.query_one("#conversation", ConversationView)
-        for widget in conversation.query("TurnWidget, ToolGroupWidget"):
+        for widget in conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"):
             widget.expanded = True
             if isinstance(widget, ToolGroupWidget):
                 self._group_expanded_state[widget.group.first_turn_number] = True
+            elif isinstance(widget, SpanGroupWidget):
+                self._span_expanded_state[widget.group.first_turn_number] = True
 
     def action_collapse_all(self) -> None:
         """Collapse all items."""
         conversation = self.query_one("#conversation", ConversationView)
-        for widget in conversation.query("TurnWidget, ToolGroupWidget"):
+        for widget in conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"):
             widget.expanded = False
             if isinstance(widget, ToolGroupWidget):
                 self._group_expanded_state[widget.group.first_turn_number] = False
+            elif isinstance(widget, SpanGroupWidget):
+                self._span_expanded_state[widget.group.first_turn_number] = False
 
     def action_cycle_filter(self) -> None:
         """Cycle through filters."""
@@ -2446,7 +2698,7 @@ class BettyApp(App):
             self._show_status("Select a turn first (j/k to navigate)")
             return
 
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if not (0 <= index < len(widgets)):
             return
 
@@ -2457,6 +2709,9 @@ class BettyApp(App):
         elif isinstance(widget, ToolGroupWidget):
             # For tool groups, annotate the first tool turn
             turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+        elif isinstance(widget, SpanGroupWidget):
+            # For span groups, annotate the user turn
+            turn = widget.group.user_turn or (widget.group.response_turns[0] if widget.group.response_turns else None)
         else:
             turn = None
 
@@ -2596,6 +2851,7 @@ class BettyApp(App):
             if self.store.delete_session(session_id):
                 self._show_status(f"Deleted session {session_id[:8]}...")
                 self._group_expanded_state.clear()
+                self._span_expanded_state.clear()
                 self._refresh_all()
         else:
             self._show_status("No session to delete")
@@ -2650,6 +2906,7 @@ class BettyApp(App):
             self._filter_index = 0
             self._auto_scroll = True
             self._group_expanded_state.clear()
+            self._span_expanded_state.clear()
             self._reset_analysis_level()
             self.store.clear_range_analyses()
             self._refresh_all()

@@ -159,6 +159,41 @@ class ToolGroup:
         return ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
 
 
+@dataclass
+class SpanGroup:
+    """A display group for a user turn and all its response turns (assistant + tool)."""
+
+    user_turn: Turn | None          # The user turn that starts this span (None if span starts with non-user turns)
+    response_turns: list[Turn]      # All assistant + tool turns in this span
+    expanded: bool = False
+
+    @property
+    def first_turn_number(self) -> int:
+        if self.user_turn:
+            return self.user_turn.turn_number
+        return self.response_turns[0].turn_number if self.response_turns else 0
+
+    @property
+    def response_summary(self) -> str:
+        """One-line summary: assistant preview + tool count."""
+        assistant_turns = [t for t in self.response_turns if t.role == "assistant"]
+        tool_turns = [t for t in self.response_turns if t.role == "tool"]
+        parts = []
+        if assistant_turns:
+            preview = assistant_turns[0].content_preview[:80]
+            parts.append(preview)
+        if tool_turns:
+            names = [t.tool_name or "tool" for t in tool_turns]
+            unique = list(dict.fromkeys(names))  # preserve order, dedupe
+            tool_str = ", ".join(unique[:3]) + ("..." if len(unique) > 3 else "")
+            parts.append(f"{len(tool_turns)} tools ({tool_str})")
+        return " | ".join(parts) if parts else "no response"
+
+    @property
+    def total_turns(self) -> int:
+        return (1 if self.user_turn else 0) + len(self.response_turns)
+
+
 def compute_spans(turns: list[Turn]) -> list[tuple[int, int]]:
     """Return list of (start_idx, end_idx) spans.
 
