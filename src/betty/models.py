@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .analyzer import Analysis
+    from .github import PRInfo
 
 
 def count_words(text: str) -> int:
@@ -198,6 +199,7 @@ class Session:
     plan_updated_at: datetime | None = None  # Last modification time
     active: bool = True
     branch: str | None = None  # Git branch name if detected
+    pr_info: "PRInfo | None" = None  # GitHub PR linked to this branch
     _display_name_from_path: str | None = field(default=None, init=False, repr=False)
 
     @property

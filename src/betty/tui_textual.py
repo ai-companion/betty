@@ -1176,6 +1176,15 @@ class SessionCard(Static):
             f"[dim]in:{words_in:,} out:{words_out:,}[/dim]",
         ]
 
+        # Show PR link if available
+        if session.pr_info:
+            pr = session.pr_info
+            pr_title = pr.title[:30] + ("..." if len(pr.title) > 30 else "")
+            # Escape Rich markup in PR title
+            pr_title = pr_title.replace("[", "\\[")
+            state_color = {"OPEN": "green", "MERGED": "magenta", "CLOSED": "red"}.get(pr.state, "dim")
+            lines.append(f"[{state_color}]#{pr.number}[/{state_color}] {pr_title}")
+
         self.update(RichText.from_markup("\n".join(lines)))
 
 
@@ -1220,7 +1229,7 @@ class ManagerView(ScrollableContainer):
         # Include display_name/branch so cards update promptly when detected.
         now_minute = int(datetime.now().timestamp() // 60)
         snapshot = "|".join(
-            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}"
+            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}"
             for s in sessions
         ) + f"||{active_session_id}||{now_minute}"
         if snapshot == self._last_snapshot:
@@ -1492,6 +1501,7 @@ class BettyApp(App):
         Binding("I", "toggle_analysis_panel", "Insights", show=False),
         Binding("D", "delete_session", "Delete", show=False),
         Binding("M", "toggle_manager", "Manager", show=False),
+        Binding("O", "open_pr", "Open PR", show=False),
         Binding("h", "nav_left", "Left", show=False),
         Binding("l", "nav_right", "Right", show=False),
         Binding("left", "nav_left", "Left", show=False),
@@ -1636,6 +1646,7 @@ class BettyApp(App):
 
     def _check_for_updates(self) -> None:
         """Periodic check for updates (summaries, plan changes, etc.)."""
+        self.store.update_pr_info()
         self._refresh_header()
         if self._manager_expanded:
             self._refresh_manager()
@@ -2471,6 +2482,33 @@ class BettyApp(App):
         self._refresh_analysis_panel()
         label = "shown" if self._show_analysis_panel else "hidden"
         self._show_status(f"Insights panel {label}")
+
+    def action_open_pr(self) -> None:
+        """Open the PR associated with the selected/active session in a browser."""
+        import webbrowser
+
+        session = None
+        if self._manager_view_active and not self._manager_expanded:
+            # Manager mode: use selected card's session
+            manager_view = self.query_one("#manager-view", ManagerView)
+            sid = manager_view.get_selected_session_id()
+            if sid:
+                for s in self.store.get_sessions():
+                    if s.session_id == sid:
+                        session = s
+                        break
+        else:
+            session = self.store.get_active_session()
+
+        if not session:
+            self._show_status("No session selected")
+            return
+        if not session.pr_info:
+            self._show_status("No PR linked to this session")
+            return
+
+        webbrowser.open(session.pr_info.url)
+        self._show_status(f"Opened PR #{session.pr_info.number}")
 
     def action_delete_session(self) -> None:
         """Delete active session."""
