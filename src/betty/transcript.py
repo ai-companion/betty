@@ -34,6 +34,63 @@ def _detect_command_entry(entry: dict[str, Any]) -> str | None:
     return None
 
 
+def _extract_plan_from_entry(entry: dict[str, Any]) -> tuple[str, str] | None:
+    """Extract plan content from a transcript entry.
+
+    Checks for:
+    - ExitPlanMode tool with 'plan' in input
+    - Write tool targeting ~/.claude/plans/*.md
+    - Edit tool targeting ~/.claude/plans/*.md (reads current file from disk)
+
+    Returns:
+        (plan_content, source_path) or None if no plan found.
+    """
+    from .utils import is_claude_plan_file
+
+    if entry.get("type") != "assistant":
+        return None
+
+    message = entry.get("message", {})
+    content = message.get("content", [])
+    if not isinstance(content, list):
+        return None
+
+    # Process blocks in order; last plan-related block wins
+    result = None
+
+    for block in content:
+        if block.get("type") != "tool_use":
+            continue
+
+        tool_name = block.get("name", "")
+        tool_input = block.get("input", {})
+
+        if tool_name == "ExitPlanMode" and "plan" in tool_input:
+            plan_content = tool_input["plan"]
+            if isinstance(plan_content, str) and plan_content.strip():
+                result = (plan_content, "plan mode")
+
+        elif tool_name == "Write":
+            file_path = tool_input.get("file_path", "")
+            if isinstance(file_path, str) and is_claude_plan_file(file_path):
+                content_str = tool_input.get("content", "")
+                if isinstance(content_str, str) and content_str.strip():
+                    result = (content_str, file_path)
+
+        elif tool_name == "Edit":
+            file_path = tool_input.get("file_path", "")
+            if isinstance(file_path, str) and is_claude_plan_file(file_path):
+                # Read current file content from disk
+                try:
+                    plan_content = Path(file_path).read_text(encoding="utf-8")
+                    if plan_content.strip():
+                        result = (plan_content, file_path)
+                except (OSError, UnicodeDecodeError):
+                    pass
+
+    return result
+
+
 def get_transcript_path(session_id: str, cwd: str) -> Path | None:
     """Compute transcript path from session ID and working directory."""
     claude_dir = Path.home() / ".claude" / "projects"
@@ -49,17 +106,19 @@ def get_transcript_path(session_id: str, cwd: str) -> Path | None:
     return None
 
 
-def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int]:
+def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int, tuple[str, str] | None]:
     """Parse a JSONL transcript file and extract turns.
 
     Returns:
-        Tuple of (turns list, file position after last successfully parsed line).
-        The file position can be passed to the watcher to avoid missing content.
+        Tuple of (turns list, file position after last successfully parsed line,
+        plan info). Plan info is (plan_content, plan_path) from the most recent
+        plan-related tool call, or None if no plan was found.
     """
     turns: list[Turn] = []
     turn_number = 0
     last_good_position = 0
     pending_command: str | None = None
+    last_plan: tuple[str, str] | None = None
 
     try:
         with open(transcript_path, "r") as f:
@@ -101,15 +160,21 @@ def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int]:
                         turn.turn_number = turn_number
                         turn.is_historical = True
                         turns.append(turn)
+
+                    # Check for plan content in this entry
+                    plan_info = _extract_plan_from_entry(entry)
+                    if plan_info:
+                        last_plan = plan_info
+
                     # Successfully parsed - update position to after this line
                     last_good_position = f.tell()
                 except json.JSONDecodeError:
                     # Failed to parse - don't update position, watcher will retry
                     continue
     except IOError:
-        return [], 0
+        return [], 0, None
 
-    return turns, last_good_position
+    return turns, last_good_position, last_plan
 
 
 def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:

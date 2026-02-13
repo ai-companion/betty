@@ -59,38 +59,13 @@ def decode_project_path(encoded_path: str) -> str:
     return current if current else "/" + "/".join(parts)
 
 
-def find_plan_file(project_dir: str) -> str | None:
-    """Find plan file in project directory.
-
-    Searches in order of preference:
-    1. PLAN.md
-    2. .claude/plan.md
-    3. .claude/PLAN.md
-    4. plan.md
+def is_claude_plan_file(file_path: str) -> bool:
+    """Check if a file path is a Claude Code plan file in ~/.claude/plans/.
 
     Args:
-        project_dir: Absolute path to project directory
+        file_path: File path string to check
 
     Returns:
-        Absolute path to plan file if found, None otherwise
+        True if the path matches ~/.claude/plans/*.md
     """
-    if not project_dir:
-        return None
-
-    base = Path(project_dir)
-    if not base.exists() or not base.is_dir():
-        return None
-
-    # Search in priority order
-    candidates = [
-        base / "PLAN.md",
-        base / ".claude" / "plan.md",
-        base / ".claude" / "PLAN.md",
-        base / "plan.md",
-    ]
-
-    for path in candidates:
-        if path.exists() and path.is_file():
-            return str(path)
-
-    return None
+    return "/.claude/plans/" in file_path and file_path.endswith(".md")

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import Turn, count_words, _truncate, _extract_tool_content, parse_task_operation
-from .transcript import _detect_command_entry
+from .transcript import _detect_command_entry, _extract_plan_from_entry
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 class TranscriptWatcher:
     """Watch a transcript file for new entries."""
 
-    def __init__(self, on_turn: Callable[[Turn], None]):
+    def __init__(self, on_turn: Callable[[Turn], None], on_plan_update: Callable[[str, str], None] | None = None):
         self._on_turn = on_turn
+        self._on_plan_update = on_plan_update
         self._current_path: Path | None = None
         self._last_position: int = 0
         self._turn_number: int = 0
@@ -152,6 +153,13 @@ class TranscriptWatcher:
                             logger.debug(f"No turns extracted from entry type: {entry.get('type', 'unknown')}")
                         for turn in turns:
                             self._on_turn(turn)
+
+                        # Check for plan content in this entry
+                        if self._on_plan_update:
+                            plan_info = _extract_plan_from_entry(entry)
+                            if plan_info:
+                                self._on_plan_update(plan_info[0], plan_info[1])
+
                         # Successfully parsed - update position to after this line
                         last_good_position = f.tell()
                     except json.JSONDecodeError as e:
@@ -284,99 +292,4 @@ class TranscriptWatcher:
                         turns.append(turn)
 
         return turns
-
-
-class PlanFileWatcher:
-    """Watches a plan file for changes."""
-
-    def __init__(self, project_dir: str, on_plan_update: Callable[[str, str], None]):
-        """Initialize plan file watcher.
-
-        Args:
-            project_dir: Absolute path to project directory
-            on_plan_update: Callback(content, file_path) called when plan changes
-        """
-        self.project_dir = project_dir
-        self.on_plan_update = on_plan_update
-        self.plan_file_path: str | None = None
-        self.last_mtime: float | None = None
-        self._running = False
-        self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
-
-    def start(self) -> None:
-        """Start watching for plan file."""
-        with self._lock:
-            if self._running:
-                return
-            self._running = True
-
-        # Find initial plan file
-        from .utils import find_plan_file
-        self.plan_file_path = find_plan_file(self.project_dir)
-
-        # If plan exists, read initial content
-        if self.plan_file_path:
-            self._read_and_notify()
-
-        # Start polling thread
-        self._thread = threading.Thread(target=self._watch_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        """Stop watching."""
-        with self._lock:
-            self._running = False
-
-    def _watch_loop(self) -> None:
-        """Main watch loop (runs in background thread)."""
-        while True:
-            with self._lock:
-                if not self._running:
-                    break
-
-            self._check_for_updates()
-            time.sleep(2.0)  # Poll every 2 seconds
-
-    def _check_for_updates(self) -> None:
-        """Check if plan file has changed."""
-        from .utils import find_plan_file
-
-        # Re-check for plan file (handles creation/deletion)
-        current_path = find_plan_file(self.project_dir)
-
-        # Plan file was deleted
-        if self.plan_file_path and not current_path:
-            self.plan_file_path = None
-            self.last_mtime = None
-            self.on_plan_update("", "")  # Empty content = deleted
-            return
-
-        # Plan file was created or moved
-        if current_path != self.plan_file_path:
-            self.plan_file_path = current_path
-            self.last_mtime = None  # Force read
-
-        # Check modification time
-        if self.plan_file_path:
-            path = Path(self.plan_file_path)
-            if path.exists():
-                mtime = path.stat().st_mtime
-                if self.last_mtime is None or mtime > self.last_mtime:
-                    self.last_mtime = mtime
-                    self._read_and_notify()
-
-    def _read_and_notify(self) -> None:
-        """Read plan file and notify callback."""
-        if not self.plan_file_path:
-            return
-
-        try:
-            path = Path(self.plan_file_path)
-            content = path.read_text(encoding="utf-8")
-            self.on_plan_update(content, str(path))
-        except (OSError, UnicodeDecodeError) as e:
-            # File permission error or encoding issue
-            error_msg = f"Error reading plan file: {e}"
-            self.on_plan_update(error_msg, self.plan_file_path or "")
 

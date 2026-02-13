@@ -83,7 +83,7 @@ class TestTranscriptCommandMerge:
         ]
         self._write_jsonl(path, entries)
 
-        turns, _ = parse_transcript(path)
+        turns, _, _ = parse_transcript(path)
         assert len(turns) == 1
         assert turns[0].role == "user"
         assert turns[0].content_full.startswith("/agent-review\n\n")
@@ -100,7 +100,7 @@ class TestTranscriptCommandMerge:
         ]
         self._write_jsonl(path, entries)
 
-        turns, _ = parse_transcript(path)
+        turns, _, _ = parse_transcript(path)
         # No command name → first entry is a normal turn, not merged
         assert len(turns) == 2
 
@@ -118,7 +118,7 @@ class TestTranscriptCommandMerge:
         ]
         self._write_jsonl(path, entries)
 
-        turns, _ = parse_transcript(path)
+        turns, _, _ = parse_transcript(path)
         assert len(turns) == 1
         assert turns[0].role == "assistant"
 
@@ -311,7 +311,7 @@ class TestParseTranscript:
         ]
         self._write_jsonl(path, entries)
 
-        turns, pos = parse_transcript(path)
+        turns, pos, _ = parse_transcript(path)
         assert len(turns) == 4
         assert turns[0].role == "user"
         assert turns[1].role == "assistant"
@@ -332,7 +332,7 @@ class TestParseTranscript:
         ]
         self._write_jsonl(path, entries)
 
-        turns, pos = parse_transcript(path)
+        turns, pos, _ = parse_transcript(path)
         assert len(turns) == 2
         assert turns[0].role == "user"
         assert turns[1].role == "assistant"
@@ -350,7 +350,7 @@ class TestParseTranscript:
         ]
         self._write_jsonl(path, entries)
 
-        turns, pos = parse_transcript(path)
+        turns, pos, _ = parse_transcript(path)
         assert len(turns) == 2
         assert turns[0].role == "user"
         assert turns[0].content_full == "Init issue context"
@@ -364,7 +364,7 @@ class TestParseTranscript:
             f.write("not valid json\n")
             f.write(json.dumps(_user_entry("After")) + "\n")
 
-        turns, pos = parse_transcript(path)
+        turns, pos, _ = parse_transcript(path)
         assert len(turns) == 2
         assert turns[0].content_full == "Before"
         assert turns[1].content_full == "After"
@@ -373,7 +373,7 @@ class TestParseTranscript:
         with tempfile.NamedTemporaryFile(suffix=".jsonl", mode="w", delete=False) as f:
             path = Path(f.name)
 
-        turns, pos = parse_transcript(path)
+        turns, pos, _ = parse_transcript(path)
         assert turns == []
         assert pos == 0
 
