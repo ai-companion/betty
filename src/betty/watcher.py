@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import Turn, count_words, _truncate, _extract_tool_content, parse_task_operation
+from .transcript import _COMMAND_META_RE
 
 logger = logging.getLogger(__name__)
 
@@ -162,23 +163,25 @@ class TranscriptWatcher:
             message = entry.get("message", {})
             content = message.get("content", "")
             if isinstance(content, str) and content:
-                with self._lock:
-                    self._turn_number += 1
-                    turn_num = self._turn_number
-                turns.append(Turn(
-                    turn_number=turn_num,
-                    role="user",
-                    content_preview=_truncate(content, 100),
-                    content_full=content,
-                    word_count=count_words(content),
-                ))
+                # Skip slash command metadata entries
+                if not _COMMAND_META_RE.match(content):
+                    with self._lock:
+                        self._turn_number += 1
+                        turn_num = self._turn_number
+                    turns.append(Turn(
+                        turn_number=turn_num,
+                        role="user",
+                        content_preview=_truncate(content, 100),
+                        content_full=content,
+                        word_count=count_words(content),
+                    ))
             elif isinstance(content, list):
                 # Extract text from list-content (slash command expansions, etc.)
                 text_parts = []
                 for block in content:
                     if block.get("type") == "text":
                         t = block.get("text", "")
-                        if t.strip():
+                        if isinstance(t, str) and t.strip():
                             text_parts.append(t)
                 if text_parts:
                     combined = "\n".join(text_parts)
@@ -212,7 +215,7 @@ class TranscriptWatcher:
 
                     if block_type == "text":
                         text = block.get("text", "")
-                        if text.strip():
+                        if isinstance(text, str) and text.strip():
                             with self._lock:
                                 self._turn_number += 1
                                 turn_num = self._turn_number

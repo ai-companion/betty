@@ -54,6 +54,26 @@ class TestTranscriptParseUserString:
         turns = _parse_entry({"type": "user"}, 0)
         assert turns == []
 
+    def test_command_metadata_filtered(self):
+        """Slash command XML metadata entries should be skipped."""
+        content = (
+            "<command-message>agent-review</command-message>\n"
+            "<command-name>/agent-review</command-name>"
+        )
+        turns = _parse_entry(_user_entry(content), 0)
+        assert turns == []
+
+    def test_command_metadata_without_name_filtered(self):
+        content = "<command-message>commit</command-message>"
+        turns = _parse_entry(_user_entry(content), 0)
+        assert turns == []
+
+    def test_normal_xml_like_message_kept(self):
+        """Messages that happen to contain angle brackets but aren't command metadata."""
+        content = "Please update the <title> tag in the HTML"
+        turns = _parse_entry(_user_entry(content), 0)
+        assert len(turns) == 1
+
 
 class TestTranscriptParseUserList:
     """User entries where content is a list (e.g. slash command expansions)."""
@@ -100,6 +120,18 @@ class TestTranscriptParseUserList:
 
     def test_whitespace_only_text_block_ignored(self):
         content = [{"type": "text", "text": "  \n  "}]
+        turns = _parse_entry(_user_entry(content), 0)
+        assert turns == []
+
+    def test_null_text_in_block_ignored(self):
+        """text value of None should not crash."""
+        content = [{"type": "text", "text": None}]
+        turns = _parse_entry(_user_entry(content), 0)
+        assert turns == []
+
+    def test_non_string_text_in_block_ignored(self):
+        """text value of non-string (int) should not crash."""
+        content = [{"type": "text", "text": 42}]
         turns = _parse_entry(_user_entry(content), 0)
         assert turns == []
 
@@ -176,6 +208,18 @@ class TestTranscriptParseAssistant:
 
     def test_empty_content_list(self):
         entry = _assistant_entry([])
+        turns = _parse_entry(entry, 0)
+        assert turns == []
+
+    def test_null_text_in_block_no_crash(self):
+        """Assistant text block with None text should not crash."""
+        entry = _assistant_entry([{"type": "text", "text": None}])
+        turns = _parse_entry(entry, 0)
+        assert turns == []
+
+    def test_non_string_text_in_block_no_crash(self):
+        """Assistant text block with non-string text should not crash."""
+        entry = _assistant_entry([{"type": "text", "text": 123}])
         turns = _parse_entry(entry, 0)
         assert turns == []
 
@@ -305,6 +349,15 @@ class TestWatcherParseUserString:
         turns = w._parse_entry(_user_entry(""))
         assert turns == []
 
+    def test_command_metadata_filtered(self):
+        w = self._make_watcher()
+        content = (
+            "<command-message>review-pr</command-message>\n"
+            "<command-name>/review-pr</command-name>"
+        )
+        turns = w._parse_entry(_user_entry(content))
+        assert turns == []
+
 
 class TestWatcherParseUserList:
     def _make_watcher(self):
@@ -354,6 +407,12 @@ class TestWatcherParseAssistant:
     def test_spaces_only_filtered(self):
         w = self._make_watcher()
         entry = _assistant_entry([{"type": "text", "text": "   "}])
+        turns = w._parse_entry(entry)
+        assert turns == []
+
+    def test_null_text_no_crash(self):
+        w = self._make_watcher()
+        entry = _assistant_entry([{"type": "text", "text": None}])
         turns = w._parse_entry(entry)
         assert turns == []
 

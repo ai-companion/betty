@@ -1,11 +1,18 @@
 """Parse Claude Code transcript files to load conversation history."""
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .models import Turn, count_words, _extract_tool_content, _truncate, parse_task_operation
+
+# Slash command metadata: <command-message>...</command-message> with optional <command-name>
+_COMMAND_META_RE = re.compile(
+    r"^\s*<command-message>.*</command-message>\s*(?:<command-name>.*</command-name>)?\s*$",
+    re.DOTALL,
+)
 
 
 def get_transcript_path(session_id: str, cwd: str) -> Path | None:
@@ -78,21 +85,25 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
         message = entry.get("message", {})
         content = message.get("content", "")
         if isinstance(content, str) and content:
-            turns.append(Turn(
-                turn_number=current_turn,
-                role="user",
-                content_preview=_truncate(content, 100),
-                content_full=content,
-                word_count=count_words(content),
-                timestamp=timestamp,
-            ))
+            # Skip slash command metadata entries
+            if _COMMAND_META_RE.match(content):
+                pass
+            else:
+                turns.append(Turn(
+                    turn_number=current_turn,
+                    role="user",
+                    content_preview=_truncate(content, 100),
+                    content_full=content,
+                    word_count=count_words(content),
+                    timestamp=timestamp,
+                ))
         elif isinstance(content, list):
             # Extract text from list-content (slash command expansions, etc.)
             text_parts = []
             for block in content:
                 if block.get("type") == "text":
                     t = block.get("text", "")
-                    if t.strip():
+                    if isinstance(t, str) and t.strip():
                         text_parts.append(t)
             if text_parts:
                 combined = "\n".join(text_parts)
@@ -125,7 +136,7 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
 
                 if block_type == "text":
                     text = block.get("text", "")
-                    if text.strip():
+                    if isinstance(text, str) and text.strip():
                         turn = Turn(
                             turn_number=current_turn,
                             role="assistant",
