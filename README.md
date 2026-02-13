@@ -9,7 +9,7 @@ A real-time TUI monitor for Claude Code sessions.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ai-companion/betty/main/install.sh | bash
+curl -fsSL https://betty4.sh/install.sh | bash
 ```
 
 Or directly with uv / pip:

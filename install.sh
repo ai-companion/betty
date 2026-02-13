@@ -2,7 +2,7 @@
 # install.sh — Install betty to ~/.local/bin/
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ai-companion/betty/main/install.sh | bash
+#   curl -fsSL https://betty4.sh/install.sh | bash
 #   curl -fsSL ... | bash -s -- --github          # install from GitHub
 #   curl -fsSL ... | bash -s -- --version 0.10.1   # pin a version
 #   curl -fsSL ... | bash -s -- --upgrade          # upgrade existing install
