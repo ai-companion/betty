@@ -62,6 +62,7 @@ class Config:
     style: str = field(default=DEFAULT_STYLE)
     collapse_tools: bool = field(default=True)  # Collapse tool turns into groups
     debug_logging: bool = field(default=False)  # Enable debug logging to file (opt-in)
+    manager_open_mode: str = field(default="auto")  # "swap", "expand", or "auto"
 
 
 # Default configuration
@@ -73,6 +74,7 @@ DEFAULT_CONFIG = Config(
     style=DEFAULT_STYLE,
     collapse_tools=True,
     debug_logging=False,
+    manager_open_mode="auto",
 )
 
 # Config file path
@@ -203,6 +205,7 @@ def load_config() -> Config:
     style = DEFAULT_STYLE
     collapse_tools = DEFAULT_CONFIG.collapse_tools
     debug_logging = DEFAULT_CONFIG.debug_logging
+    manager_open_mode = DEFAULT_CONFIG.manager_open_mode
 
     # Try loading from config file (TOML first, then JSON for backwards compat)
     data = None
@@ -227,6 +230,7 @@ def load_config() -> Config:
         style = data.get("style", style)
         collapse_tools = data.get("collapse_tools", collapse_tools)
         debug_logging = data.get("debug_logging", debug_logging)
+        manager_open_mode = data.get("manager_open_mode", manager_open_mode)
 
     # Load analyzer config from file
     analyzer_config = AnalyzerConfig()
@@ -250,6 +254,9 @@ def load_config() -> Config:
     debug_logging_env = os.getenv("BETTY_DEBUG_LOGGING")
     if debug_logging_env is not None:
         debug_logging = debug_logging_env.lower() in ("true", "1", "yes")
+    manager_open_mode_env = os.getenv("BETTY_MANAGER_OPEN_MODE")
+    if manager_open_mode_env is not None and manager_open_mode_env in ("swap", "expand", "auto"):
+        manager_open_mode = manager_open_mode_env
 
     return Config(
         llm=LLMConfig(
@@ -260,6 +267,7 @@ def load_config() -> Config:
         style=style,
         collapse_tools=collapse_tools,
         debug_logging=debug_logging,
+        manager_open_mode=manager_open_mode,
     )
 
 
@@ -277,6 +285,7 @@ def save_config(config: Config) -> None:
         "style": config.style,
         "collapse_tools": config.collapse_tools,
         "debug_logging": config.debug_logging,
+        "manager_open_mode": config.manager_open_mode,
     }
 
     # Save api_base when set (for local/custom endpoints)

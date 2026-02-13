@@ -123,9 +123,10 @@ def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Pa
 @click.option("--style", type=click.Choice(["rich", "claude-code"]), default=None, help="UI style override for this run")
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
+@click.option("--manager-open-mode", type=click.Choice(["swap", "expand", "auto"]), default=None, help="Manager view open mode (swap, expand, or auto)")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
-def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, manager_open_mode: str | None, version: bool) -> None:
     """Betty - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"betty v{__version__}")
@@ -144,6 +145,8 @@ def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mod
             config.collapse_tools = collapse_tools
         if debug_logging is not None:
             config.debug_logging = debug_logging
+        if manager_open_mode is not None:
+            config.manager_open_mode = manager_open_mode
         run_companion(global_mode=global_mode, worktree_mode=worktree_mode, manager_mode=manager_mode, config=config)
 
 
@@ -211,7 +214,7 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 
     try:
         # Run Textual TUI
-        app = BettyApp(store, collapse_tools=config.collapse_tools, ui_style=config.style, manager_mode=manager_mode)
+        app = BettyApp(store, collapse_tools=config.collapse_tools, ui_style=config.style, manager_mode=manager_mode, manager_open_mode=config.manager_open_mode)
         app.run()
     except KeyboardInterrupt:
         pass
@@ -230,8 +233,9 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 @click.option("--analyzer-budget", type=int, help="Analyzer context budget (chars)")
 @click.option("--analyzer-small-range", type=int, help="Max turns for small range analysis")
 @click.option("--analyzer-large-range", type=int, help="Min turns for large range analysis")
+@click.option("--manager-open-mode", type=click.Choice(["swap", "expand", "auto"]), default=None, help="Manager view open mode")
 @click.option("--show", is_flag=True, help="Show current configuration")
-def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, show: bool) -> None:
+def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, manager_open_mode: str | None, show: bool) -> None:
     """Configure Betty settings.
 
     Examples:
@@ -250,6 +254,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         console.print(f"  Style:          [cyan]{current_config.style}[/cyan]")
         console.print(f"  Collapse Tools: [cyan]{current_config.collapse_tools}[/cyan]")
         console.print(f"  Debug Logging:  [cyan]{current_config.debug_logging}[/cyan]")
+        console.print(f"  Manager Mode:   [cyan]{current_config.manager_open_mode}[/cyan]")
 
         console.print("\n[bold]LLM Configuration:[/bold]")
         console.print(f"  Model:    [cyan]{current_config.llm.model}[/cyan]")
@@ -290,6 +295,8 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             console.print(f"[yellow]Note:[/yellow] BETTY_COLLAPSE_TOOLS is set: {os.getenv('BETTY_COLLAPSE_TOOLS')}")
         if os.getenv("BETTY_DEBUG_LOGGING"):
             console.print(f"[yellow]Note:[/yellow] BETTY_DEBUG_LOGGING is set: {os.getenv('BETTY_DEBUG_LOGGING')}")
+        if os.getenv("BETTY_MANAGER_OPEN_MODE"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_MANAGER_OPEN_MODE is set: {os.getenv('BETTY_MANAGER_OPEN_MODE')}")
         if os.getenv("BETTY_LLM_PROVIDER"):
             console.print(f"[yellow]Note:[/yellow] BETTY_LLM_PROVIDER is set (deprecated): {os.getenv('BETTY_LLM_PROVIDER')}")
         if os.getenv("BETTY_LLM_API_BASE"):
@@ -306,6 +313,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     new_style = style if style else current_config.style
     new_collapse_tools = collapse_tools if collapse_tools is not None else current_config.collapse_tools
     new_debug_logging = debug_logging if debug_logging is not None else current_config.debug_logging
+    new_manager_open_mode = manager_open_mode if manager_open_mode is not None else current_config.manager_open_mode
 
     # Build analyzer config with any overrides
     new_analyzer = AnalyzerConfig(
@@ -337,6 +345,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             style=new_style,
             collapse_tools=new_collapse_tools,
             debug_logging=new_debug_logging,
+            manager_open_mode=new_manager_open_mode,
         )
 
         save_config(new_config)
@@ -361,13 +370,14 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     # Non-LLM config change (style, collapse_tools, debug_logging, analyzer only)
     has_analyzer_change = any(x is not None for x in [analyzer_budget, analyzer_small_range, analyzer_large_range])
     if not url and not model and not preset:
-        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change:
+        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change or manager_open_mode is not None:
             new_config = Config(
                 llm=current_config.llm,
                 analyzer=new_analyzer,
                 style=new_style,
                 collapse_tools=new_collapse_tools,
                 debug_logging=new_debug_logging,
+                manager_open_mode=new_manager_open_mode,
             )
             save_config(new_config)
 
@@ -409,6 +419,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         style=new_style,
         collapse_tools=new_collapse_tools,
         debug_logging=new_debug_logging,
+        manager_open_mode=new_manager_open_mode,
     )
 
     save_config(new_config)
