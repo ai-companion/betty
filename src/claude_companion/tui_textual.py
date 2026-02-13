@@ -908,6 +908,15 @@ class AnalysisPanel(Static):
     }
     """
 
+    def show_empty(self) -> None:
+        """Display an empty state placeholder when no analysis is available."""
+        lines = [
+            "[bold]Analysis[/bold]\n",
+            "[dim]No analysis for this selection.[/dim]",
+            "[dim]Press A to analyze.[/dim]",
+        ]
+        self.update(RichText.from_markup("\n".join(lines)))
+
     def update_analysis(self, turn: Turn, analysis, label: str = "") -> None:
         """Update the panel with analysis for the given turn."""
         color = "#5fd787" if analysis.sentiment == "progress" else (
@@ -1430,6 +1439,7 @@ class CompanionApp(App):
         Binding("A", "analyze_turn", "Analyze", show=False),
         Binding("]", "zoom_out", "Zoom Out", show=False),
         Binding("[", "zoom_in", "Zoom In", show=False),
+        Binding("I", "toggle_analysis_panel", "Insights", show=False),
         Binding("D", "delete_session", "Delete", show=False),
         Binding("M", "toggle_manager", "Manager", show=False),
         Binding("h", "nav_left", "Left", show=False),
@@ -1502,6 +1512,7 @@ class CompanionApp(App):
         self._annotating_scroll_y: float = 0  # Scroll position before annotating
         self._analysis_level: str = "turn"  # "turn" | "span" | "session"
         self._analysis_radius: int = 0  # 0 = single span, 1 = ±1, etc.
+        self._show_analysis_panel: bool = False
 
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
@@ -1692,37 +1703,43 @@ class CompanionApp(App):
             plan_view.update_plan(session)
 
     def _refresh_analysis_panel(self) -> None:
-        """Update the analysis panel based on the currently selected turn and analysis level."""
+        """Update the analysis panel based on toggle state and current selection."""
         panel = self.query_one("#analysis-panel", AnalysisPanel)
+
+        if not self._show_analysis_panel:
+            panel.remove_class("visible")
+            self._update_span_highlighting()
+            return
+
+        panel.add_class("visible")
+
         conversation = self.query_one("#conversation", ConversationView)
         index = conversation.get_selected_index()
 
         if index is None:
-            panel.remove_class("visible")
+            panel.show_empty()
+            self._update_span_highlighting()
             return
 
         result = self._get_analysis_turn_range()
         if result is None:
-            panel.remove_class("visible")
+            panel.show_empty()
+            self._update_span_highlighting()
             return
 
         turns, label = result
 
         if len(turns) == 1 and turns[0].analysis:
-            # Single turn — existing behavior
             panel.update_analysis(turns[0], turns[0].analysis, label)
-            panel.add_class("visible")
         elif len(turns) > 1:
-            # Multi-turn: check if store has a range analysis
             range_key = (turns[0].turn_number, turns[-1].turn_number)
             range_analysis = self.store.get_range_analysis(range_key)
             if range_analysis:
                 panel.update_range_analysis(turns, range_analysis, label)
-                panel.add_class("visible")
             else:
-                panel.remove_class("visible")
+                panel.show_empty()
         else:
-            panel.remove_class("visible")
+            panel.show_empty()
 
         # Update span highlighting in conversation
         self._update_span_highlighting()
@@ -1873,6 +1890,7 @@ class CompanionApp(App):
         elif self._analysis_level == "session":
             return  # Already at max
 
+        self._show_analysis_panel = True
         self._update_span_highlighting()
         self._refresh_analysis_panel()
         # Show level label
@@ -1906,6 +1924,7 @@ class CompanionApp(App):
         elif self._analysis_level == "turn":
             return  # Already at min
 
+        self._show_analysis_panel = True
         self._update_span_highlighting()
         self._refresh_analysis_panel()
         # Show level label
@@ -2191,8 +2210,7 @@ class CompanionApp(App):
             self._show_status("No historical turns need summarization")
 
     def action_analyze_turn(self) -> None:
-        """Analyze the selected turn or range, or toggle the panel if already analyzed."""
-        panel = self.query_one("#analysis-panel", AnalysisPanel)
+        """Analyze the selected turn or range."""
         conversation = self.query_one("#conversation", ConversationView)
         index = conversation.get_selected_index()
         if index is None:
@@ -2206,14 +2224,8 @@ class CompanionApp(App):
         turns, label = result
 
         if len(turns) == 1:
-            # Single-turn analysis (existing logic)
+            # Single-turn analysis
             turn = turns[0]
-
-            # Toggle panel off if already showing analysis for this turn
-            if turn.analysis and panel.has_class("visible"):
-                panel.remove_class("visible")
-                return
-
             submitted = self.store.analyze_turn(turn)
             if submitted:
                 self._show_status(f"Analyzing {label}...")
@@ -2226,19 +2238,21 @@ class CompanionApp(App):
                     self._refresh_conversation()
         else:
             # Multi-turn range analysis
-            range_key = (turns[0].turn_number, turns[-1].turn_number)
-            existing = self.store.get_range_analysis(range_key)
-            if existing and panel.has_class("visible"):
-                panel.remove_class("visible")
-                return
-
             submitted = self.store.analyze_range(turns)
             if submitted:
                 self._show_status(f"Analyzing {label}...")
             else:
                 self._show_status(f"Analysis loaded for {label}")
 
+        self._show_analysis_panel = True
         self._refresh_analysis_panel()
+
+    def action_toggle_analysis_panel(self) -> None:
+        """Toggle the insights panel on/off."""
+        self._show_analysis_panel = not self._show_analysis_panel
+        self._refresh_analysis_panel()
+        label = "shown" if self._show_analysis_panel else "hidden"
+        self._show_status(f"Insights panel {label}")
 
     def action_delete_session(self) -> None:
         """Delete active session."""
@@ -2265,6 +2279,11 @@ class CompanionApp(App):
     def action_escape(self) -> None:
         """Handle escape key."""
         self._reset_analysis_level()
+        # Close analysis panel first
+        if self._show_analysis_panel:
+            self._show_analysis_panel = False
+            self._refresh_analysis_panel()
+            return
         # Always close tasks/plan overlays first, regardless of mode
         if self._show_tasks:
             self._show_tasks = False
