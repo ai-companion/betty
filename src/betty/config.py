@@ -54,11 +54,19 @@ class AnalyzerConfig:
 
 
 @dataclass
+class SummaryConfig:
+    """Configuration for summarization style and prompts."""
+    style: str = "default"
+    custom_prompt: str | None = None  # Only used when style="custom"
+
+
+@dataclass
 class Config:
     """Betty configuration."""
 
     llm: LLMConfig
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
+    summary: SummaryConfig = field(default_factory=SummaryConfig)
     style: str = field(default=DEFAULT_STYLE)
     collapse_tools: bool = field(default=True)  # Collapse tool turns into groups
     debug_logging: bool = field(default=False)  # Enable debug logging to file (opt-in)
@@ -71,6 +79,7 @@ DEFAULT_CONFIG = Config(
         model="claude-code/haiku",
     ),
     analyzer=AnalyzerConfig(),
+    summary=SummaryConfig(),
     style=DEFAULT_STYLE,
     collapse_tools=True,
     debug_logging=False,
@@ -244,6 +253,16 @@ def load_config() -> Config:
                 per_turn_budget=analyzer_data.get("per_turn_budget", 2000),
             )
 
+    # Load summary config from file
+    summary_config = SummaryConfig()
+    if data is not None:
+        summary_data = data.get("summary", {})
+        if summary_data:
+            summary_config = SummaryConfig(
+                style=summary_data.get("style", "default"),
+                custom_prompt=summary_data.get("custom_prompt"),
+            )
+
     # Environment variables override everything
     api_base = os.getenv("BETTY_LLM_API_BASE", api_base)
     llm_model = os.getenv("BETTY_LLM_MODEL", llm_model)
@@ -258,12 +277,26 @@ def load_config() -> Config:
     if manager_open_mode_env is not None and manager_open_mode_env in ("swap", "expand", "auto"):
         manager_open_mode = manager_open_mode_env
 
+    summary_style_env = os.getenv("BETTY_SUMMARY_STYLE")
+    if summary_style_env is not None:
+        summary_config = SummaryConfig(
+            style=summary_style_env,
+            custom_prompt=summary_config.custom_prompt,
+        )
+    summary_prompt_env = os.getenv("BETTY_SUMMARY_PROMPT")
+    if summary_prompt_env is not None:
+        summary_config = SummaryConfig(
+            style="custom",
+            custom_prompt=summary_prompt_env,
+        )
+
     return Config(
         llm=LLMConfig(
             model=llm_model,
             api_base=api_base,
         ),
         analyzer=analyzer_config,
+        summary=summary_config,
         style=style,
         collapse_tools=collapse_tools,
         debug_logging=debug_logging,
@@ -301,6 +334,14 @@ def save_config(config: Config) -> None:
             "large_range_min": config.analyzer.large_range_min,
             "per_turn_budget": config.analyzer.per_turn_budget,
         }
+
+    # Save summary config only if non-default
+    default_summary = SummaryConfig()
+    if config.summary != default_summary:
+        summary_data: dict[str, Any] = {"style": config.summary.style}
+        if config.summary.custom_prompt:
+            summary_data["custom_prompt"] = config.summary.custom_prompt
+        data["summary"] = summary_data
 
     with open(CONFIG_FILE, "wb") as f:
         tomli_w.dump(data, f)
