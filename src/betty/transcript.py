@@ -10,9 +10,18 @@ from .models import Turn, count_words, _extract_tool_content, _truncate, parse_t
 
 # Slash command metadata: <command-message>...</command-message> with optional <command-name>
 _COMMAND_META_RE = re.compile(
-    r"^\s*<command-message>.*</command-message>\s*(?:<command-name>.*</command-name>)?\s*$",
+    r"^\s*<command-message>.*</command-message>\s*(?:<command-name>(.*)</command-name>)?\s*$",
     re.DOTALL,
 )
+
+
+def _extract_command_name(content: str) -> str | None:
+    """Extract slash command name from metadata entry, or None if not a match."""
+    m = _COMMAND_META_RE.match(content)
+    if not m:
+        return None
+    name = m.group(1)
+    return name.strip() if name else None
 
 
 def get_transcript_path(session_id: str, cwd: str) -> Path | None:
@@ -85,9 +94,17 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
         message = entry.get("message", {})
         content = message.get("content", "")
         if isinstance(content, str) and content:
-            # Skip slash command metadata entries
-            if _COMMAND_META_RE.match(content):
-                pass
+            # Slash command metadata → use just the command name
+            cmd_name = _extract_command_name(content)
+            if cmd_name is not None:
+                turns.append(Turn(
+                    turn_number=current_turn,
+                    role="user",
+                    content_preview=cmd_name,
+                    content_full=cmd_name,
+                    word_count=count_words(cmd_name),
+                    timestamp=timestamp,
+                ))
             else:
                 turns.append(Turn(
                     turn_number=current_turn,

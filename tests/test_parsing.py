@@ -54,19 +54,22 @@ class TestTranscriptParseUserString:
         turns = _parse_entry({"type": "user"}, 0)
         assert turns == []
 
-    def test_command_metadata_filtered(self):
-        """Slash command XML metadata entries should be skipped."""
+    def test_command_metadata_extracts_name(self):
+        """Slash command XML metadata should produce a turn with just the command name."""
         content = (
             "<command-message>agent-review</command-message>\n"
             "<command-name>/agent-review</command-name>"
         )
         turns = _parse_entry(_user_entry(content), 0)
-        assert turns == []
+        assert len(turns) == 1
+        assert turns[0].content_full == "/agent-review"
 
-    def test_command_metadata_without_name_filtered(self):
+    def test_command_metadata_without_name_passes_through(self):
+        """Command metadata without <command-name> passes through as normal text."""
         content = "<command-message>commit</command-message>"
         turns = _parse_entry(_user_entry(content), 0)
-        assert turns == []
+        # No command name to extract, so treated as regular message
+        assert len(turns) == 1
 
     def test_normal_xml_like_message_kept(self):
         """Messages that happen to contain angle brackets but aren't command metadata."""
@@ -349,14 +352,15 @@ class TestWatcherParseUserString:
         turns = w._parse_entry(_user_entry(""))
         assert turns == []
 
-    def test_command_metadata_filtered(self):
+    def test_command_metadata_extracts_name(self):
         w = self._make_watcher()
         content = (
             "<command-message>review-pr</command-message>\n"
             "<command-name>/review-pr</command-name>"
         )
         turns = w._parse_entry(_user_entry(content))
-        assert turns == []
+        assert len(turns) == 1
+        assert turns[0].content_full == "/review-pr"
 
 
 class TestWatcherParseUserList:

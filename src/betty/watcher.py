@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import Turn, count_words, _truncate, _extract_tool_content, parse_task_operation
-from .transcript import _COMMAND_META_RE
+from .transcript import _extract_command_name
 
 logger = logging.getLogger(__name__)
 
@@ -163,8 +163,20 @@ class TranscriptWatcher:
             message = entry.get("message", {})
             content = message.get("content", "")
             if isinstance(content, str) and content:
-                # Skip slash command metadata entries
-                if not _COMMAND_META_RE.match(content):
+                # Slash command metadata → use just the command name
+                cmd_name = _extract_command_name(content)
+                if cmd_name is not None:
+                    with self._lock:
+                        self._turn_number += 1
+                        turn_num = self._turn_number
+                    turns.append(Turn(
+                        turn_number=turn_num,
+                        role="user",
+                        content_preview=cmd_name,
+                        content_full=cmd_name,
+                        word_count=count_words(cmd_name),
+                    ))
+                else:
                     with self._lock:
                         self._turn_number += 1
                         turn_num = self._turn_number
