@@ -48,6 +48,18 @@ class TestRemoteURLPattern:
         assert m.group("owner") == "my-org"
         assert m.group("repo") == "my-repo"
 
+    def test_repo_name_with_dots(self):
+        m = _REMOTE_URL_PATTERN.search("git@github.com:owner/my.repo.name.git")
+        assert m is not None
+        assert m.group("owner") == "owner"
+        assert m.group("repo") == "my.repo.name"
+
+    def test_repo_name_with_dots_no_dot_git(self):
+        m = _REMOTE_URL_PATTERN.search("https://github.com/owner/foo.bar")
+        assert m is not None
+        assert m.group("owner") == "owner"
+        assert m.group("repo") == "foo.bar"
+
 
 # --- PRDetector tests ---
 

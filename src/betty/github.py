@@ -10,7 +10,7 @@ from dataclasses import dataclass
 # Pattern to extract owner/repo from git remote URLs.
 # Supports SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
 _REMOTE_URL_PATTERN = re.compile(
-    r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+?)(?:\.git)?$"
+    r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$"
 )
 
 
