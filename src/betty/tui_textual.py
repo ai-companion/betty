@@ -2088,11 +2088,17 @@ class BettyApp(App):
         self._refresh_conversation()
 
     def _exit_expand_mode(self) -> None:
-        """Exit expand mode back to full-width manager."""
+        """Exit expand mode. Goes to manager or conversation based on focus."""
+        was_detail_focused = self._focus_panel == "detail"
         self._manager_expanded = False
         self._focus_panel = "manager"
-        self._refresh_views()
-        self._refresh_header()
+        if was_detail_focused:
+            # Detail was focused — switch to full conversation view
+            self._hide_manager_view()
+        else:
+            # Manager was focused — return to full-width manager
+            self._refresh_views()
+            self._refresh_header()
 
     def _show_status(self, message: str) -> None:
         """Show a status message in the footer."""
