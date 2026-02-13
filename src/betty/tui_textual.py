@@ -1,4 +1,4 @@
-"""Textual TUI for Claude Companion."""
+"""Textual TUI for Betty."""
 
 from __future__ import annotations
 
@@ -1410,8 +1410,8 @@ class InputPanel(Horizontal):
             pass
 
 
-class CompanionApp(App):
-    """Textual TUI for Claude Companion."""
+class BettyApp(App):
+    """Textual TUI for Betty."""
 
     CSS = CSS
 

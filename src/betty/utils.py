@@ -1,4 +1,4 @@
-"""Utility functions for Claude Companion."""
+"""Utility functions for Betty."""
 
 from pathlib import Path
 

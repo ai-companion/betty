@@ -1,4 +1,4 @@
-"""CLI entry point for Claude Companion."""
+"""CLI entry point for Betty."""
 
 import logging
 import subprocess
@@ -12,7 +12,7 @@ from rich.table import Table
 from . import __version__
 from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig, AnalyzerConfig
 from .store import EventStore
-from .tui_textual import CompanionApp
+from .tui_textual import BettyApp
 
 console = Console()
 
@@ -126,9 +126,9 @@ def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Pa
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
 def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, version: bool) -> None:
-    """Claude Companion - A CLI supervisor for Claude Code sessions."""
+    """Betty - A CLI supervisor for Claude Code sessions."""
     if version:
-        console.print(f"claude-companion v{__version__}")
+        console.print(f"betty v{__version__}")
         return
 
     if global_mode and worktree_mode:
@@ -155,7 +155,7 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
     # Configure logging based on config (opt-in debug logging)
     if config.debug_logging:
         # Debug logging enabled - use rotating file handler
-        log_file = Path.home() / ".cache" / "claude-companion" / "debug.log"
+        log_file = Path.home() / ".cache" / "betty" / "debug.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(
             log_file,
@@ -167,7 +167,7 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             handlers=[handler],
         )
-        logging.info("Claude Companion starting (debug logging enabled)")
+        logging.info("Betty starting (debug logging enabled)")
     else:
         # Default: only warn+ so TUI stays clean
         logging.basicConfig(
@@ -211,7 +211,7 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 
     try:
         # Run Textual TUI
-        app = CompanionApp(store, collapse_tools=config.collapse_tools, ui_style=config.style, manager_mode=manager_mode)
+        app = BettyApp(store, collapse_tools=config.collapse_tools, ui_style=config.style, manager_mode=manager_mode)
         app.run()
     except KeyboardInterrupt:
         pass
@@ -232,15 +232,15 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 @click.option("--analyzer-large-range", type=int, help="Min turns for large range analysis")
 @click.option("--show", is_flag=True, help="Show current configuration")
 def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, show: bool) -> None:
-    """Configure Claude Companion settings.
+    """Configure Betty settings.
 
     Examples:
-      claude-companion config --style claude-code        # Set UI style
-      claude-companion config --llm-preset openrouter    # Use OpenRouter API
-      claude-companion config --llm-preset lm-studio     # Use LM Studio
-      claude-companion config --collapse-tools           # Enable tool collapsing
-      claude-companion config --debug-logging            # Enable debug logging
-      claude-companion config --show                     # Show current config
+      betty config --style claude-code        # Set UI style
+      betty config --llm-preset openrouter    # Use OpenRouter API
+      betty config --llm-preset lm-studio     # Use LM Studio
+      betty config --collapse-tools           # Enable tool collapsing
+      betty config --debug-logging            # Enable debug logging
+      betty config --show                     # Show current config
     """
     if show:
         # Show current configuration
@@ -284,20 +284,20 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
 
         # Show environment variable overrides if set
         import os
-        if os.getenv("CLAUDE_COMPANION_STYLE"):
-            console.print(f"\n[yellow]Note:[/yellow] CLAUDE_COMPANION_STYLE is set: {os.getenv('CLAUDE_COMPANION_STYLE')}")
-        if os.getenv("CLAUDE_COMPANION_COLLAPSE_TOOLS"):
-            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_COLLAPSE_TOOLS is set: {os.getenv('CLAUDE_COMPANION_COLLAPSE_TOOLS')}")
-        if os.getenv("CLAUDE_COMPANION_DEBUG_LOGGING"):
-            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_DEBUG_LOGGING is set: {os.getenv('CLAUDE_COMPANION_DEBUG_LOGGING')}")
-        if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
-            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_PROVIDER is set (deprecated): {os.getenv('CLAUDE_COMPANION_LLM_PROVIDER')}")
-        if os.getenv("CLAUDE_COMPANION_LLM_API_BASE"):
-            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_API_BASE is set: {os.getenv('CLAUDE_COMPANION_LLM_API_BASE')}")
-        if os.getenv("CLAUDE_COMPANION_LLM_URL"):
-            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_URL is set: {os.getenv('CLAUDE_COMPANION_LLM_URL')}")
-        if os.getenv("CLAUDE_COMPANION_LLM_MODEL"):
-            console.print(f"[yellow]Note:[/yellow] CLAUDE_COMPANION_LLM_MODEL is set: {os.getenv('CLAUDE_COMPANION_LLM_MODEL')}")
+        if os.getenv("BETTY_STYLE"):
+            console.print(f"\n[yellow]Note:[/yellow] BETTY_STYLE is set: {os.getenv('BETTY_STYLE')}")
+        if os.getenv("BETTY_COLLAPSE_TOOLS"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_COLLAPSE_TOOLS is set: {os.getenv('BETTY_COLLAPSE_TOOLS')}")
+        if os.getenv("BETTY_DEBUG_LOGGING"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_DEBUG_LOGGING is set: {os.getenv('BETTY_DEBUG_LOGGING')}")
+        if os.getenv("BETTY_LLM_PROVIDER"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_LLM_PROVIDER is set (deprecated): {os.getenv('BETTY_LLM_PROVIDER')}")
+        if os.getenv("BETTY_LLM_API_BASE"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_LLM_API_BASE is set: {os.getenv('BETTY_LLM_API_BASE')}")
+        if os.getenv("BETTY_LLM_URL"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_LLM_URL is set: {os.getenv('BETTY_LLM_URL')}")
+        if os.getenv("BETTY_LLM_MODEL"):
+            console.print(f"[yellow]Note:[/yellow] BETTY_LLM_MODEL is set: {os.getenv('BETTY_LLM_MODEL')}")
 
         return
 
@@ -432,9 +432,9 @@ def mock(demo: bool, project: str | None, delay: float) -> None:
     access to Claude Code (e.g., cloud-based development).
 
     Examples:
-      claude-companion mock                # Interactive mode
-      claude-companion mock --demo         # Auto-play sample conversation
-      claude-companion mock --demo -d 2.0  # Slower demo (2s between messages)
+      betty mock                # Interactive mode
+      betty mock --demo         # Auto-play sample conversation
+      betty mock --demo -d 2.0  # Slower demo (2s between messages)
     """
     from .mock_session import run_demo, run_interactive
 

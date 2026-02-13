@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# install.sh — Install claude-companion to ~/.local/bin/
+# install.sh — Install betty to ~/.local/bin/
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ai-companion/claude-companion/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ai-companion/betty/main/install.sh | bash
 #   curl -fsSL ... | bash -s -- --github          # install from GitHub
 #   curl -fsSL ... | bash -s -- --version 0.10.1   # pin a version
 #   curl -fsSL ... | bash -s -- --upgrade          # upgrade existing install
 #   curl -fsSL ... | bash -s -- --uninstall        # remove
 #
 # Environment variable overrides (alternative to flags):
-#   CLAUDE_COMPANION_VERSION=0.10.1   — pin a specific version
-#   CLAUDE_COMPANION_FROM_GITHUB=1    — install from GitHub instead of PyPI
+#   BETTY_VERSION=0.10.1   — pin a specific version
+#   BETTY_FROM_GITHUB=1    — install from GitHub instead of PyPI
 
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────
-PACKAGE_NAME="claude-companion"
-GITHUB_REPO="ai-companion/claude-companion"
+PACKAGE_NAME="betty"
+GITHUB_REPO="ai-companion/betty"
 BIN_DIR="${HOME}/.local/bin"
 
 # ── Parse flags ───────────────────────────────────────────────────────
-FROM_GITHUB="${CLAUDE_COMPANION_FROM_GITHUB:-0}"
-VERSION="${CLAUDE_COMPANION_VERSION:-}"
+FROM_GITHUB="${BETTY_FROM_GITHUB:-0}"
+VERSION="${BETTY_VERSION:-}"
 ACTION="install"
 
 while [[ $# -gt 0 ]]; do
@@ -187,13 +187,13 @@ check_path() {
 
 # ── Verify ────────────────────────────────────────────────────────────
 verify() {
-    if has claude-companion; then
-        ok "$(claude-companion --version)"
+    if has betty; then
+        ok "$(betty --version)"
     else
         check_path
         # Try with full path
-        if [[ -x "${BIN_DIR}/claude-companion" ]]; then
-            ok "$("${BIN_DIR}/claude-companion" --version)"
+        if [[ -x "${BIN_DIR}/betty" ]]; then
+            ok "$("${BIN_DIR}/betty" --version)"
         else
             warn "Could not verify installation. You may need to restart your shell."
         fi

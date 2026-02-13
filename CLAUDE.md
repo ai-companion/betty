@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Claude Companion is a real-time TUI monitor for Claude Code sessions. It watches project directories for session files and monitors transcript files directly for all conversation activity. No hooks required - just run `claude-companion`.
+Betty is a real-time TUI monitor for Claude Code sessions. It watches project directories for session files and monitors transcript files directly for all conversation activity. No hooks required - just run `betty`.
 
 ## Development Commands
 
@@ -13,25 +13,25 @@ Claude Companion is a real-time TUI monitor for Claude Code sessions. It watches
 pip install -e .
 
 # Run the companion
-claude-companion                # Watch current directory's sessions
-claude-companion --global       # Watch all projects
+betty                # Watch current directory's sessions
+betty --global       # Watch all projects
 
 # Run with uv (no install needed)
-uv run claude-companion
+uv run betty
 
 # LLM configuration (for summarization and analysis)
-claude-companion config --show                    # Show current config
-claude-companion config --llm-preset lm-studio    # Use LM Studio preset
-claude-companion config --llm-preset ollama       # Use Ollama preset
-claude-companion config --url URL --model MODEL   # Custom configuration
+betty config --show                    # Show current config
+betty config --llm-preset lm-studio    # Use LM Studio preset
+betty config --llm-preset ollama       # Use Ollama preset
+betty config --url URL --model MODEL   # Custom configuration
 
 # Analyzer configuration (for on-demand analysis)
-claude-companion config --analyzer-budget N         # Set context budget in chars
-claude-companion config --analyzer-small-range N    # Max turns for small range
-claude-companion config --analyzer-large-range N    # Min turns for large range
+betty config --analyzer-budget N         # Set context budget in chars
+betty config --analyzer-small-range N    # Max turns for small range
+betty config --analyzer-large-range N    # Min turns for large range
 
 # Test imports
-uv run python -c "from claude_companion import tui, store, models; print('OK')"
+uv run python -c "from betty import tui, store, models; print('OK')"
 ```
 
 ## Architecture
@@ -53,7 +53,7 @@ uv run python -c "from claude_companion import tui, store, models; print('OK')"
 - **`tui.py`** - Rich-based TUI: renders sessions, turns, handles keyboard input
 - **`alerts.py`** - Pattern matching for dangerous operations (force push, rm -rf, etc.)
 - **`summarizer.py`** - Optional LLM summarization of assistant turns via OpenAI-compatible server
-- **`cache.py`** - Persistent disk cache for summaries (`~/.cache/claude-companion/summaries.json`)
+- **`cache.py`** - Persistent disk cache for summaries (`~/.cache/betty/summaries.json`)
 - **`config.py`** - Configuration management for LLM server settings (supports env vars, config file, defaults)
 - **`export.py`** - Export session data to Markdown or JSON formats
 - **`mock_session.py`** - Mock session generator for development: creates realistic Claude Code session files for testing and cloud-based development without Claude Code
@@ -84,11 +84,11 @@ By default, only sessions for the current directory are shown. Use `--global` to
 - **vLLM**: `http://localhost:8008/v1` (default)
 
 Configuration priority:
-1. Environment variables: `CLAUDE_COMPANION_LLM_URL`, `CLAUDE_COMPANION_LLM_MODEL`
-2. Config file: `~/.claude-companion/config.toml`
+1. Environment variables: `BETTY_LLM_API_BASE`, `BETTY_LLM_MODEL`
+2. Config file: `~/.betty/config.toml`
 3. Hardcoded defaults (vLLM)
 
-Use `claude-companion config` to set up your LLM server. Summaries are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
+Use `betty config` to set up your LLM server. Summaries are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
 
 **On-Demand Analysis**: Turns, spans, and sessions can be analyzed on-demand using any OpenAI-compatible local LLM server. The analyzer provides structured analysis (summary, critique, sentiment) with multi-source goal extraction (first user message, GitHub issues, plan files, active tasks). Triggered via `A` keybinding in the TUI, with `[`/`]` to zoom between turn, span, and session levels. Analysis results are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
 

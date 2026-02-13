@@ -1,4 +1,4 @@
-"""Persistent cache for summaries and annotations."""
+"""Persistent cache for summaries and annotations for Betty."""
 
 import hashlib
 import json
@@ -10,7 +10,7 @@ from filelock import FileLock
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_DIR = Path.home() / ".cache" / "claude-companion"
+DEFAULT_CACHE_DIR = Path.home() / ".cache" / "betty"
 SUMMARIES_FILENAME = "summaries.json"
 ANNOTATIONS_FILENAME = "annotations.json"
 

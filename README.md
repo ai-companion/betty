@@ -1,30 +1,30 @@
 <p align="center">
-  <img src="docs/assets/logo.jpg" alt="Claude Companion" width="120">
+  <img src="docs/assets/logo.jpg" alt="Betty" width="120">
 </p>
 
-# Claude Companion
+# Betty
 
 A real-time TUI monitor for Claude Code sessions.
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ai-companion/claude-companion/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ai-companion/betty/main/install.sh | bash
 ```
 
 Or directly with uv / pip:
 
 ```bash
-uvx claude-companion              # run without installing
-uv tool install claude-companion  # install permanently
-pip install claude-companion      # with pip
+uvx betty              # run without installing
+uv tool install betty  # install permanently
+pip install betty      # with pip
 ```
 
 ## Use
 
 ```bash
-# Start the companion
-claude-companion
+# Start betty
+betty
 
 # In another terminal, run Claude Code as usual
 claude

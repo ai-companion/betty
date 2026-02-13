@@ -1,4 +1,4 @@
-"""On-demand turn analyzer for Claude Companion.
+"""On-demand turn analyzer for Betty.
 
 Provides structured LLM analysis (summary + critique + sentiment) for any turn.
 Coexists with the existing auto-summarizer — no existing functionality is changed.

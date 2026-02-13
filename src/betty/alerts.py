@@ -1,4 +1,4 @@
-"""Alert detection and notification system for Claude Companion."""
+"""Alert detection and notification system for Betty."""
 
 import re
 import subprocess

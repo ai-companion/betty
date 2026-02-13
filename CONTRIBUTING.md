@@ -1,6 +1,6 @@
-# Contributing to Claude Companion
+# Contributing to Betty
 
-This guide helps you set up a development environment for Claude Companion, including cloud-based development without access to a local Claude Code installation.
+This guide helps you set up a development environment for Betty, including cloud-based development without access to a local Claude Code installation.
 
 ## Prerequisites
 
@@ -13,11 +13,11 @@ This guide helps you set up a development environment for Claude Companion, incl
 
 ```bash
 # Clone the repository
-git clone https://github.com/ai-companion/claude-companion
-cd claude-companion
+git clone https://github.com/ai-companion/betty
+cd betty
 
 # Install dependencies and run (no explicit install needed)
-uv run claude-companion
+uv run betty
 
 # Or install in editable mode
 uv pip install -e .
@@ -27,8 +27,8 @@ uv pip install -e .
 
 ```bash
 # Clone the repository
-git clone https://github.com/ai-companion/claude-companion
-cd claude-companion
+git clone https://github.com/ai-companion/betty
+cd betty
 
 # Create and activate virtual environment
 python -m venv .venv
@@ -56,26 +56,26 @@ When developing in cloud environments (GitHub Codespaces, GitPod, remote servers
 
 ```bash
 # Start a mock session that simulates a Claude Code conversation
-uv run claude-companion mock
+uv run betty mock
 
 # In another terminal, start the companion to watch it
-uv run claude-companion
+uv run betty
 ```
 
 ### Mock Session Commands
 
 ```bash
 # Start interactive mock session (adds messages on keypress)
-uv run claude-companion mock
+uv run betty mock
 
 # Run a demo that auto-plays a sample conversation
-uv run claude-companion mock --demo
+uv run betty mock --demo
 
 # Create a mock session for a specific project path
-uv run claude-companion mock --project /path/to/project
+uv run betty mock --project /path/to/project
 
 # Set custom delay between auto-messages in demo mode
-uv run claude-companion mock --demo --delay 2.0
+uv run betty mock --demo --delay 2.0
 ```
 
 ### How Mock Sessions Work
@@ -142,10 +142,10 @@ with open(session_file, "w") as f:
 
 ```bash
 # Verify imports work correctly
-uv run python -c "from claude_companion import tui, store, models; print('OK')"
+uv run python -c "from betty import tui, store, models; print('OK')"
 
 # Run the TUI briefly to check for import errors
-timeout 2 uv run claude-companion || true
+timeout 2 uv run betty || true
 ```
 
 ## Code Structure
@@ -153,9 +153,9 @@ timeout 2 uv run claude-companion || true
 See `CLAUDE.md` for detailed architecture documentation.
 
 Key directories:
-- `src/claude_companion/` - Main package source code
-- `src/claude_companion/cli.py` - CLI entry point and commands
-- `src/claude_companion/mock_session.py` - Mock session generator for development
+- `src/betty/` - Main package source code
+- `src/betty/cli.py` - CLI entry point and commands
+- `src/betty/mock_session.py` - Mock session generator for development
 
 ## Working with GitHub Issues and PRs
 
@@ -165,17 +165,17 @@ In cloud environments where the `gh` CLI isn't available, you can use the GitHub
 # View an issue
 curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  https://api.github.com/repos/ai-companion/claude-companion/issues/73
+  https://api.github.com/repos/ai-companion/betty/issues/73
 
 # List open issues
 curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  https://api.github.com/repos/ai-companion/claude-companion/issues?state=open
+  https://api.github.com/repos/ai-companion/betty/issues?state=open
 
 # Create a pull request
 curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  https://api.github.com/repos/ai-companion/claude-companion/pulls \
+  https://api.github.com/repos/ai-companion/betty/pulls \
   -d '{"title":"My PR","head":"my-branch","base":"main","body":"Description"}'
 ```
 
@@ -194,7 +194,7 @@ Make sure your `GITHUB_TOKEN` has the appropriate scopes (repo access for privat
 
 If the companion shows no sessions:
 - Ensure Claude Code has been run at least once (creates `~/.claude/projects/`)
-- Or use `claude-companion mock` to create a mock session
+- Or use `betty mock` to create a mock session
 - Check the project path with `--global` to see all projects
 
 ### Import errors

@@ -217,7 +217,7 @@ class Summarizer:
             logger.warning(
                 "claude-code provider selected but 'claude' CLI not found on PATH. "
                 "Summarization will fail. Install Claude Code or switch provider: "
-                "claude-companion config --llm-preset <provider>"
+                "betty config --llm-preset <provider>"
             )
 
     def summarize_async(

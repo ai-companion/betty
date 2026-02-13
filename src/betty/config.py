@@ -1,4 +1,4 @@
-"""Configuration management for Claude Companion."""
+"""Configuration management for Betty."""
 
 import logging
 import os
@@ -55,7 +55,7 @@ class AnalyzerConfig:
 
 @dataclass
 class Config:
-    """Claude Companion configuration."""
+    """Betty configuration."""
 
     llm: LLMConfig
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
@@ -76,10 +76,23 @@ DEFAULT_CONFIG = Config(
 )
 
 # Config file path
-CONFIG_DIR = Path.home() / ".claude-companion"
+CONFIG_DIR = Path.home() / ".betty"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 # Legacy JSON config for migration
 LEGACY_CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def _migrate_directories():
+    """Migrate old ~/.claude-companion/ to ~/.betty/"""
+    old_config = Path.home() / ".claude-companion"
+    new_config = Path.home() / ".betty"
+    if old_config.exists() and not new_config.exists():
+        old_config.rename(new_config)
+
+    old_cache = Path.home() / ".cache" / "claude-companion"
+    new_cache = Path.home() / ".cache" / "betty"
+    if old_cache.exists() and not new_cache.exists():
+        old_cache.rename(new_cache)
 
 
 def _migrate_json_config() -> None:
@@ -171,13 +184,16 @@ def load_config() -> Config:
     """Load configuration from environment, file, or defaults.
 
     Priority (highest to lowest):
-    1. Environment variables (CLAUDE_COMPANION_*)
-    2. Config file (~/.claude-companion/config.toml)
+    1. Environment variables (BETTY_*)
+    2. Config file (~/.betty/config.toml)
     3. Hardcoded defaults
 
     API keys for litellm providers are read from standard env vars
     (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) by litellm automatically.
     """
+    # Migrate old directories if needed
+    _migrate_directories()
+
     # Migrate legacy JSON config if needed
     _migrate_json_config()
 
@@ -225,22 +241,13 @@ def load_config() -> Config:
             )
 
     # Environment variables override everything
-    # Deprecation warning for old env var
-    if os.getenv("CLAUDE_COMPANION_LLM_PROVIDER"):
-        logger.warning(
-            "CLAUDE_COMPANION_LLM_PROVIDER is deprecated. "
-            "Use CLAUDE_COMPANION_LLM_MODEL with litellm prefix instead "
-            "(e.g., 'openai/gpt-4o-mini')."
-        )
-
-    api_base = os.getenv("CLAUDE_COMPANION_LLM_API_BASE",
-                         os.getenv("CLAUDE_COMPANION_LLM_URL", api_base))
-    llm_model = os.getenv("CLAUDE_COMPANION_LLM_MODEL", llm_model)
-    style = os.getenv("CLAUDE_COMPANION_STYLE", style)
-    collapse_tools_env = os.getenv("CLAUDE_COMPANION_COLLAPSE_TOOLS")
+    api_base = os.getenv("BETTY_LLM_API_BASE", api_base)
+    llm_model = os.getenv("BETTY_LLM_MODEL", llm_model)
+    style = os.getenv("BETTY_STYLE", style)
+    collapse_tools_env = os.getenv("BETTY_COLLAPSE_TOOLS")
     if collapse_tools_env is not None:
         collapse_tools = collapse_tools_env.lower() in ("true", "1", "yes")
-    debug_logging_env = os.getenv("CLAUDE_COMPANION_DEBUG_LOGGING")
+    debug_logging_env = os.getenv("BETTY_DEBUG_LOGGING")
     if debug_logging_env is not None:
         debug_logging = debug_logging_env.lower() in ("true", "1", "yes")
 

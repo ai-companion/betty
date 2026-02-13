@@ -1,4 +1,4 @@
-"""Data models for Claude Companion."""
+"""Data models for Betty."""
 
 from dataclasses import dataclass, field
 from datetime import datetime
