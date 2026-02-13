@@ -50,23 +50,53 @@ The companion auto-detects your session. No hooks or configuration needed.
 
 ## Keybindings
 
+### Navigation
+
 | Key | Action |
 |-----|--------|
 | `j/k` | Navigate turns |
 | `g/G` | Jump to beginning/end |
-| `o` / `Space` | Expand/collapse turn |
-| `e/c` | Expand/collapse all |
 | `1-9` | Switch sessions |
+| `h/l` | Switch panels (manager expand mode) |
+
+### Display
+
+| Key | Action |
+|-----|--------|
+| `o` / `Space` / `Enter` | Expand/collapse turn or span |
+| `e/c` | Expand/collapse all |
+| `f` | Cycle filters (All, Spans, Tools, Read, Write, Edit, Bash) |
 | `s/S` | Toggle summaries / Summarize all |
-| `f` | Cycle filters |
-| `T/P` | Tasks / Plan view |
+
+### Views
+
+| Key | Action |
+|-----|--------|
+| `M` | Toggle manager view |
+| `T` | Toggle tasks view |
+| `P` | Toggle plan view |
+| `I` | Toggle insights (analysis) panel |
+
+### Analysis & Annotations
+
+| Key | Action |
+|-----|--------|
+| `A` | Analyze selected turn/span/session |
+| `[`/`]` | Zoom analysis level (turn / span / session) |
+| `n` | Annotate selected turn |
+| `a` | Toggle/clear alerts |
+
+### Other
+
+| Key | Action |
+|-----|--------|
+| `O` | Open PR in browser |
+| `x` | Export to Markdown |
 | `m` | Edit monitor instructions |
 | `?` | Ask about trace |
-| `x` | Export to Markdown |
 | `D` | Delete session |
+| `Esc` | Close panel / clear selection |
 | `q` | Quit |
-
-See all keybindings in the TUI status bar.
 
 ## License
 
