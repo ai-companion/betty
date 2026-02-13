@@ -1121,7 +1121,7 @@ class ProjectGroupHeader(Static):
         if self._pr_info:
             pr = self._pr_info
             pr_title = pr.title[:50] + ("..." if len(pr.title) > 50 else "")
-            pr_title = pr_title.replace("[", "\\[")
+            pr_title = markup_escape(pr_title)
             state_color = {"OPEN": "green", "MERGED": "magenta", "CLOSED": "red"}.get(pr.state, "dim")
             lines.append(f"[{state_color}]#{pr.number}[/{state_color}] {pr_title}")
         self.update(RichText.from_markup("\n".join(lines)))
