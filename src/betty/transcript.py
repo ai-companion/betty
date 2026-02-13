@@ -24,6 +24,16 @@ def _extract_command_name(content: str) -> str | None:
     return name.strip() if name else None
 
 
+def _detect_command_entry(entry: dict[str, Any]) -> str | None:
+    """If entry is a slash command metadata entry, return the command name."""
+    if entry.get("type") != "user":
+        return None
+    content = entry.get("message", {}).get("content", "")
+    if isinstance(content, str):
+        return _extract_command_name(content)
+    return None
+
+
 def get_transcript_path(session_id: str, cwd: str) -> Path | None:
     """Compute transcript path from session ID and working directory."""
     claude_dir = Path.home() / ".claude" / "projects"
@@ -49,6 +59,7 @@ def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int]:
     turns: list[Turn] = []
     turn_number = 0
     last_good_position = 0
+    pending_command: str | None = None
 
     try:
         with open(transcript_path, "r") as f:
@@ -66,7 +77,25 @@ def parse_transcript(transcript_path: Path) -> tuple[list[Turn], int]:
 
                 try:
                     entry = json.loads(line)
+
+                    # Check for command metadata before parsing
+                    cmd_name = _detect_command_entry(entry)
+                    if cmd_name is not None:
+                        pending_command = cmd_name
+                        last_good_position = f.tell()
+                        continue
+
                     new_turns = _parse_entry(entry, turn_number)
+
+                    # Prepend pending command name to next user turn
+                    if pending_command and new_turns and new_turns[0].role == "user":
+                        t = new_turns[0]
+                        merged = f"{pending_command}\n{t.content_full}"
+                        t.content_full = merged
+                        t.content_preview = _truncate(merged, 100)
+                        t.word_count = count_words(merged)
+                    pending_command = None
+
                     for turn in new_turns:
                         turn_number += 1
                         turn.turn_number = turn_number
@@ -94,26 +123,14 @@ def _parse_entry(entry: dict[str, Any], current_turn: int) -> list[Turn]:
         message = entry.get("message", {})
         content = message.get("content", "")
         if isinstance(content, str) and content:
-            # Slash command metadata → use just the command name
-            cmd_name = _extract_command_name(content)
-            if cmd_name is not None:
-                turns.append(Turn(
-                    turn_number=current_turn,
-                    role="user",
-                    content_preview=cmd_name,
-                    content_full=cmd_name,
-                    word_count=count_words(cmd_name),
-                    timestamp=timestamp,
-                ))
-            else:
-                turns.append(Turn(
-                    turn_number=current_turn,
-                    role="user",
-                    content_preview=_truncate(content, 100),
-                    content_full=content,
-                    word_count=count_words(content),
-                    timestamp=timestamp,
-                ))
+            turns.append(Turn(
+                turn_number=current_turn,
+                role="user",
+                content_preview=_truncate(content, 100),
+                content_full=content,
+                word_count=count_words(content),
+                timestamp=timestamp,
+            ))
         elif isinstance(content, list):
             # Extract text from list-content (slash command expansions, etc.)
             text_parts = []

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import Turn, count_words, _truncate, _extract_tool_content, parse_task_operation
-from .transcript import _extract_command_name
+from .transcript import _detect_command_entry
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class TranscriptWatcher:
         self._turn_number: int = 0
         self._running = False
         self._cancelled = False  # Set by cancel() to prevent watch() from starting
+        self._pending_command: str | None = None  # Command name from metadata entry
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
@@ -128,7 +129,25 @@ class TranscriptWatcher:
 
                     try:
                         entry = json.loads(line)
+
+                        # Check for command metadata before parsing
+                        cmd_name = _detect_command_entry(entry)
+                        if cmd_name is not None:
+                            self._pending_command = cmd_name
+                            last_good_position = f.tell()
+                            continue
+
                         turns = self._parse_entry(entry)
+
+                        # Prepend pending command name to next user turn
+                        if self._pending_command and turns and turns[0].role == "user":
+                            t = turns[0]
+                            merged = f"{self._pending_command}\n{t.content_full}"
+                            t.content_full = merged
+                            t.content_preview = _truncate(merged, 100)
+                            t.word_count = count_words(merged)
+                        self._pending_command = None
+
                         if not turns:
                             logger.debug(f"No turns extracted from entry type: {entry.get('type', 'unknown')}")
                         for turn in turns:
@@ -163,30 +182,16 @@ class TranscriptWatcher:
             message = entry.get("message", {})
             content = message.get("content", "")
             if isinstance(content, str) and content:
-                # Slash command metadata → use just the command name
-                cmd_name = _extract_command_name(content)
-                if cmd_name is not None:
-                    with self._lock:
-                        self._turn_number += 1
-                        turn_num = self._turn_number
-                    turns.append(Turn(
-                        turn_number=turn_num,
-                        role="user",
-                        content_preview=cmd_name,
-                        content_full=cmd_name,
-                        word_count=count_words(cmd_name),
-                    ))
-                else:
-                    with self._lock:
-                        self._turn_number += 1
-                        turn_num = self._turn_number
-                    turns.append(Turn(
-                        turn_number=turn_num,
-                        role="user",
-                        content_preview=_truncate(content, 100),
-                        content_full=content,
-                        word_count=count_words(content),
-                    ))
+                with self._lock:
+                    self._turn_number += 1
+                    turn_num = self._turn_number
+                turns.append(Turn(
+                    turn_number=turn_num,
+                    role="user",
+                    content_preview=_truncate(content, 100),
+                    content_full=content,
+                    word_count=count_words(content),
+                ))
             elif isinstance(content, list):
                 # Extract text from list-content (slash command expansions, etc.)
                 text_parts = []

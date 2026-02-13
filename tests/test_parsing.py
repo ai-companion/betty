@@ -54,28 +54,73 @@ class TestTranscriptParseUserString:
         turns = _parse_entry({"type": "user"}, 0)
         assert turns == []
 
-    def test_command_metadata_extracts_name(self):
-        """Slash command XML metadata should produce a turn with just the command name."""
-        content = (
-            "<command-message>agent-review</command-message>\n"
-            "<command-name>/agent-review</command-name>"
-        )
-        turns = _parse_entry(_user_entry(content), 0)
-        assert len(turns) == 1
-        assert turns[0].content_full == "/agent-review"
-
-    def test_command_metadata_without_name_passes_through(self):
-        """Command metadata without <command-name> passes through as normal text."""
-        content = "<command-message>commit</command-message>"
-        turns = _parse_entry(_user_entry(content), 0)
-        # No command name to extract, so treated as regular message
-        assert len(turns) == 1
-
     def test_normal_xml_like_message_kept(self):
         """Messages that happen to contain angle brackets but aren't command metadata."""
         content = "Please update the <title> tag in the HTML"
         turns = _parse_entry(_user_entry(content), 0)
         assert len(turns) == 1
+
+
+class TestTranscriptCommandMerge:
+    """Command metadata + expanded content merged into one turn."""
+
+    def _write_jsonl(self, path, entries):
+        with open(path, "w") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
+
+    def test_command_merged_with_expansion(self):
+        """Command metadata + list-content expansion → single merged turn."""
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", mode="w", delete=False) as f:
+            path = Path(f.name)
+
+        entries = [
+            _user_entry(
+                "<command-message>agent-review</command-message>\n"
+                "<command-name>/agent-review</command-name>"
+            ),
+            _user_entry([{"type": "text", "text": "Run the agent code review script"}]),
+        ]
+        self._write_jsonl(path, entries)
+
+        turns, _ = parse_transcript(path)
+        assert len(turns) == 1
+        assert turns[0].role == "user"
+        assert turns[0].content_full.startswith("/agent-review\n")
+        assert "Run the agent code review script" in turns[0].content_full
+
+    def test_command_without_name_not_merged(self):
+        """Command metadata without <command-name> passes through as normal."""
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", mode="w", delete=False) as f:
+            path = Path(f.name)
+
+        entries = [
+            _user_entry("<command-message>commit</command-message>"),
+            _user_entry([{"type": "text", "text": "Expanded content"}]),
+        ]
+        self._write_jsonl(path, entries)
+
+        turns, _ = parse_transcript(path)
+        # No command name → first entry is a normal turn, not merged
+        assert len(turns) == 2
+
+    def test_command_followed_by_non_user_not_merged(self):
+        """Command metadata followed by assistant → command is consumed, assistant unaffected."""
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", mode="w", delete=False) as f:
+            path = Path(f.name)
+
+        entries = [
+            _user_entry(
+                "<command-message>review</command-message>\n"
+                "<command-name>/review</command-name>"
+            ),
+            _assistant_entry([{"type": "text", "text": "I'll review"}]),
+        ]
+        self._write_jsonl(path, entries)
+
+        turns, _ = parse_transcript(path)
+        assert len(turns) == 1
+        assert turns[0].role == "assistant"
 
 
 class TestTranscriptParseUserList:
@@ -352,16 +397,6 @@ class TestWatcherParseUserString:
         turns = w._parse_entry(_user_entry(""))
         assert turns == []
 
-    def test_command_metadata_extracts_name(self):
-        w = self._make_watcher()
-        content = (
-            "<command-message>review-pr</command-message>\n"
-            "<command-name>/review-pr</command-name>"
-        )
-        turns = w._parse_entry(_user_entry(content))
-        assert len(turns) == 1
-        assert turns[0].content_full == "/review-pr"
-
 
 class TestWatcherParseUserList:
     def _make_watcher(self):
@@ -424,6 +459,32 @@ class TestWatcherParseAssistant:
 # ---------------------------------------------------------------------------
 # watcher file polling integration
 # ---------------------------------------------------------------------------
+
+class TestWatcherCommandMerge:
+    def test_command_merged_via_polling(self):
+        """Watcher merges command metadata + expansion into one turn."""
+        received = []
+        watcher = TranscriptWatcher(on_turn=lambda t: received.append(t))
+
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", mode="w", delete=False) as f:
+            path = Path(f.name)
+            f.write(json.dumps(_user_entry(
+                "<command-message>commit</command-message>\n"
+                "<command-name>/commit</command-name>"
+            )) + "\n")
+            f.write(json.dumps(_user_entry(
+                [{"type": "text", "text": "commit the staged changes"}]
+            )) + "\n")
+
+        watcher._current_path = path
+        watcher._last_position = 0
+        watcher._turn_number = 0
+
+        watcher._check_for_updates()
+        assert len(received) == 1
+        assert received[0].content_full.startswith("/commit\n")
+        assert "commit the staged changes" in received[0].content_full
+
 
 class TestWatcherFilePoll:
     def test_new_content_detected(self):
