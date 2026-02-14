@@ -46,7 +46,7 @@ DRIFT_SYSTEM_PROMPT = (
     "Return valid JSON with exactly these fields:\n"
     '- "on_track": boolean, true if still aligned with goal\n'
     '- "drift_description": string, brief description of any drift (empty if on track)\n'
-    '- "progress_assessment": one of "on_track", "slow", "stalled", "spinning", "off_track"\n\n'
+    '- "progress_assessment": one of "on_track", "stalled", "spinning"\n\n'
     "Return ONLY valid JSON, no markdown fences, no extra text."
 )
 
@@ -90,6 +90,8 @@ class Agent:
         self._turns_since_update: dict[str, int] = {}
         # Per-session user turn count for goal re-evaluation
         self._user_turn_count_at_goal: dict[str, int] = {}
+        # Track whether session goal has been locked in by LLM
+        self._session_goal_locked: set[str] = set()
         # Reuse the existing multi-source goal extractor from the analyzer
         self._goal_extractor = GoalExtractor()
         # Persistent cache for reports
@@ -288,81 +290,66 @@ class Agent:
     def _assess_progress(self, session_id: str, metrics: SessionMetrics, session: Session) -> None:
         """Heuristic progress assessment from spin detection signals.
 
-        Sets progress_assessment on the report. LLM drift detection (PR 6)
-        can override this when available.
+        Sets progress_assessment on the report. Only flags "spinning" or
+        "stalled" when there's strong evidence — avoids false positives
+        from normal pauses or occasional errors.
         """
-        # Compute a composite score: positive signals push toward on_track,
-        # negative signals push toward stalled/spinning.
-        negative_signals = 0
-        positive_signals = 0
+        # Only flag problems when there's clear, strong evidence.
+        # We need multiple corroborating signals to avoid false positives.
+        spinning_signals = 0
+        stall_signals = 0
 
-        # Negative: high repetitive tool score
+        # Spinning: repetitive tool usage (strong signal)
         if metrics.repetitive_tool_score > 0.7:
-            negative_signals += 2
-        elif metrics.repetitive_tool_score > 0.5:
-            negative_signals += 1
+            spinning_signals += 2
+        elif metrics.repetitive_tool_score > 0.6:
+            spinning_signals += 1
 
-        # Negative: error-retry loops
+        # Spinning: error-retry loops (strong signal)
         if metrics.error_retry_count >= 3:
-            negative_signals += 2
-        elif metrics.error_retry_count >= 1:
-            negative_signals += 1
+            spinning_signals += 2
+        elif metrics.error_retry_count >= 2:
+            spinning_signals += 1
 
-        # Negative: high error rate
-        if metrics.error_rate > 0.5:
-            negative_signals += 2
-        elif metrics.error_rate > 0.3:
-            negative_signals += 1
+        # Spinning: high trailing retries
+        if metrics.retry_count >= 5:
+            spinning_signals += 2
+        elif metrics.retry_count >= 3:
+            spinning_signals += 1
 
-        # Negative: output shrinking
+        # Stall: high error rate (only flag at very high rates)
+        if metrics.error_rate > 0.6:
+            stall_signals += 2
+        elif metrics.error_rate > 0.4:
+            stall_signals += 1
+
+        # Stall: output shrinking (weak signal, only contributes)
         if metrics.output_shrinking:
-            negative_signals += 1
+            stall_signals += 1
 
-        # Negative: trailing retries
-        if metrics.retry_count >= 4:
-            negative_signals += 2
-        elif metrics.retry_count >= 2:
-            negative_signals += 1
-
-        # Negative: stall
-        if metrics.seconds_since_last_turn > 300:  # 5 min
-            negative_signals += 2
-        elif metrics.seconds_since_last_turn > 120:  # 2 min
-            negative_signals += 1
-
-        # Positive: diverse tools
+        # Positive signals reduce concern
+        positive = 0
         if metrics.tool_diversity > 0.5:
-            positive_signals += 1
-
-        # Positive: files being touched
+            positive += 1
         if len(metrics.files_touched) >= 3:
-            positive_signals += 1
-
-        # Positive: good velocity
+            positive += 1
         if metrics.recent_velocity > 1.0:
-            positive_signals += 1
+            positive += 1
 
-        # Determine assessment
-        net = negative_signals - positive_signals
+        # Determine assessment — require strong evidence
+        spinning_net = spinning_signals - positive
+        stall_net = stall_signals - positive
 
-        if net >= 5:
-            assessment = "off_track"
-        elif net >= 3:
-            if metrics.repetitive_tool_score > 0.6 or metrics.error_retry_count >= 2:
-                assessment = "spinning"
-            else:
-                assessment = "stalled"
-        elif net >= 1:
-            assessment = "slow"
+        if spinning_net >= 3:
+            assessment = "spinning"
+        elif stall_net >= 3:
+            assessment = "stalled"
         else:
             assessment = "on_track"
 
         with self._lock:
             report = self._reports.get(session_id)
             if report:
-                # Only update if LLM hasn't set a drift-based assessment recently
-                # (LLM updates reset turns_since_update, so if we just got an LLM update
-                # the turns_since count is low)
                 report.progress_assessment = assessment
 
     # ------------------------------------------------------------------
@@ -538,7 +525,7 @@ class Agent:
                 return None
 
         # Validate required fields
-        valid_assessments = {"on_track", "slow", "stalled", "spinning", "off_track"}
+        valid_assessments = {"on_track", "stalled", "spinning"}
         assessment = data.get("progress_assessment", "on_track")
         if assessment not in valid_assessments:
             data["progress_assessment"] = "on_track"
@@ -680,7 +667,11 @@ class Agent:
         return None
 
     def _determine_goals_async(self, session_id: str, session: Session) -> None:
-        """LLM call to determine both session goal and current goal."""
+        """LLM call to determine both session goal and current goal.
+
+        The session goal is locked in after the first successful LLM
+        determination — subsequent calls only update the current goal.
+        """
         try:
             prompt = self._build_goal_prompt(session)
             response = self._call_llm(prompt, GOAL_SYSTEM_PROMPT)
@@ -695,20 +686,19 @@ class Agent:
             if not session_goal or len(session_goal) < 3:
                 return
 
+            goal_already_locked = session_id in self._session_goal_locked
+
             with self._lock:
                 report = self._reports.get(session_id)
                 if not report:
                     return
 
-                old_session_goal = report.goal
                 old_current_goal = report.current_objective
 
-                report.goal = session_goal
-                report.current_objective = current_goal or session_goal
-                report.updated_at = datetime.now()
-
-                # Log session goal change
-                if old_session_goal and old_session_goal != session_goal:
+                # Session goal: only set once, then lock it in
+                if not goal_already_locked:
+                    report.goal = session_goal
+                    self._session_goal_locked.add(session_id)
                     report.observations.append(AgentObservation(
                         turn_number=len(session.turns),
                         timestamp=datetime.now(),
@@ -717,10 +707,13 @@ class Agent:
                         severity="info",
                         metadata={
                             "session_goal": session_goal,
-                            "previous_goal": old_session_goal,
                             "source": "llm",
                         },
                     ))
+
+                # Current goal: always update
+                report.current_objective = current_goal or session_goal
+                report.updated_at = datetime.now()
 
                 # Log current goal change
                 if current_goal and old_current_goal != current_goal:

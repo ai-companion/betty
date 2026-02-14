@@ -349,7 +349,7 @@ class TestProgressAssessment:
             agent.on_turn(t, session)
 
         report = agent.get_report("test")
-        assert report.progress_assessment in ("spinning", "stalled", "off_track")
+        assert report.progress_assessment in ("spinning", "stalled")
 
 
 class TestFileChangeTracking:
