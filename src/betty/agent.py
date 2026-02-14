@@ -52,14 +52,21 @@ DRIFT_SYSTEM_PROMPT = (
 
 GOAL_SYSTEM_PROMPT = (
     "You are a supervisor observing an AI coding assistant's session. "
-    "Based on the conversation so far, determine the user's current goal for this session.\n\n"
+    "Based on the conversation so far, determine TWO goals:\n\n"
+    "1. **Session goal**: The overarching purpose of this session. What is the user trying to "
+    "accomplish overall? This should be stable — only change it if the user has clearly pivoted "
+    "the entire session to something new. Look beyond greetings and small talk to find the real intent.\n\n"
+    "2. **Current goal**: What the user wants the assistant to do RIGHT NOW based on the most "
+    "recent user message(s) and current activity. This changes frequently as the user gives new instructions.\n\n"
     "Guidelines:\n"
-    "- Focus on the USER's intent — what do they want the assistant to accomplish?\n"
-    "- If the first message is a greeting (like 'hi', 'hello'), look at subsequent messages for the real goal.\n"
-    "- If the user has shifted focus to a new task, the goal should reflect the CURRENT focus, not the original.\n"
-    "- Be specific and concise: 1 sentence, under 80 characters if possible.\n"
-    "- Describe the goal as an action (e.g., 'Fix the login page CSS' not 'The user wants to fix...').\n\n"
-    "Return ONLY the goal text, no JSON, no quotes, no markdown, no explanation."
+    "- Focus on the USER's intent, not the assistant's actions.\n"
+    "- Be specific and concise: 1 sentence each, under 80 characters if possible.\n"
+    "- Use action phrases (e.g., 'Fix login CSS' not 'The user wants to fix...').\n"
+    "- If there's not enough context yet, use the best available information.\n\n"
+    "Return valid JSON with exactly these fields:\n"
+    '- "session_goal": string\n'
+    '- "current_goal": string\n\n'
+    "Return ONLY valid JSON, no markdown fences, no extra text."
 )
 
 
@@ -604,14 +611,17 @@ class Agent:
     # ------------------------------------------------------------------
 
     def _check_goal(self, turn: Turn, session: Session) -> AgentObservation | None:
-        """Set initial session goal and trigger LLM refinement.
+        """Set initial goals and trigger LLM determination.
 
-        On the first pass: sets goal from the first user message as a heuristic
-        fallback. Then kicks off an async LLM call to determine the real goal
-        from conversation context.
+        Manages two goals:
+        - Session goal: overarching purpose, stable across the session
+        - Current goal: what the user wants done right now, updates on each user turn
 
-        On subsequent user turns: triggers LLM re-evaluation so the goal can
-        evolve as the session progresses.
+        On first user turn: sets both from the user message as a heuristic fallback,
+        then kicks off an LLM call to properly determine both.
+
+        On subsequent user turns: triggers LLM re-evaluation so both goals can
+        be refined as the session evolves.
         """
         sid = session.session_id
         with self._lock:
@@ -635,23 +645,28 @@ class Agent:
                     break
 
             if first_user_content and first_user_content != "[No user message found]":
-                with self._lock:
-                    if report.goal is None:  # Double-check under lock
-                        report.goal = first_user_content
-                        report.current_objective = first_user_content
-
                 # Immediately trigger LLM goal determination
                 if self._executor and self._llm_config:
-                    self._executor.submit(self._determine_goal_async, sid, session)
+                    with self._lock:
+                        if report.goal is None:
+                            report.goal = "Determining session goal..."
+                            report.current_objective = "Determining current goal..."
+                    self._executor.submit(self._determine_goals_async, sid, session)
                     self._user_turn_count_at_goal[sid] = user_turn_count
+                else:
+                    # No LLM available — fall back to first user message
+                    with self._lock:
+                        if report.goal is None:
+                            report.goal = first_user_content
+                            report.current_objective = first_user_content
 
                 return AgentObservation(
                     turn_number=turn.turn_number,
                     timestamp=turn.timestamp,
                     observation_type="goal_set",
-                    content=f"Goal: {first_user_content}",
+                    content="Determining session goal...",
                     severity="info",
-                    metadata={"goal": first_user_content, "source": "user_message"},
+                    metadata={"source": "pending"},
                 )
             return None
 
@@ -660,51 +675,104 @@ class Agent:
             last_count = self._user_turn_count_at_goal.get(sid, 0)
             if user_turn_count > last_count:
                 self._user_turn_count_at_goal[sid] = user_turn_count
-                self._executor.submit(self._determine_goal_async, sid, session)
+                self._executor.submit(self._determine_goals_async, sid, session)
 
         return None
 
-    def _determine_goal_async(self, session_id: str, session: Session) -> None:
-        """LLM call to determine or refine the session goal from conversation context."""
+    def _determine_goals_async(self, session_id: str, session: Session) -> None:
+        """LLM call to determine both session goal and current goal."""
         try:
             prompt = self._build_goal_prompt(session)
-            new_goal = self._call_llm(prompt, GOAL_SYSTEM_PROMPT)
+            response = self._call_llm(prompt, GOAL_SYSTEM_PROMPT)
 
-            if not new_goal or len(new_goal) < 3:
+            data = self._parse_goal_response(response)
+            if data is None:
                 return
 
-            # Clean up: strip quotes, periods at end
-            new_goal = new_goal.strip().strip('"\'').rstrip('.')
+            session_goal = data.get("session_goal", "").strip().strip('"\'').rstrip('.')
+            current_goal = data.get("current_goal", "").strip().strip('"\'').rstrip('.')
+
+            if not session_goal or len(session_goal) < 3:
+                return
 
             with self._lock:
                 report = self._reports.get(session_id)
                 if not report:
                     return
 
-                old_goal = report.goal
-                report.goal = new_goal
-                report.current_objective = new_goal
+                old_session_goal = report.goal
+                old_current_goal = report.current_objective
+
+                report.goal = session_goal
+                report.current_objective = current_goal or session_goal
                 report.updated_at = datetime.now()
 
-                # Log goal update as observation if it changed meaningfully
-                if old_goal and old_goal != new_goal:
+                # Log session goal change
+                if old_session_goal and old_session_goal != session_goal:
                     report.observations.append(AgentObservation(
                         turn_number=len(session.turns),
                         timestamp=datetime.now(),
                         observation_type="goal_set",
-                        content=f"Goal updated: {new_goal}",
+                        content=f"Session goal: {session_goal}",
                         severity="info",
-                        metadata={"goal": new_goal, "previous_goal": old_goal, "source": "llm"},
+                        metadata={
+                            "session_goal": session_goal,
+                            "previous_goal": old_session_goal,
+                            "source": "llm",
+                        },
                     ))
-                    if len(report.observations) > self._config.max_observations:
-                        report.observations = report.observations[-self._config.max_observations:]
+
+                # Log current goal change
+                if current_goal and old_current_goal != current_goal:
+                    report.observations.append(AgentObservation(
+                        turn_number=len(session.turns),
+                        timestamp=datetime.now(),
+                        observation_type="goal_update",
+                        content=f"Current: {current_goal}",
+                        severity="info",
+                        metadata={
+                            "current_goal": current_goal,
+                            "source": "llm",
+                        },
+                    ))
+
+                # Trim observations
+                if len(report.observations) > self._config.max_observations:
+                    report.observations = report.observations[-self._config.max_observations:]
 
         except Exception as e:
             logger.debug(f"Goal determination LLM call failed: {e}")
 
+    def _parse_goal_response(self, response: str) -> dict | None:
+        """Parse JSON response from goal determination LLM."""
+        import re
+
+        # Strip markdown fences if present
+        cleaned = re.sub(r"```(?:json)?\s*", "", response)
+        cleaned = re.sub(r"```\s*$", "", cleaned).strip()
+
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            match = re.search(r"\{[^}]+\}", cleaned)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    return None
+            return None
+
     def _build_goal_prompt(self, session: Session) -> str:
         """Build prompt for LLM goal determination from conversation context."""
         parts = []
+
+        # Current goals (so LLM knows what was previously determined)
+        with self._lock:
+            report = self._reports.get(session.session_id)
+            if report and report.goal:
+                parts.append(f"Previous session goal: {report.goal}")
+                if report.current_objective and report.current_objective != report.goal:
+                    parts.append(f"Previous current goal: {report.current_objective}")
 
         # Include all user messages (they define the goal arc)
         user_messages = []
@@ -723,6 +791,15 @@ class Agent:
                 recent_assistant.append(f"  Assistant (T{t.turn_number}): {content}")
         if recent_assistant:
             parts.append("Recent assistant activity:\n" + "\n".join(recent_assistant))
+
+        # Include recent tool activity for context
+        recent_tools = []
+        for t in session.turns[-10:]:
+            if t.role == "tool" and t.tool_name:
+                content = t.content_preview[:100]
+                recent_tools.append(f"  {t.tool_name} (T{t.turn_number}): {content}")
+        if recent_tools:
+            parts.append("Recent tool activity:\n" + "\n".join(recent_tools))
 
         # Include active tasks if any
         active_tasks = [

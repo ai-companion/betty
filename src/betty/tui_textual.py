@@ -1222,20 +1222,19 @@ class AgentPanel(Static):
         lines: list[str] = []
         lines.append("[bold]Betty Agent[/bold]\n")
 
-        # Goal
+        # Session goal
         if report.goal:
             goal_preview = report.goal[:100]
             if len(report.goal) > 100:
                 goal_preview += "..."
-            lines.append(f"[bold]Goal:[/bold] {markup_escape(goal_preview)}")
-            # Show goal source (llm-refined vs initial user message)
-            goal_obs = [o for o in report.observations if o.observation_type == "goal_set"]
-            if goal_obs:
-                source = goal_obs[-1].metadata.get("source", "")
-                if source == "llm":
-                    lines.append("  [dim](refined by LLM)[/dim]")
-                elif source == "user_message":
-                    lines.append("  [dim](from first user message)[/dim]")
+            lines.append(f"[bold]Session:[/bold] {markup_escape(goal_preview)}")
+
+        # Current goal
+        if report.current_objective and report.current_objective != report.goal:
+            current_preview = report.current_objective[:100]
+            if len(report.current_objective) > 100:
+                current_preview += "..."
+            lines.append(f"[bold]Current:[/bold] {markup_escape(current_preview)}")
 
         # Progress assessment
         color = self.PROGRESS_COLORS.get(report.progress_assessment, "white")
