@@ -1196,6 +1196,29 @@ class AgentPanel(Static):
     # Separator sized to fit content area (60 width - 2 border - 4 padding = 54)
     SECTION_SEP = "[dim]" + "\u2500" * 54 + "[/dim]"
 
+    SECTION_NAMES = ("ask", "goals", "narrative", "metrics", "activity", "files")
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._collapsed: set[str] = set()
+
+    def toggle_section(self, section: str) -> None:
+        """Toggle a single section's collapsed state."""
+        if section in self._collapsed:
+            self._collapsed.discard(section)
+        else:
+            self._collapsed.add(section)
+
+    def toggle_compact(self) -> None:
+        """Toggle between compact (collapse non-essential sections) and full."""
+        non_essential = {"narrative", "activity", "files"}
+        if non_essential & self._collapsed:
+            # Some are collapsed → expand all
+            self._collapsed.clear()
+        else:
+            # All expanded → collapse non-essential
+            self._collapsed |= non_essential
+
     def show_disabled(self) -> None:
         """Show when agent is not enabled."""
         lines = [
@@ -1231,42 +1254,49 @@ class AgentPanel(Static):
         )
         lines.append(f"[bold]Betty[/bold]  {dot} {label}")
 
+        # Helper for collapse indicators
+        def _section_header(name: str, title: str, style: str = "bold") -> str:
+            arrow = "[dim]▸[/dim]" if name in self._collapsed else "[dim]▾[/dim]"
+            return f"{arrow} [{style}]{title}[/{style}]"
+
         # ── Ask Betty ──
         if report.ask_question:
             lines.append("")
             lines.append(sep)
             lines.append("")
-            lines.append("[bold magenta]Ask[/bold magenta]")
-            lines.append("")
-            lines.append(f"  [magenta]Q:[/magenta] {markup_escape(report.ask_question[:200])}")
-            if report.ask_pending:
-                lines.append(f"  [dim italic]Thinking...[/dim italic]")
-            elif report.ask_response:
-                lines.append(f"  [magenta]A:[/magenta] {markup_escape(report.ask_response)}")
+            lines.append(_section_header("ask", "Ask Betty", "bold magenta"))
+            if "ask" not in self._collapsed:
+                lines.append("")
+                lines.append(f"  [magenta]Q:[/magenta] {markup_escape(report.ask_question[:200])}")
+                if report.ask_pending:
+                    lines.append(f"  [dim italic]Thinking...[/dim italic]")
+                elif report.ask_response:
+                    lines.append(f"  [magenta]A:[/magenta] {markup_escape(report.ask_response)}")
 
         # ── Goals ──
         if report.goal or report.current_objective:
             lines.append("")
             lines.append(sep)
             lines.append("")
-            lines.append("[bold]Goals[/bold]")
+            lines.append(_section_header("goals", "Goals"))
+            if "goals" not in self._collapsed:
+                if report.goal:
+                    lines.append("")
+                    lines.append(f"  [dim]Session:[/dim]  {markup_escape(report.goal[:140])}")
 
-            if report.goal:
-                lines.append("")
-                lines.append(f"  [dim]Session:[/dim]  {markup_escape(report.goal[:140])}")
-
-            if report.current_objective and report.current_objective != report.goal:
-                lines.append("")
-                lines.append(f"  [dim]Current:[/dim]  {markup_escape(report.current_objective[:140])}")
+                if report.current_objective and report.current_objective != report.goal:
+                    lines.append("")
+                    lines.append(f"  [dim]Current:[/dim]  {markup_escape(report.current_objective[:140])}")
 
         # ── Narrative ──
         if report.narrative:
             lines.append("")
             lines.append(sep)
             lines.append("")
-            lines.append("[bold]Situation[/bold]")
-            lines.append("")
-            lines.append(f"  [italic]{markup_escape(report.narrative)}[/italic]")
+            lines.append(_section_header("narrative", "Situation"))
+            if "narrative" not in self._collapsed:
+                lines.append("")
+                lines.append(f"  [italic]{markup_escape(report.narrative)}[/italic]")
 
         # ── Metrics (compact inline) ──
         if report.metrics:
@@ -1274,84 +1304,87 @@ class AgentPanel(Static):
             lines.append("")
             lines.append(sep)
             lines.append("")
-            lines.append("[bold]Metrics[/bold]")
-            lines.append("")
+            lines.append(_section_header("metrics", "Metrics"))
+            if "metrics" not in self._collapsed:
+                lines.append("")
 
-            # Row 1: tokens and tools
-            parts_row1: list[str] = []
-            total_tokens = m.total_input_tokens + m.total_output_tokens
-            if total_tokens > 0:
-                if total_tokens >= 1_000_000:
-                    tok_str = f"{total_tokens / 1_000_000:.1f}M"
-                elif total_tokens >= 1000:
-                    tok_str = f"{total_tokens / 1000:.1f}k"
-                else:
-                    tok_str = str(total_tokens)
-                parts_row1.append(f"\U0001f4ac {tok_str} tokens")
+                # Row 1: tokens and tools
+                parts_row1: list[str] = []
+                total_tokens = m.total_input_tokens + m.total_output_tokens
+                if total_tokens > 0:
+                    if total_tokens >= 1_000_000:
+                        tok_str = f"{total_tokens / 1_000_000:.1f}M"
+                    elif total_tokens >= 1000:
+                        tok_str = f"{total_tokens / 1000:.1f}k"
+                    else:
+                        tok_str = str(total_tokens)
+                    parts_row1.append(f"\U0001f4ac {tok_str} tokens")
 
-            tool_count = sum(m.tool_distribution.values())
-            parts_row1.append(f"\U0001f527 {tool_count} tools")
+                tool_count = sum(m.tool_distribution.values())
+                parts_row1.append(f"\U0001f527 {tool_count} tools")
 
-            if m.files_touched:
-                parts_row1.append(f"\U0001f4c4 {len(m.files_touched)} files")
+                if m.files_touched:
+                    parts_row1.append(f"\U0001f4c4 {len(m.files_touched)} files")
 
-            lines.append("  " + "  [dim]|[/dim]  ".join(parts_row1))
+                lines.append("  " + "  [dim]|[/dim]  ".join(parts_row1))
 
-            # Row 2: errors and retries (only if present)
-            parts_row2: list[str] = []
-            if m.error_rate > 0:
-                err_color = "red" if m.error_rate > 0.3 else "yellow" if m.error_rate > 0.1 else "dim"
-                parts_row2.append(f"\u26a0\ufe0f  [{err_color}]{m.error_rate:.0%} errors[/{err_color}]")
-            if m.retry_count > 0:
-                parts_row2.append(f"\U0001f504 {m.retry_count} retries")
-            if parts_row2:
-                lines.append("  " + "  [dim]|[/dim]  ".join(parts_row2))
+                # Row 2: errors and retries (only if present)
+                parts_row2: list[str] = []
+                if m.error_rate > 0:
+                    err_color = "red" if m.error_rate > 0.3 else "yellow" if m.error_rate > 0.1 else "dim"
+                    parts_row2.append(f"\u26a0\ufe0f  [{err_color}]{m.error_rate:.0%} errors[/{err_color}]")
+                if m.retry_count > 0:
+                    parts_row2.append(f"\U0001f504 {m.retry_count} retries")
+                if parts_row2:
+                    lines.append("  " + "  [dim]|[/dim]  ".join(parts_row2))
 
         # ── Activity log ──
         if report.observations:
             lines.append("")
             lines.append(sep)
             lines.append("")
-            lines.append("[bold]Activity[/bold]")
-            lines.append("")
-            for obs in report.observations[-8:]:
-                icon = self.SEVERITY_ICONS.get(obs.severity, "[dim]·[/dim]")
-                content = markup_escape(obs.content[:100])
-                lines.append(f"  {icon} [dim]T{obs.turn_number}[/dim] {content}")
+            lines.append(_section_header("activity", "Activity"))
+            if "activity" not in self._collapsed:
+                lines.append("")
+                for obs in report.observations[-8:]:
+                    icon = self.SEVERITY_ICONS.get(obs.severity, "[dim]·[/dim]")
+                    content = markup_escape(obs.content[:100])
+                    lines.append(f"  {icon} [dim]T{obs.turn_number}[/dim] {content}")
 
         # ── Files ──
         if report.file_changes:
             lines.append("")
             lines.append(sep)
             lines.append("")
-            lines.append("[bold]Files[/bold]")
-            lines.append("")
+            lines.append(_section_header("files", "Files"))
+            if "files" not in self._collapsed:
+                lines.append("")
 
-            OP_ICONS = {"read": "[dim]R[/dim]", "write": "[green]W[/green]", "edit": "[yellow]E[/yellow]", "create": "[green]C[/green]", "delete": "[red]D[/red]"}
-            # Group by file path
-            file_ops: dict[str, list] = {}
-            for fc in report.file_changes:
-                if fc.file_path not in file_ops:
-                    file_ops[fc.file_path] = []
-                file_ops[fc.file_path].append(fc)
+                OP_ICONS = {"read": "[dim]R[/dim]", "write": "[green]W[/green]", "edit": "[yellow]E[/yellow]", "create": "[green]C[/green]", "delete": "[red]D[/red]"}
+                # Group by file path
+                file_ops: dict[str, list] = {}
+                for fc in report.file_changes:
+                    if fc.file_path not in file_ops:
+                        file_ops[fc.file_path] = []
+                    file_ops[fc.file_path].append(fc)
 
-            for path, changes in list(file_ops.items())[-8:]:
-                ops = sorted({c.operation for c in changes})
-                op_str = "".join(OP_ICONS.get(o, "?") for o in ops)
-                added = sum(c.lines_added for c in changes)
-                removed = sum(c.lines_removed for c in changes)
-                # Shorten path: show filename, or last 2 components if deep
-                parts = path.rsplit("/", 2)
-                if len(parts) >= 3:
-                    short_path = f".../{parts[-2]}/{parts[-1]}"
-                else:
-                    short_path = path
-                if len(short_path) > 45:
-                    short_path = "..." + short_path[-42:]
-                delta = ""
-                if added or removed:
-                    delta = f" [green]+{added}[/green] [red]-{removed}[/red]"
-                lines.append(f"  {op_str} {markup_escape(short_path)}{delta}")
+                for path, changes in list(file_ops.items())[-8:]:
+                    ops = sorted({c.operation for c in changes})
+                    op_str = "".join(OP_ICONS.get(o, "?") for o in ops)
+                    added = sum(c.lines_added for c in changes)
+                    removed = sum(c.lines_removed for c in changes)
+                    # Shorten path: show filename, or last 2 components if deep
+                    parts = path.rsplit("/", 2)
+                    if len(parts) >= 3:
+                        short_path = f".../{parts[-2]}/{parts[-1]}"
+                    else:
+                        short_path = path
+                    if len(short_path) > 45:
+                        short_path = "..." + short_path[-42:]
+                    delta = ""
+                    if added or removed:
+                        delta = f" [green]+{added}[/green] [red]-{removed}[/red]"
+                    lines.append(f"  {op_str} {markup_escape(short_path)}{delta}")
 
         lines.append("")
         self.update(RichText.from_markup("\n".join(lines)))
@@ -1897,8 +1930,8 @@ class InputPanel(Horizontal):
             yield Label("[cyan]Monitor[/cyan]", classes="input-label")
             yield Input(placeholder="Press [m] to set monitoring rules", id="monitor-input")
         with Vertical(classes="input-box", id="ask-box"):
-            yield Label("[magenta]Ask[/magenta]", classes="input-label")
-            yield Input(placeholder="Press [?] to ask about trace", id="ask-input")
+            yield Label("[magenta]Ask Betty[/magenta]", classes="input-label")
+            yield Input(placeholder="Press [?] to ask Betty about this session", id="ask-input")
         with Vertical(classes="input-box", id="annotate-box"):
             yield Label("[yellow]Annotate[/yellow]", classes="input-label")
             yield Input(placeholder="Press [n] to annotate selected turn", id="annotate-input")
@@ -3013,10 +3046,27 @@ class BettyApp(App):
         self._show_status(f"Insights panel {label}")
 
     def action_toggle_agent_panel(self) -> None:
-        """Toggle the Betty Agent panel on/off."""
-        self._show_agent_panel = not self._show_agent_panel
+        """Cycle the Betty Agent panel: closed → full → compact → closed."""
+        try:
+            panel = self.query_one("#agent-panel", AgentPanel)
+        except NoMatches:
+            return
+
+        if not self._show_agent_panel:
+            # Closed → open full
+            self._show_agent_panel = True
+            panel._collapsed.clear()
+            label = "shown"
+        elif not ({"narrative", "activity", "files"} & panel._collapsed):
+            # Full → compact
+            panel.toggle_compact()
+            label = "compact"
+        else:
+            # Compact → close
+            self._show_agent_panel = False
+            label = "hidden"
+
         self._refresh_agent_panel()
-        label = "shown" if self._show_agent_panel else "hidden"
         self._show_status(f"Agent panel {label}")
 
     def _refresh_agent_panel(self) -> None:
@@ -3153,23 +3203,46 @@ class BettyApp(App):
             self._refresh_all()
             self._refresh_analysis_panel()
 
+    def _toggle_agent_section(self, index: int) -> bool:
+        """Toggle agent panel section by 1-based index. Returns True if handled."""
+        if not self._show_agent_panel:
+            return False
+        try:
+            panel = self.query_one("#agent-panel", AgentPanel)
+        except NoMatches:
+            return False
+        if index < 1 or index > len(AgentPanel.SECTION_NAMES):
+            return False
+        section = AgentPanel.SECTION_NAMES[index - 1]
+        panel.toggle_section(section)
+        self._refresh_agent_panel()
+        arrow = "collapsed" if section in panel._collapsed else "expanded"
+        self._show_status(f"{section.capitalize()} {arrow}")
+        return True
+
     def action_select_session_1(self) -> None:
-        self._select_session(1)
+        if not self._toggle_agent_section(1):
+            self._select_session(1)
 
     def action_select_session_2(self) -> None:
-        self._select_session(2)
+        if not self._toggle_agent_section(2):
+            self._select_session(2)
 
     def action_select_session_3(self) -> None:
-        self._select_session(3)
+        if not self._toggle_agent_section(3):
+            self._select_session(3)
 
     def action_select_session_4(self) -> None:
-        self._select_session(4)
+        if not self._toggle_agent_section(4):
+            self._select_session(4)
 
     def action_select_session_5(self) -> None:
-        self._select_session(5)
+        if not self._toggle_agent_section(5):
+            self._select_session(5)
 
     def action_select_session_6(self) -> None:
-        self._select_session(6)
+        if not self._toggle_agent_section(6):
+            self._select_session(6)
 
     def action_select_session_7(self) -> None:
         self._select_session(7)
