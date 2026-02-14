@@ -171,15 +171,6 @@ class EventStore:
                             session.branch = branch
                     self._pr_detector.detect_async(project_dir, branch)
 
-            if project_dir:
-                plan_watcher = PlanFileWatcher(
-                    project_dir,
-                    lambda content, path, sid=session_id: self._on_plan_update(sid, content, path, source="file")
-                )
-                plan_watcher.start()
-                with self._lock:
-                    self._plan_watchers[session_id] = plan_watcher
-
 
     @staticmethod
     def _detect_git_branch(project_dir: str) -> str | None:
