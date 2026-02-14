@@ -1168,7 +1168,7 @@ class AgentPanel(Static):
     DEFAULT_CSS = """
     AgentPanel {
         dock: right;
-        width: 50;
+        width: 60;
         height: 1fr;
         display: none;
         border: solid $warning;
@@ -1193,16 +1193,15 @@ class AgentPanel(Static):
         "critical": "[red]✗[/red]",
     }
 
-    def _section_divider(self) -> str:
-        """Return a dim horizontal rule for separating sections."""
-        return "[dim]─────────────────────────────────────────────[/dim]"
+    # Separator sized to fit content area (60 width - 2 border - 4 padding = 54)
+    SECTION_SEP = "[dim]" + "\u2500" * 54 + "[/dim]"
 
     def show_disabled(self) -> None:
         """Show when agent is not enabled."""
         lines = [
-            "[bold]Agent[/bold]",
+            "[bold]Betty[/bold]",
             "",
-            "[dim]Not enabled.[/dim]",
+            "[dim]Agent not enabled.[/dim]",
             "[dim]Run: betty config --agent[/dim]",
         ]
         self.update(RichText.from_markup("\n".join(lines)))
@@ -1210,7 +1209,7 @@ class AgentPanel(Static):
     def show_empty(self) -> None:
         """Show when agent is enabled but no data yet."""
         lines = [
-            "[bold]Agent[/bold]",
+            "[bold]Betty[/bold]",
             "",
             "[dim]Waiting for session data...[/dim]",
         ]
@@ -1224,45 +1223,49 @@ class AgentPanel(Static):
             return
 
         lines: list[str] = []
+        sep = self.SECTION_SEP
 
         # ── Header with status indicator ──
         label, dot = self.PROGRESS_LABELS.get(
             report.progress_assessment, ("[dim]unknown[/dim]", "[dim]●[/dim]")
         )
-        lines.append(f"[bold]Agent[/bold]  {dot} {label}")
+        lines.append(f"[bold]Betty[/bold]  {dot} {label}")
 
-        # ── Goals section ──
+        # ── Goals ──
         if report.goal or report.current_objective:
             lines.append("")
-            lines.append(self._section_divider())
-            lines.append("[bold]Goals[/bold]")
+            lines.append(sep)
             lines.append("")
+            lines.append("[bold]Goals[/bold]")
 
             if report.goal:
-                lines.append(f"[dim]Session[/dim]  {markup_escape(report.goal[:120])}")
+                lines.append("")
+                lines.append(f"  [dim]Session:[/dim]  {markup_escape(report.goal[:140])}")
 
             if report.current_objective and report.current_objective != report.goal:
-                lines.append(f"[dim]Current[/dim]  {markup_escape(report.current_objective[:120])}")
+                lines.append("")
+                lines.append(f"  [dim]Current:[/dim]  {markup_escape(report.current_objective[:140])}")
 
-        # ── Narrative section ──
+        # ── Narrative ──
         if report.narrative:
             lines.append("")
-            lines.append(self._section_divider())
+            lines.append(sep)
+            lines.append("")
             lines.append("[bold]Situation[/bold]")
             lines.append("")
-            lines.append(f"[italic]{markup_escape(report.narrative)}[/italic]")
+            lines.append(f"  [italic]{markup_escape(report.narrative)}[/italic]")
 
-        # ── Metrics section ──
+        # ── Metrics (compact inline) ──
         if report.metrics:
             m = report.metrics
             lines.append("")
-            lines.append(self._section_divider())
+            lines.append(sep)
+            lines.append("")
             lines.append("[bold]Metrics[/bold]")
             lines.append("")
 
-            # Build metric items as compact key-value pairs
-            metric_parts: list[str] = []
-
+            # Row 1: tokens and tools
+            parts_row1: list[str] = []
             total_tokens = m.total_input_tokens + m.total_output_tokens
             if total_tokens > 0:
                 if total_tokens >= 1_000_000:
@@ -1271,40 +1274,43 @@ class AgentPanel(Static):
                     tok_str = f"{total_tokens / 1000:.1f}k"
                 else:
                     tok_str = str(total_tokens)
-                in_str = f"{m.total_input_tokens / 1000:.0f}k" if m.total_input_tokens >= 1000 else str(m.total_input_tokens)
-                out_str = f"{m.total_output_tokens / 1000:.0f}k" if m.total_output_tokens >= 1000 else str(m.total_output_tokens)
-                metric_parts.append(f"[dim]Tokens[/dim]  {tok_str} [dim]({in_str} in, {out_str} out)[/dim]")
+                parts_row1.append(f"\U0001f4ac {tok_str} tokens")
 
             tool_count = sum(m.tool_distribution.values())
-            metric_parts.append(f"[dim]Tools[/dim]   {tool_count}")
+            parts_row1.append(f"\U0001f527 {tool_count} tools")
 
             if m.files_touched:
-                metric_parts.append(f"[dim]Files[/dim]   {len(m.files_touched)}")
+                parts_row1.append(f"\U0001f4c4 {len(m.files_touched)} files")
 
+            lines.append("  " + "  [dim]|[/dim]  ".join(parts_row1))
+
+            # Row 2: errors and retries (only if present)
+            parts_row2: list[str] = []
             if m.error_rate > 0:
                 err_color = "red" if m.error_rate > 0.3 else "yellow" if m.error_rate > 0.1 else "dim"
-                metric_parts.append(f"[dim]Errors[/dim]  [{err_color}]{m.error_rate:.0%}[/{err_color}]")
-
+                parts_row2.append(f"\u26a0\ufe0f  [{err_color}]{m.error_rate:.0%} errors[/{err_color}]")
             if m.retry_count > 0:
-                metric_parts.append(f"[dim]Retries[/dim] {m.retry_count}")
+                parts_row2.append(f"\U0001f504 {m.retry_count} retries")
+            if parts_row2:
+                lines.append("  " + "  [dim]|[/dim]  ".join(parts_row2))
 
-            lines.extend(metric_parts)
-
-        # ── Activity log (recent observations) ──
+        # ── Activity log ──
         if report.observations:
             lines.append("")
-            lines.append(self._section_divider())
+            lines.append(sep)
+            lines.append("")
             lines.append("[bold]Activity[/bold]")
             lines.append("")
             for obs in report.observations[-8:]:
                 icon = self.SEVERITY_ICONS.get(obs.severity, "[dim]·[/dim]")
-                content = markup_escape(obs.content[:80])
-                lines.append(f" {icon} [dim]T{obs.turn_number}[/dim] {content}")
+                content = markup_escape(obs.content[:100])
+                lines.append(f"  {icon} [dim]T{obs.turn_number}[/dim] {content}")
 
-        # ── Files changed ──
+        # ── Files ──
         if report.file_changes:
             lines.append("")
-            lines.append(self._section_divider())
+            lines.append(sep)
+            lines.append("")
             lines.append("[bold]Files[/bold]")
             lines.append("")
 
@@ -1327,12 +1333,12 @@ class AgentPanel(Static):
                     short_path = f".../{parts[-2]}/{parts[-1]}"
                 else:
                     short_path = path
-                if len(short_path) > 38:
-                    short_path = "..." + short_path[-35:]
+                if len(short_path) > 45:
+                    short_path = "..." + short_path[-42:]
                 delta = ""
                 if added or removed:
                     delta = f" [green]+{added}[/green] [red]-{removed}[/red]"
-                lines.append(f" {op_str} {markup_escape(short_path)}{delta}")
+                lines.append(f"  {op_str} {markup_escape(short_path)}{delta}")
 
         lines.append("")
         self.update(RichText.from_markup("\n".join(lines)))
