@@ -47,3 +47,7 @@ class SessionReport:
     file_changes: list[FileChange] = field(default_factory=list)
     metrics: SessionMetrics | None = None
     updated_at: datetime = field(default_factory=datetime.now)
+    # Ask Betty state
+    ask_question: str | None = None
+    ask_response: str | None = None
+    ask_pending: bool = False

@@ -1231,6 +1231,19 @@ class AgentPanel(Static):
         )
         lines.append(f"[bold]Betty[/bold]  {dot} {label}")
 
+        # ── Ask Betty ──
+        if report.ask_question:
+            lines.append("")
+            lines.append(sep)
+            lines.append("")
+            lines.append("[bold magenta]Ask[/bold magenta]")
+            lines.append("")
+            lines.append(f"  [magenta]Q:[/magenta] {markup_escape(report.ask_question[:200])}")
+            if report.ask_pending:
+                lines.append(f"  [dim italic]Thinking...[/dim italic]")
+            elif report.ask_response:
+                lines.append(f"  [magenta]A:[/magenta] {markup_escape(report.ask_response)}")
+
         # ── Goals ──
         if report.goal or report.current_objective:
             lines.append("")
@@ -2006,6 +2019,10 @@ class BettyApp(App):
         def __init__(self, alert: Alert) -> None:
             super().__init__()
             self.alert = alert
+
+    class AskResponseReady(Message):
+        """Message posted when an Ask Betty response is ready."""
+        pass
 
     def __init__(self, store: "EventStore", collapse_tools: bool = True, ui_style: str = "rich", manager_mode: bool = False, manager_open_mode: str = "auto") -> None:
         super().__init__()
@@ -3174,13 +3191,39 @@ class BettyApp(App):
 
     @on(Input.Submitted, "#ask-input")
     def handle_ask_submit(self, event: Input.Submitted) -> None:
-        """Handle ask input submission."""
-        if event.value:
-            self._show_status(f"Query: {event.value[:30]}...")
-            # TODO: Integrate with LLM for actual query handling
+        """Handle ask input submission — send question to Agent LLM."""
+        question = event.value.strip()
+        if not question:
+            event.input.value = ""
+            self.set_focus(None)
+            return
+
+        def on_response() -> None:
+            self.post_message(self.AskResponseReady())
+
+        status = self.store.ask_agent(question, callback=on_response)
+
+        if status == "submitted":
+            self._show_status(f"Ask Betty: {question[:40]}...")
+            # Auto-open agent panel if hidden
+            if not self._show_agent_panel:
+                self._show_agent_panel = True
+            self._refresh_agent_panel()
+        elif status == "no_agent":
+            self._show_status("Agent not enabled — run: betty config --agent")
+        elif status == "no_session":
+            self._show_status("No active session")
+        elif status == "no_llm":
+            self._show_status("No LLM configured — run: betty config --llm-preset ...")
+
         # Clear and blur
         event.input.value = ""
         self.set_focus(None)
+
+    @on(AskResponseReady)
+    def handle_ask_response(self, message: AskResponseReady) -> None:
+        """Handle Ask Betty response arriving — refresh agent panel."""
+        self._refresh_agent_panel()
 
     @on(Input.Submitted, "#annotate-input")
     def handle_annotate_submit(self, event: Input.Submitted) -> None:

@@ -274,6 +274,29 @@ class EventStore:
             return None
         return self._agent.get_report(session_id)
 
+    def ask_agent(self, question: str, callback: "Callable[[], None] | None" = None) -> str:
+        """Submit a question to the agent about the active session.
+
+        Args:
+            question: The user's question
+            callback: Optional callback invoked when the answer is ready
+
+        Returns:
+            Status string: "submitted", "no_agent", "no_session", "no_llm"
+        """
+        if not self._agent:
+            return "no_agent"
+
+        with self._lock:
+            session_id = self._active_session_id
+            session = self._sessions.get(session_id) if session_id else None
+
+        if not session_id or not session:
+            return "no_session"
+
+        submitted = self._agent.ask(session_id, question, session, callback)
+        return "submitted" if submitted else "no_llm"
+
     @property
     def agent_enabled(self) -> bool:
         """Whether the agent is enabled."""
