@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from .agent import Agent
+from .agent_models import SessionReport
 from .alerts import Alert, AlertLevel, check_turn_for_alerts, send_system_notification
 from .github import PRDetector
 from .analyzer import (
@@ -50,8 +52,9 @@ class EventStore:
         self._branch_cache: dict[str, str | None] = {}  # project_dir -> branch name
         self._pr_detector = PRDetector()
 
-        # Load config and initialize summarizer + analyzer
+        # Load config and initialize summarizer + analyzer + agent
         config = load_config()
+        self._agent: Agent | None = Agent(config.agent, llm_config=config.llm) if config.agent.enabled else None
         self._summarizer = Summarizer(
             model=config.llm.model,
             api_base=config.llm.api_base,
@@ -252,6 +255,29 @@ class EventStore:
             if self._active_session_id:
                 return self._sessions.get(self._active_session_id)
             return None
+
+    def get_agent_report(self, session_id: str | None = None) -> SessionReport | None:
+        """Get the agent's report for a session.
+
+        Args:
+            session_id: Session to get report for. If None, uses active session.
+
+        Returns:
+            SessionReport or None if agent is disabled or no report available.
+        """
+        if not self._agent:
+            return None
+        if session_id is None:
+            with self._lock:
+                session_id = self._active_session_id
+        if not session_id:
+            return None
+        return self._agent.get_report(session_id)
+
+    @property
+    def agent_enabled(self) -> bool:
+        """Whether the agent is enabled."""
+        return self._agent is not None
 
     def set_active_session(self, index: int) -> bool:
         """Set active session by index (1-based). Returns True if successful."""
@@ -484,6 +510,15 @@ class EventStore:
                                 critic_context,
                                 self._make_critic_callback(turn, critic_cache_key)
                             )
+
+        # Feed turn to agent (if enabled)
+        if self._agent:
+            session = self._sessions.get(session_id)
+            if session:
+                try:
+                    self._agent.on_turn(turn, session)
+                except Exception:
+                    pass
 
         # Notify turn listeners (outside lock)
         for listener in self._turn_listeners:
@@ -953,6 +988,8 @@ class EventStore:
 
         self._summarizer.shutdown()
         self._analyzer.shutdown()
+        if self._agent:
+            self._agent.shutdown()
 
     def _load_transcript_history(self, session_id: str, transcript_path: str | None) -> int:
         """Load historical turns from transcript file.
