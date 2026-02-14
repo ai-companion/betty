@@ -1168,7 +1168,7 @@ class AgentPanel(Static):
     DEFAULT_CSS = """
     AgentPanel {
         dock: right;
-        width: 40;
+        width: 50;
         height: 1fr;
         display: none;
         border: solid $warning;
@@ -1181,23 +1181,28 @@ class AgentPanel(Static):
     }
     """
 
-    PROGRESS_COLORS = {
-        "on_track": "green",
-        "stalled": "red",
-        "spinning": "yellow",
+    PROGRESS_LABELS = {
+        "on_track": ("[green]on track[/green]", "[green]●[/green]"),
+        "stalled": ("[red]stalled[/red]", "[red]●[/red]"),
+        "spinning": ("[yellow]spinning[/yellow]", "[yellow]●[/yellow]"),
     }
 
     SEVERITY_ICONS = {
-        "info": "[dim]i[/dim]",
+        "info": "[dim]·[/dim]",
         "warning": "[yellow]![/yellow]",
-        "critical": "[red]x[/red]",
+        "critical": "[red]✗[/red]",
     }
+
+    def _section_divider(self) -> str:
+        """Return a dim horizontal rule for separating sections."""
+        return "[dim]─────────────────────────────────────────────[/dim]"
 
     def show_disabled(self) -> None:
         """Show when agent is not enabled."""
         lines = [
-            "[bold]Betty Agent[/bold]\n",
-            "[dim]Agent not enabled.[/dim]",
+            "[bold]Agent[/bold]",
+            "",
+            "[dim]Not enabled.[/dim]",
             "[dim]Run: betty config --agent[/dim]",
         ]
         self.update(RichText.from_markup("\n".join(lines)))
@@ -1205,7 +1210,8 @@ class AgentPanel(Static):
     def show_empty(self) -> None:
         """Show when agent is enabled but no data yet."""
         lines = [
-            "[bold]Betty Agent[/bold]\n",
+            "[bold]Agent[/bold]",
+            "",
             "[dim]Waiting for session data...[/dim]",
         ]
         self.update(RichText.from_markup("\n".join(lines)))
@@ -1218,92 +1224,117 @@ class AgentPanel(Static):
             return
 
         lines: list[str] = []
-        lines.append("[bold]Betty Agent[/bold]\n")
 
-        # Session goal
-        if report.goal:
-            goal_preview = report.goal[:100]
-            if len(report.goal) > 100:
-                goal_preview += "..."
-            lines.append(f"[bold]Session:[/bold] {markup_escape(goal_preview)}")
+        # ── Header with status indicator ──
+        label, dot = self.PROGRESS_LABELS.get(
+            report.progress_assessment, ("[dim]unknown[/dim]", "[dim]●[/dim]")
+        )
+        lines.append(f"[bold]Agent[/bold]  {dot} {label}")
 
-        # Current goal
-        if report.current_objective and report.current_objective != report.goal:
-            current_preview = report.current_objective[:100]
-            if len(report.current_objective) > 100:
-                current_preview += "..."
-            lines.append(f"[bold]Current:[/bold] {markup_escape(current_preview)}")
+        # ── Goals section ──
+        if report.goal or report.current_objective:
+            lines.append("")
+            lines.append(self._section_divider())
+            lines.append("[bold]Goals[/bold]")
+            lines.append("")
 
-        # Progress assessment
-        color = self.PROGRESS_COLORS.get(report.progress_assessment, "white")
-        lines.append(f"[bold]Status:[/bold] [{color}]{report.progress_assessment}[/{color}]")
+            if report.goal:
+                lines.append(f"[dim]Session[/dim]  {markup_escape(report.goal[:120])}")
 
-        # Narrative (if available)
+            if report.current_objective and report.current_objective != report.goal:
+                lines.append(f"[dim]Current[/dim]  {markup_escape(report.current_objective[:120])}")
+
+        # ── Narrative section ──
         if report.narrative:
             lines.append("")
-            lines.append(markup_escape(report.narrative))
+            lines.append(self._section_divider())
+            lines.append("[bold]Situation[/bold]")
+            lines.append("")
+            lines.append(f"[italic]{markup_escape(report.narrative)}[/italic]")
 
-        # Metrics summary
+        # ── Metrics section ──
         if report.metrics:
             m = report.metrics
             lines.append("")
-            lines.append("[bold]Metrics:[/bold]")
+            lines.append(self._section_divider())
+            lines.append("[bold]Metrics[/bold]")
+            lines.append("")
+
+            # Build metric items as compact key-value pairs
+            metric_parts: list[str] = []
+
             total_tokens = m.total_input_tokens + m.total_output_tokens
             if total_tokens > 0:
                 if total_tokens >= 1_000_000:
-                    lines.append(f"  Tokens: {total_tokens / 1_000_000:.1f}M ({m.total_input_tokens / 1000:.0f}k in, {m.total_output_tokens / 1000:.0f}k out)")
+                    tok_str = f"{total_tokens / 1_000_000:.1f}M"
                 elif total_tokens >= 1000:
-                    lines.append(f"  Tokens: {total_tokens / 1000:.1f}k ({m.total_input_tokens / 1000:.0f}k in, {m.total_output_tokens / 1000:.0f}k out)")
+                    tok_str = f"{total_tokens / 1000:.1f}k"
                 else:
-                    lines.append(f"  Tokens: {total_tokens}")
-            # Count turns from tool distribution
-            tool_count = sum(m.tool_distribution.values())
-            lines.append(f"  Tools: {tool_count}")
-            if m.files_touched:
-                lines.append(f"  Files: {len(m.files_touched)}")
-            if m.error_rate > 0:
-                lines.append(f"  Error rate: {m.error_rate:.0%}")
-            if m.retry_count > 0:
-                lines.append(f"  Retries: {m.retry_count}")
+                    tok_str = str(total_tokens)
+                in_str = f"{m.total_input_tokens / 1000:.0f}k" if m.total_input_tokens >= 1000 else str(m.total_input_tokens)
+                out_str = f"{m.total_output_tokens / 1000:.0f}k" if m.total_output_tokens >= 1000 else str(m.total_output_tokens)
+                metric_parts.append(f"[dim]Tokens[/dim]  {tok_str} [dim]({in_str} in, {out_str} out)[/dim]")
 
-        # Recent observations (last 5 only)
+            tool_count = sum(m.tool_distribution.values())
+            metric_parts.append(f"[dim]Tools[/dim]   {tool_count}")
+
+            if m.files_touched:
+                metric_parts.append(f"[dim]Files[/dim]   {len(m.files_touched)}")
+
+            if m.error_rate > 0:
+                err_color = "red" if m.error_rate > 0.3 else "yellow" if m.error_rate > 0.1 else "dim"
+                metric_parts.append(f"[dim]Errors[/dim]  [{err_color}]{m.error_rate:.0%}[/{err_color}]")
+
+            if m.retry_count > 0:
+                metric_parts.append(f"[dim]Retries[/dim] {m.retry_count}")
+
+            lines.extend(metric_parts)
+
+        # ── Activity log (recent observations) ──
         if report.observations:
             lines.append("")
-            lines.append("[bold]Recent:[/bold]")
-            for obs in report.observations[-5:]:
-                icon = self.SEVERITY_ICONS.get(obs.severity, "[dim]?[/dim]")
-                content = markup_escape(obs.content[:60])
-                lines.append(f"  [{icon}] T{obs.turn_number}: {content}")
+            lines.append(self._section_divider())
+            lines.append("[bold]Activity[/bold]")
+            lines.append("")
+            for obs in report.observations[-8:]:
+                icon = self.SEVERITY_ICONS.get(obs.severity, "[dim]·[/dim]")
+                content = markup_escape(obs.content[:80])
+                lines.append(f" {icon} [dim]T{obs.turn_number}[/dim] {content}")
 
-        # File changes (deduplicated, cumulative)
+        # ── Files changed ──
         if report.file_changes:
             lines.append("")
-            lines.append("[bold]Files Changed:[/bold]")
+            lines.append(self._section_divider())
+            lines.append("[bold]Files[/bold]")
+            lines.append("")
 
-            OP_ICONS = {"read": "R", "write": "W", "edit": "E", "create": "C", "delete": "D"}
-            # Group by file path, show most recent operation
+            OP_ICONS = {"read": "[dim]R[/dim]", "write": "[green]W[/green]", "edit": "[yellow]E[/yellow]", "create": "[green]C[/green]", "delete": "[red]D[/red]"}
+            # Group by file path
             file_ops: dict[str, list] = {}
             for fc in report.file_changes:
                 if fc.file_path not in file_ops:
                     file_ops[fc.file_path] = []
                 file_ops[fc.file_path].append(fc)
 
-            for path, changes in list(file_ops.items())[-5:]:
-                # Show unique operations
+            for path, changes in list(file_ops.items())[-8:]:
                 ops = sorted({c.operation for c in changes})
                 op_str = "".join(OP_ICONS.get(o, "?") for o in ops)
-                # Cumulative lines
                 added = sum(c.lines_added for c in changes)
                 removed = sum(c.lines_removed for c in changes)
-                # Shorten path for display
-                short_path = path
-                if len(short_path) > 30:
-                    short_path = "..." + short_path[-27:]
+                # Shorten path: show filename, or last 2 components if deep
+                parts = path.rsplit("/", 2)
+                if len(parts) >= 3:
+                    short_path = f".../{parts[-2]}/{parts[-1]}"
+                else:
+                    short_path = path
+                if len(short_path) > 38:
+                    short_path = "..." + short_path[-35:]
                 delta = ""
                 if added or removed:
-                    delta = f" [green]+{added}[/green]/[red]-{removed}[/red]"
-                lines.append(f"  [{op_str}] {markup_escape(short_path)}{delta}")
+                    delta = f" [green]+{added}[/green] [red]-{removed}[/red]"
+                lines.append(f" {op_str} {markup_escape(short_path)}{delta}")
 
+        lines.append("")
         self.update(RichText.from_markup("\n".join(lines)))
 
 
