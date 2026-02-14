@@ -2563,9 +2563,9 @@ class BettyApp(App):
         elif self._analysis_level == "session":
             return  # Already at max
 
-        self._show_analysis_panel = True
         self._update_span_highlighting()
-        self._refresh_analysis_panel()
+        if self._show_analysis_panel:
+            self._refresh_analysis_panel()
         # Show level label
         result = self._get_analysis_turn_range()
         if result:
@@ -2597,9 +2597,9 @@ class BettyApp(App):
         elif self._analysis_level == "turn":
             return  # Already at min
 
-        self._show_analysis_panel = True
         self._update_span_highlighting()
-        self._refresh_analysis_panel()
+        if self._show_analysis_panel:
+            self._refresh_analysis_panel()
         # Show level label
         result = self._get_analysis_turn_range()
         if result:
@@ -3262,6 +3262,31 @@ class BettyApp(App):
         # Blur the input
         self.set_focus(None)
 
+    def _get_selected_turns(self) -> list | None:
+        """Get the currently selected turn(s) from the conversation view."""
+        try:
+            conversation = self.query_one("#conversation", ConversationView)
+        except NoMatches:
+            return None
+        index = conversation.get_selected_index()
+        if index is None:
+            return None
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        if not (0 <= index < len(widgets)):
+            return None
+        widget = widgets[index]
+        if isinstance(widget, TurnWidget):
+            return [widget.turn]
+        elif isinstance(widget, ToolGroupWidget):
+            return list(widget.group.tool_turns) if widget.group.tool_turns else None
+        elif isinstance(widget, SpanGroupWidget):
+            turns = []
+            if widget.group.user_turn:
+                turns.append(widget.group.user_turn)
+            turns.extend(widget.group.response_turns)
+            return turns if turns else None
+        return None
+
     @on(Input.Submitted, "#ask-input")
     def handle_ask_submit(self, event: Input.Submitted) -> None:
         """Handle ask input submission — send question to Agent LLM."""
@@ -3271,10 +3296,12 @@ class BettyApp(App):
             self.set_focus(None)
             return
 
+        selected_turns = self._get_selected_turns()
+
         def on_response() -> None:
             self.post_message(self.AskResponseReady())
 
-        status = self.store.ask_agent(question, callback=on_response)
+        status = self.store.ask_agent(question, callback=on_response, selected_turns=selected_turns)
 
         if status == "submitted":
             self._show_status(f"Ask Betty: {question[:40]}...")

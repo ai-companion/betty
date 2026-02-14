@@ -274,12 +274,13 @@ class EventStore:
             return None
         return self._agent.get_report(session_id)
 
-    def ask_agent(self, question: str, callback: "Callable[[], None] | None" = None) -> str:
+    def ask_agent(self, question: str, callback: "Callable[[], None] | None" = None, selected_turns: list | None = None) -> str:
         """Submit a question to the agent about the active session.
 
         Args:
             question: The user's question
             callback: Optional callback invoked when the answer is ready
+            selected_turns: Optional list of Turn objects the user has selected/focused
 
         Returns:
             Status string: "submitted", "no_agent", "no_session", "no_llm"
@@ -294,7 +295,7 @@ class EventStore:
         if not session_id or not session:
             return "no_session"
 
-        submitted = self._agent.ask(session_id, question, session, callback)
+        submitted = self._agent.ask(session_id, question, session, callback, selected_turns)
         return "submitted" if submitted else "no_llm"
 
     @property
