@@ -12,7 +12,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import litellm
 import openai
@@ -48,6 +48,14 @@ DRIFT_SYSTEM_PROMPT = (
     '- "drift_description": string, brief description of any drift (empty if on track)\n'
     '- "progress_assessment": one of "on_track", "stalled", "spinning"\n\n'
     "Return ONLY valid JSON, no markdown fences, no extra text."
+)
+
+ASK_SYSTEM_PROMPT = (
+    "You are Betty, an expert supervisor monitoring an AI coding assistant's session. "
+    "A human observer is asking you a question about the session. "
+    "Answer based on the session context provided below. "
+    "Cite turn numbers (e.g. T12) and file paths when relevant. "
+    "Be concise: 2-5 sentences. If you don't have enough context to answer, say so."
 )
 
 GOAL_SYSTEM_PROMPT = (
@@ -196,6 +204,119 @@ class Agent:
         self._cache.flush()
         if self._executor:
             self._executor.shutdown(wait=False)
+
+    def ask(
+        self,
+        session_id: str,
+        question: str,
+        session: Session,
+        callback: Callable[[], None] | None = None,
+    ) -> bool:
+        """Submit a user question about the session for LLM answering.
+
+        Args:
+            session_id: The session to ask about
+            question: The user's question
+            session: Session object for context
+            callback: Optional callback invoked when the answer is ready
+
+        Returns:
+            True if the question was submitted, False if no executor/LLM config.
+        """
+        if not self._executor or not self._llm_config:
+            return False
+
+        with self._lock:
+            report = self._reports.get(session_id)
+            if not report:
+                report = SessionReport(session_id=session_id)
+                self._reports[session_id] = report
+            report.ask_question = question
+            report.ask_response = None
+            report.ask_pending = True
+
+        self._executor.submit(self._ask_async, session_id, question, session, callback)
+        return True
+
+    def _ask_async(
+        self,
+        session_id: str,
+        question: str,
+        session: Session,
+        callback: Callable[[], None] | None,
+    ) -> None:
+        """LLM call to answer a user question about the session."""
+        try:
+            prompt = self._build_ask_prompt(session_id, question, session)
+            response = self._call_llm(prompt, ASK_SYSTEM_PROMPT, max_tokens=800)
+
+            with self._lock:
+                report = self._reports.get(session_id)
+                if report:
+                    report.ask_response = response
+                    report.ask_pending = False
+        except Exception as e:
+            logger.debug(f"Ask LLM call failed: {e}")
+            with self._lock:
+                report = self._reports.get(session_id)
+                if report:
+                    report.ask_response = f"[Error: {e}]"
+                    report.ask_pending = False
+
+        if callback:
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def _build_ask_prompt(self, session_id: str, question: str, session: Session) -> str:
+        """Build context prompt for answering a user question."""
+        parts: list[str] = []
+
+        # Session report context
+        with self._lock:
+            report = self._reports.get(session_id)
+            if report:
+                if report.goal:
+                    parts.append(f"Session goal: {report.goal}")
+                if report.current_objective and report.current_objective != report.goal:
+                    parts.append(f"Current objective: {report.current_objective}")
+                if report.narrative:
+                    parts.append(f"Situation: {report.narrative}")
+                if report.progress_assessment:
+                    parts.append(f"Progress: {report.progress_assessment}")
+
+                # Recent observations (last 10)
+                if report.observations:
+                    obs_lines = []
+                    for obs in report.observations[-10:]:
+                        obs_lines.append(f"  T{obs.turn_number} [{obs.severity}] {obs.content}")
+                    parts.append("Recent observations:\n" + "\n".join(obs_lines))
+
+                # Metrics summary
+                if report.metrics:
+                    m = report.metrics
+                    parts.append(
+                        f"Metrics: error rate {m.error_rate:.0%}, "
+                        f"velocity {m.recent_velocity:.1f} turns/min, "
+                        f"{len(m.files_touched)} files touched, "
+                        f"{m.retry_count} retries"
+                    )
+
+        # Recent session turns (last 15)
+        recent_turns = session.turns[-15:]
+        if recent_turns:
+            turn_lines = []
+            for t in recent_turns:
+                preview = (t.content_full[:150] if t.content_full else t.content_preview[:150])
+                tool_info = f" ({t.tool_name})" if t.tool_name else ""
+                turn_lines.append(f"  T{t.turn_number} [{t.role}]{tool_info}: {preview}")
+            parts.append("Recent turns:\n" + "\n".join(turn_lines))
+
+        # The question
+        parts.append(f"Question: {question}")
+
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # Cache persistence
@@ -532,7 +653,7 @@ class Agent:
 
         return data
 
-    def _call_llm(self, prompt: str, system_prompt: str) -> str:
+    def _call_llm(self, prompt: str, system_prompt: str, max_tokens: int = 300) -> str:
         """Call LLM using the same routing as Summarizer.
 
         Routes: claude-code/* → subprocess, api_base → openai SDK, else → litellm
@@ -560,14 +681,14 @@ class Agent:
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=300,
+                max_tokens=max_tokens,
                 temperature=0.3,
             )
         else:
             kwargs: dict = {
                 "model": model,
                 "messages": messages,
-                "max_tokens": 300,
+                "max_tokens": max_tokens,
                 "temperature": 0.3,
             }
             if api_key:
