@@ -42,7 +42,7 @@ class SessionReport:
     goal: str | None = None
     current_objective: str | None = None
     narrative: str = ""
-    progress_assessment: str = "on_track"  # "on_track" | "slow" | "stalled" | "spinning" | "off_track"
+    progress_assessment: str = "on_track"  # "on_track" | "stalled" | "spinning"
     observations: list[AgentObservation] = field(default_factory=list)
     file_changes: list[FileChange] = field(default_factory=list)
     metrics: SessionMetrics | None = None

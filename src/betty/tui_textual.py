@@ -1183,10 +1183,8 @@ class AgentPanel(Static):
 
     PROGRESS_COLORS = {
         "on_track": "green",
-        "slow": "yellow",
         "stalled": "red",
         "spinning": "yellow",
-        "off_track": "red",
     }
 
     SEVERITY_ICONS = {
