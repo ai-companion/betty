@@ -211,6 +211,7 @@ class Agent:
         question: str,
         session: Session,
         callback: Callable[[], None] | None = None,
+        selected_turns: list | None = None,
     ) -> bool:
         """Submit a user question about the session for LLM answering.
 
@@ -219,6 +220,7 @@ class Agent:
             question: The user's question
             session: Session object for context
             callback: Optional callback invoked when the answer is ready
+            selected_turns: Optional list of Turn objects the user has selected/focused
 
         Returns:
             True if the question was submitted, False if no executor/LLM config.
@@ -235,7 +237,7 @@ class Agent:
             report.ask_response = None
             report.ask_pending = True
 
-        self._executor.submit(self._ask_async, session_id, question, session, callback)
+        self._executor.submit(self._ask_async, session_id, question, session, callback, selected_turns)
         return True
 
     def _ask_async(
@@ -244,10 +246,11 @@ class Agent:
         question: str,
         session: Session,
         callback: Callable[[], None] | None,
+        selected_turns: list | None = None,
     ) -> None:
         """LLM call to answer a user question about the session."""
         try:
-            prompt = self._build_ask_prompt(session_id, question, session)
+            prompt = self._build_ask_prompt(session_id, question, session, selected_turns)
             response = self._call_llm(prompt, ASK_SYSTEM_PROMPT, max_tokens=800)
 
             with self._lock:
@@ -269,7 +272,7 @@ class Agent:
             except Exception:
                 pass
 
-    def _build_ask_prompt(self, session_id: str, question: str, session: Session) -> str:
+    def _build_ask_prompt(self, session_id: str, question: str, session: Session, selected_turns: list | None = None) -> str:
         """Build context prompt for answering a user question."""
         parts: list[str] = []
 
@@ -302,6 +305,21 @@ class Agent:
                         f"{len(m.files_touched)} files touched, "
                         f"{m.retry_count} retries"
                     )
+
+        # Selected/focused turns (user has highlighted these in the UI)
+        if selected_turns:
+            sel_lines = []
+            for t in selected_turns:
+                content = t.content_full[:500] if t.content_full else t.content_preview[:500]
+                tool_info = f" ({t.tool_name})" if t.tool_name else ""
+                token_info = ""
+                if t.input_tokens is not None:
+                    token_info = f" [{t.input_tokens:,}in/{t.output_tokens or 0:,}out]"
+                sel_lines.append(f"  T{t.turn_number} [{t.role}]{tool_info}{token_info}:\n    {content}")
+            if len(selected_turns) == 1:
+                parts.append("Selected turn (user is focused on this):\n" + "\n".join(sel_lines))
+            else:
+                parts.append(f"Selected span ({len(selected_turns)} turns, user is focused on these):\n" + "\n".join(sel_lines))
 
         # Recent session turns (last 15)
         recent_turns = session.turns[-15:]
