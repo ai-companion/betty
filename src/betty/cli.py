@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig, AnalyzerConfig, SummaryConfig
+from .config import CONFIG_FILE, get_example_configs, load_config, save_config, Config, LLMConfig, AnalyzerConfig, SummaryConfig, AgentConfig
 from .store import EventStore
 from .tui_textual import BettyApp
 
@@ -236,8 +236,9 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 @click.option("--manager-open-mode", type=click.Choice(["swap", "expand", "auto"]), default=None, help="Manager view open mode")
 @click.option("--summary-style", type=click.Choice(["default", "brief", "detailed", "technical", "explanatory", "custom"]), default=None, help="Summarization style preset")
 @click.option("--summary-prompt", default=None, help="Custom summarization prompt (sets style to 'custom')")
+@click.option("--agent/--no-agent", default=None, help="Enable/disable Betty Agent (continuous observer)")
 @click.option("--show", is_flag=True, help="Show current configuration")
-def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, manager_open_mode: str | None, summary_style: str | None, summary_prompt: str | None, show: bool) -> None:
+def config(style: str | None, url: str | None, model: str | None, preset: str | None, collapse_tools: bool | None, debug_logging: bool | None, analyzer_budget: int | None, analyzer_small_range: int | None, analyzer_large_range: int | None, manager_open_mode: str | None, summary_style: str | None, summary_prompt: str | None, agent: bool | None, show: bool) -> None:
     """Configure Betty settings.
 
     Examples:
@@ -286,6 +287,13 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             if len(current_config.summary.custom_prompt) > 60:
                 preview += "..."
             console.print(f"  Custom Prompt:  [cyan]{preview}[/cyan]")
+
+        # Show agent config
+        console.print("\n[bold]Agent Configuration:[/bold]")
+        console.print(f"  Enabled:          [cyan]{current_config.agent.enabled}[/cyan]")
+        if current_config.agent.enabled:
+            console.print(f"  Update Interval:  [cyan]{current_config.agent.update_interval}[/cyan]")
+            console.print(f"  Max Observations: [cyan]{current_config.agent.max_observations}[/cyan]")
 
         # Show analyzer config if non-default
         default_analyzer = AnalyzerConfig()
@@ -338,6 +346,13 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     else:
         new_summary = current_config.summary
 
+    # Build agent config with any overrides
+    new_agent = AgentConfig(
+        enabled=agent if agent is not None else current_config.agent.enabled,
+        update_interval=current_config.agent.update_interval,
+        max_observations=current_config.agent.max_observations,
+    )
+
     # Build analyzer config with any overrides
     new_analyzer = AnalyzerConfig(
         context_budget=analyzer_budget if analyzer_budget is not None else current_config.analyzer.context_budget,
@@ -366,6 +381,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
             ),
             analyzer=new_analyzer,
             summary=new_summary,
+            agent=new_agent,
             style=new_style,
             collapse_tools=new_collapse_tools,
             debug_logging=new_debug_logging,
@@ -395,11 +411,12 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
     has_analyzer_change = any(x is not None for x in [analyzer_budget, analyzer_small_range, analyzer_large_range])
     has_summary_change = summary_style is not None or summary_prompt is not None
     if not url and not model and not preset:
-        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change or manager_open_mode is not None or has_summary_change:
+        if style or collapse_tools is not None or debug_logging is not None or has_analyzer_change or manager_open_mode is not None or has_summary_change or agent is not None:
             new_config = Config(
                 llm=current_config.llm,
                 analyzer=new_analyzer,
                 summary=new_summary,
+                agent=new_agent,
                 style=new_style,
                 collapse_tools=new_collapse_tools,
                 debug_logging=new_debug_logging,
@@ -452,6 +469,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         ),
         analyzer=new_analyzer,
         summary=new_summary,
+        agent=new_agent,
         style=new_style,
         collapse_tools=new_collapse_tools,
         debug_logging=new_debug_logging,

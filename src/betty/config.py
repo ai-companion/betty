@@ -61,12 +61,22 @@ class SummaryConfig:
 
 
 @dataclass
+class AgentConfig:
+    """Configuration for Betty Agent (continuous observer)."""
+
+    enabled: bool = False           # Off by default (opt-in)
+    update_interval: int = 5        # Min turns between LLM updates
+    max_observations: int = 50      # Max observations per session
+
+
+@dataclass
 class Config:
     """Betty configuration."""
 
     llm: LLMConfig
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     summary: SummaryConfig = field(default_factory=SummaryConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
     style: str = field(default=DEFAULT_STYLE)
     collapse_tools: bool = field(default=True)  # Collapse tool turns into groups
     debug_logging: bool = field(default=False)  # Enable debug logging to file (opt-in)
@@ -80,6 +90,7 @@ DEFAULT_CONFIG = Config(
     ),
     analyzer=AnalyzerConfig(),
     summary=SummaryConfig(),
+    agent=AgentConfig(),
     style=DEFAULT_STYLE,
     collapse_tools=True,
     debug_logging=False,
@@ -263,6 +274,17 @@ def load_config() -> Config:
                 custom_prompt=summary_data.get("custom_prompt"),
             )
 
+    # Load agent config from file
+    agent_config = AgentConfig()
+    if data is not None:
+        agent_data = data.get("agent", {})
+        if agent_data:
+            agent_config = AgentConfig(
+                enabled=agent_data.get("enabled", False),
+                update_interval=agent_data.get("update_interval", 5),
+                max_observations=agent_data.get("max_observations", 50),
+            )
+
     # Environment variables override everything
     api_base = os.getenv("BETTY_LLM_API_BASE", api_base)
     llm_model = os.getenv("BETTY_LLM_MODEL", llm_model)
@@ -276,6 +298,10 @@ def load_config() -> Config:
     manager_open_mode_env = os.getenv("BETTY_MANAGER_OPEN_MODE")
     if manager_open_mode_env is not None and manager_open_mode_env in ("swap", "expand", "auto"):
         manager_open_mode = manager_open_mode_env
+
+    agent_enabled_env = os.getenv("BETTY_AGENT_ENABLED")
+    if agent_enabled_env is not None:
+        agent_config.enabled = agent_enabled_env.lower() in ("true", "1", "yes")
 
     summary_style_env = os.getenv("BETTY_SUMMARY_STYLE")
     if summary_style_env is not None:
@@ -297,6 +323,7 @@ def load_config() -> Config:
         ),
         analyzer=analyzer_config,
         summary=summary_config,
+        agent=agent_config,
         style=style,
         collapse_tools=collapse_tools,
         debug_logging=debug_logging,
@@ -333,6 +360,15 @@ def save_config(config: Config) -> None:
             "small_range_max": config.analyzer.small_range_max,
             "large_range_min": config.analyzer.large_range_min,
             "per_turn_budget": config.analyzer.per_turn_budget,
+        }
+
+    # Save agent config only if non-default
+    default_agent = AgentConfig()
+    if config.agent != default_agent:
+        data["agent"] = {
+            "enabled": config.agent.enabled,
+            "update_interval": config.agent.update_interval,
+            "max_observations": config.agent.max_observations,
         }
 
     # Save summary config only if non-default

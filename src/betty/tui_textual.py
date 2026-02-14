@@ -1162,6 +1162,154 @@ class PlanView(Static):
         self.update(RichGroup(RichText.from_markup(header), md_content))
 
 
+class AgentPanel(Static):
+    """Right-side panel for Betty Agent situation report."""
+
+    DEFAULT_CSS = """
+    AgentPanel {
+        dock: right;
+        width: 40;
+        height: 1fr;
+        display: none;
+        border: solid $warning;
+        padding: 1 2;
+        overflow-y: auto;
+    }
+
+    AgentPanel.visible {
+        display: block;
+    }
+    """
+
+    PROGRESS_COLORS = {
+        "on_track": "green",
+        "slow": "yellow",
+        "stalled": "red",
+        "spinning": "yellow",
+        "off_track": "red",
+    }
+
+    SEVERITY_ICONS = {
+        "info": "[dim]i[/dim]",
+        "warning": "[yellow]![/yellow]",
+        "critical": "[red]x[/red]",
+    }
+
+    def show_disabled(self) -> None:
+        """Show when agent is not enabled."""
+        lines = [
+            "[bold]Betty Agent[/bold]\n",
+            "[dim]Agent not enabled.[/dim]",
+            "[dim]Run: betty config --agent[/dim]",
+        ]
+        self.update(RichText.from_markup("\n".join(lines)))
+
+    def show_empty(self) -> None:
+        """Show when agent is enabled but no data yet."""
+        lines = [
+            "[bold]Betty Agent[/bold]\n",
+            "[dim]Waiting for session data...[/dim]",
+        ]
+        self.update(RichText.from_markup("\n".join(lines)))
+
+    def update_report(self, report) -> None:
+        """Update panel with agent report data."""
+        from .agent_models import SessionReport
+        if not isinstance(report, SessionReport):
+            self.show_empty()
+            return
+
+        lines: list[str] = []
+        lines.append("[bold]Betty Agent[/bold]\n")
+
+        # Goal
+        if report.goal:
+            goal_preview = report.goal[:100]
+            if len(report.goal) > 100:
+                goal_preview += "..."
+            lines.append(f"[bold]Goal:[/bold] {markup_escape(goal_preview)}")
+            # Show goal source (llm-refined vs initial user message)
+            goal_obs = [o for o in report.observations if o.observation_type == "goal_set"]
+            if goal_obs:
+                source = goal_obs[-1].metadata.get("source", "")
+                if source == "llm":
+                    lines.append("  [dim](refined by LLM)[/dim]")
+                elif source == "user_message":
+                    lines.append("  [dim](from first user message)[/dim]")
+
+        # Progress assessment
+        color = self.PROGRESS_COLORS.get(report.progress_assessment, "white")
+        lines.append(f"[bold]Status:[/bold] [{color}]{report.progress_assessment}[/{color}]")
+
+        # Narrative (if available)
+        if report.narrative:
+            lines.append("")
+            lines.append(markup_escape(report.narrative))
+
+        # Metrics summary
+        if report.metrics:
+            m = report.metrics
+            lines.append("")
+            lines.append("[bold]Metrics:[/bold]")
+            total_tokens = m.total_input_tokens + m.total_output_tokens
+            if total_tokens > 0:
+                if total_tokens >= 1_000_000:
+                    lines.append(f"  Tokens: {total_tokens / 1_000_000:.1f}M ({m.total_input_tokens / 1000:.0f}k in, {m.total_output_tokens / 1000:.0f}k out)")
+                elif total_tokens >= 1000:
+                    lines.append(f"  Tokens: {total_tokens / 1000:.1f}k ({m.total_input_tokens / 1000:.0f}k in, {m.total_output_tokens / 1000:.0f}k out)")
+                else:
+                    lines.append(f"  Tokens: {total_tokens}")
+            # Count turns from tool distribution
+            tool_count = sum(m.tool_distribution.values())
+            lines.append(f"  Tools: {tool_count}")
+            if m.files_touched:
+                lines.append(f"  Files: {len(m.files_touched)}")
+            if m.error_rate > 0:
+                lines.append(f"  Error rate: {m.error_rate:.0%}")
+            if m.retry_count > 0:
+                lines.append(f"  Retries: {m.retry_count}")
+
+        # Recent observations (last 5 only)
+        if report.observations:
+            lines.append("")
+            lines.append("[bold]Recent:[/bold]")
+            for obs in report.observations[-5:]:
+                icon = self.SEVERITY_ICONS.get(obs.severity, "[dim]?[/dim]")
+                content = markup_escape(obs.content[:60])
+                lines.append(f"  [{icon}] T{obs.turn_number}: {content}")
+
+        # File changes (deduplicated, cumulative)
+        if report.file_changes:
+            lines.append("")
+            lines.append("[bold]Files Changed:[/bold]")
+
+            OP_ICONS = {"read": "R", "write": "W", "edit": "E", "create": "C", "delete": "D"}
+            # Group by file path, show most recent operation
+            file_ops: dict[str, list] = {}
+            for fc in report.file_changes:
+                if fc.file_path not in file_ops:
+                    file_ops[fc.file_path] = []
+                file_ops[fc.file_path].append(fc)
+
+            for path, changes in list(file_ops.items())[-5:]:
+                # Show unique operations
+                ops = sorted({c.operation for c in changes})
+                op_str = "".join(OP_ICONS.get(o, "?") for o in ops)
+                # Cumulative lines
+                added = sum(c.lines_added for c in changes)
+                removed = sum(c.lines_removed for c in changes)
+                # Shorten path for display
+                short_path = path
+                if len(short_path) > 30:
+                    short_path = "..." + short_path[-27:]
+                delta = ""
+                if added or removed:
+                    delta = f" [green]+{added}[/green]/[red]-{removed}[/red]"
+                lines.append(f"  [{op_str}] {markup_escape(short_path)}{delta}")
+
+        self.update(RichText.from_markup("\n".join(lines)))
+
+
 class AnalysisPanel(Static):
     """Right-side panel for displaying turn analysis results."""
 
@@ -1790,6 +1938,7 @@ class BettyApp(App):
         Binding("]", "zoom_out", "Zoom Out", show=False),
         Binding("[", "zoom_in", "Zoom In", show=False),
         Binding("I", "toggle_analysis_panel", "Insights", show=False),
+        Binding("B", "toggle_agent_panel", "Agent", show=False),
         Binding("D", "delete_session", "Delete", show=False),
         Binding("M", "toggle_manager", "Manager", show=False),
         Binding("O", "open_pr", "Open PR", show=False),
@@ -1870,6 +2019,7 @@ class BettyApp(App):
         self._analysis_level: str = "turn"  # "turn" | "span" | "session"
         self._analysis_radius: int = 0  # 0 = single span, 1 = ±1, etc.
         self._show_analysis_panel: bool = False
+        self._show_agent_panel: bool = False
 
     def _resolve_open_mode(self) -> str:
         """Resolve 'auto' manager open mode based on terminal width."""
@@ -1885,6 +2035,7 @@ class BettyApp(App):
                 yield ConversationView(id="conversation")
                 yield TaskListView(id="tasks-view")
                 yield PlanView(id="plan-view")
+        yield AgentPanel(id="agent-panel")
         yield AnalysisPanel(id="analysis-panel")
         yield AlertsPanel(id="alerts")
         yield InputPanel(id="inputs")
@@ -1932,6 +2083,7 @@ class BettyApp(App):
             if self._auto_scroll:
                 self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
             self._refresh_analysis_panel()
+        self._refresh_agent_panel()
 
     @on(AlertAdded)
     def handle_alert_added(self, message: AlertAdded) -> None:
@@ -1949,6 +2101,8 @@ class BettyApp(App):
             self._refresh_manager()
         else:
             self._refresh_views()  # Refresh plan/tasks in case they changed
+        if self._show_agent_panel:
+            self._refresh_agent_panel()
 
     def _refresh_all(self) -> None:
         """Refresh all UI components."""
@@ -2806,6 +2960,42 @@ class BettyApp(App):
         self._refresh_analysis_panel()
         label = "shown" if self._show_analysis_panel else "hidden"
         self._show_status(f"Insights panel {label}")
+
+    def action_toggle_agent_panel(self) -> None:
+        """Toggle the Betty Agent panel on/off."""
+        self._show_agent_panel = not self._show_agent_panel
+        self._refresh_agent_panel()
+        label = "shown" if self._show_agent_panel else "hidden"
+        self._show_status(f"Agent panel {label}")
+
+    def _refresh_agent_panel(self) -> None:
+        """Update the agent panel based on toggle state and current session."""
+        try:
+            panel = self.query_one("#agent-panel", AgentPanel)
+        except NoMatches:
+            return
+
+        if not self._show_agent_panel:
+            panel.remove_class("visible")
+            return
+
+        panel.add_class("visible")
+
+        if not self.store.agent_enabled:
+            panel.show_disabled()
+            return
+
+        session = self.store.get_active_session()
+        if not session:
+            panel.show_empty()
+            return
+
+        report = self.store.get_agent_report(session.session_id)
+        if report is None:
+            panel.show_empty()
+            return
+
+        panel.update_report(report)
 
     def action_open_pr(self) -> None:
         """Open the PR associated with the selected/active session in a browser."""
