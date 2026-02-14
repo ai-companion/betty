@@ -970,7 +970,7 @@ class EventStore:
             return 0
 
         # Parse transcript - use as source of truth for all turns
-        transcript_turns, file_position = parse_transcript(path)
+        transcript_turns, file_position, plan_info = parse_transcript(path)
 
         if transcript_turns:
             # Replace session turns with transcript (source of truth)
@@ -980,6 +980,8 @@ class EventStore:
                 if session_id not in self._sessions:
                     return file_position
                 session.turns = transcript_turns
+                if plan_info:
+                    session.plan_content = plan_info[0]
 
                 # Process task operations from historical turns
                 for turn in transcript_turns:
