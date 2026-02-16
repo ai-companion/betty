@@ -129,7 +129,7 @@ jobs:
           '
 
       - name: Check blocking review results
-        if: steps.check-wip.outputs.skip != 'true' && env.BLOCKING_REVIEW == 'true'
+        if: steps.check-wip.outputs.skip != 'true' && vars.BLOCKING_REVIEW == 'true'
         run: |
           echo "Checking for critical issues..."
           echo "CRITICAL_ISSUES_FOUND: ${CRITICAL_ISSUES_FOUND:-unset}"
