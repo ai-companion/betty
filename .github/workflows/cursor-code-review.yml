@@ -68,7 +68,14 @@ jobs:
           3) Leave very short inline comments (1-2 sentences) on changed lines only and a brief summary at the end.
 
           Procedure:
-          - Get existing comments: gh pr view --json comments
+          - Get ALL existing review context before analyzing:
+            - Top-level PR comments: gh pr view --json comments
+            - All review comments and their reply threads: gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments --paginate
+            - All submitted reviews with their bodies: gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --paginate
+          - Read and understand the full conversation context. Pay close attention to:
+            - Human replies to review comments — if a reviewer or the PR author has replied saying an issue is not relevant, acknowledged, or already addressed, do NOT re-raise that same issue.
+            - Resolved review threads — do not comment on issues that have already been discussed and dismissed.
+            - Any context from the PR author explaining design decisions or trade-offs.
           - Get diff: gh pr diff
           - Get changed files with patches to compute inline positions: gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files --paginate --jq '\''.[] | {filename,patch}'\''
           - Compute exact inline anchors for each issue (file path + diff position). Comments MUST be placed inline on the changed line in the diff, not as top-level comments.
