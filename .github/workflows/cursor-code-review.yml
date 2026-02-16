@@ -97,6 +97,10 @@ jobs:
           - Natural tone, specific and actionable; do not mention automated or high-confidence
           - Use emojis: 🚨 Critical 🔒 Security ⚡ Performance ⚠️ Logic ✅ Resolved ✨ Improvement
 
+          Signature:
+          - Append the following signature line at the end of every summary comment and every "no issues" comment:
+            "\n\n---\n🤖 *Reviewed by Cursor Agent (gpt-5.3-codex)*"
+
           Submission:
           - If there are NO issues to report and an existing top-level comment indicating "no issues" already exists (e.g., "✅ no issues", "No issues found", "LGTM"), do NOT submit another comment. Skip submission to avoid redundancy.
           - If there are NO issues to report and NO prior "no issues" comment exists, submit one brief summary comment noting no issues.
