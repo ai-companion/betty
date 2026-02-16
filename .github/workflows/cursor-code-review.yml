@@ -98,8 +98,13 @@ jobs:
           - Use emojis: 🚨 Critical 🔒 Security ⚡ Performance ⚠️ Logic ✅ Resolved ✨ Improvement
 
           Signature:
-          - Append the following signature line at the end of every summary comment and every "no issues" comment:
-            "\n\n---\n🤖 *Reviewed by Cursor Agent (gpt-5.3-codex)*"
+          - Append a signature at the end of every summary comment and every "no issues" comment.
+          - The signature MUST be on its own lines, separated by a blank line and a Markdown horizontal rule. Use actual newlines, NOT literal backslash-n escape sequences.
+          - Example of correct signature appended to a summary:
+              Some review summary text here.
+
+              ---
+              🤖 *Reviewed by Cursor Agent (gpt-5.3-codex)*
 
           Submission:
           - If there are NO issues to report and an existing top-level comment indicating "no issues" already exists (e.g., "✅ no issues", "No issues found", "LGTM"), do NOT submit another comment. Skip submission to avoid redundancy.
