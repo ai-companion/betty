@@ -114,10 +114,14 @@ jobs:
               🤖 *Reviewed by Cursor Agent (gpt-5.3-codex)*
 
           Submission:
-          - If there are NO issues to report and an existing top-level comment indicating "no issues" already exists (e.g., "✅ no issues", "No issues found", "LGTM"), do NOT submit another comment. Skip submission to avoid redundancy.
-          - If there are NO issues to report and NO prior "no issues" comment exists, submit one brief summary comment noting no issues.
-          - If there ARE issues to report and a prior "no issues" comment exists, ensure that prior comment is deleted/minimized/marked as superseded before submitting the new review.
-          - If there ARE issues to report, submit ONE review containing ONLY inline comments plus an optional concise summary body. Use the GitHub Reviews API to ensure comments are inline:
+          - EVERY review submission MUST have a non-empty body with the signature appended. Never submit a review with an empty body.
+          - If there are NO new issues to report:
+            - Check if a prior "no issues" summary comment already exists (e.g., "✅ no issues", "No issues found", "LGTM").
+            - If one exists, do NOT submit another. Skip submission entirely.
+            - If none exists, submit a single top-level comment (via gh pr comment) with a brief "no new issues" message and the signature.
+          - If there ARE issues to report:
+            - If a prior "no issues" comment exists, delete/minimize/mark it as superseded first.
+            - Submit ONE review via the GitHub Reviews API containing inline comments and a concise summary body with the signature.
             - Build a JSON array of comments like: [{ "path": "<file>", "position": <diff_position>, "body": "..." }]
             - Submit via: gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f event=COMMENT -f body="$SUMMARY" -f comments='\''[$COMMENTS_JSON]'\''
           - Do NOT use: gh pr review --approve or --request-changes
