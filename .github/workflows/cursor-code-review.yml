@@ -114,13 +114,12 @@ jobs:
               🤖 *Reviewed by Cursor Agent (gpt-5.3-codex)*
 
           Submission:
-          - EVERY review submission MUST have a non-empty body with the signature appended. Never submit a review with an empty body.
+          - ALWAYS submit a comment or review. Never silently skip submission.
+          - EVERY submission MUST have a non-empty body with the signature appended.
           - If there are NO new issues to report:
-            - Check if a prior "no issues" summary comment already exists (e.g., "✅ no issues", "No issues found", "LGTM").
-            - If one exists, do NOT submit another. Skip submission entirely.
-            - If none exists, submit a single top-level comment (via gh pr comment) with a brief "no new issues" message and the signature.
+            - Submit a single top-level comment via: gh pr comment ${{ github.event.pull_request.number }} --body "BODY_HERE"
+            - The comment should briefly state no new issues were found in the latest changes and include the signature.
           - If there ARE issues to report:
-            - If a prior "no issues" comment exists, delete/minimize/mark it as superseded first.
             - Submit ONE review via the GitHub Reviews API containing inline comments and a concise summary body with the signature.
             - Build a JSON array of comments like: [{ "path": "<file>", "position": <diff_position>, "body": "..." }]
             - Submit via: gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f event=COMMENT -f body="$SUMMARY" -f comments='\''[$COMMENTS_JSON]'\''
