@@ -100,7 +100,7 @@ def group_turns_into_spans(
             user_turn=user_turn,
             response_turns=response_turns,
         )
-        group.expanded = span_expanded_state.get(group.first_turn_number, False)
+        group.expanded = span_expanded_state.get(group.first_turn_number, True)
         result.append(group)
 
     return result
@@ -273,11 +273,6 @@ TurnWidget.selected, ToolGroupWidget.selected, SpanGroupWidget.selected {
     background: $primary 30%;
 }
 
-/* Span highlight for range analysis */
-TurnWidget.span-highlight, ToolGroupWidget.span-highlight, SpanGroupWidget.span-highlight {
-    background: $success 15%;
-}
-
 .status-line {
     height: 1;
     padding: 0 1;
@@ -314,7 +309,6 @@ class TurnWidget(Static):
 
     expanded: reactive[bool] = reactive(False)
     selected: reactive[bool] = reactive(False)
-    span_highlight: reactive[bool] = reactive(False)
 
     def __init__(
         self,
@@ -346,15 +340,10 @@ class TurnWidget(Static):
         self._update_classes()
         self._update_content()  # Re-render to update bullet color
 
-    def watch_span_highlight(self, value: bool) -> None:
-        self._update_classes()
-
     def _update_classes(self) -> None:
-        self.remove_class("selected", "span-highlight", "turn-user", "turn-assistant", "turn-tool", "rich-style")
+        self.remove_class("selected", "turn-user", "turn-assistant", "turn-tool", "rich-style")
         if self.selected:
             self.add_class("selected")
-        elif self.span_highlight:
-            self.add_class("span-highlight")
         if self.ui_style == "rich":
             self.add_class("rich-style")
         if self.turn.role == "user":
@@ -589,7 +578,6 @@ class ToolGroupWidget(Static):
 
     expanded: reactive[bool] = reactive(False)
     selected: reactive[bool] = reactive(False)
-    span_highlight: reactive[bool] = reactive(False)
 
     def __init__(self, group: ToolGroup, ui_style: str = "rich", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -612,15 +600,10 @@ class ToolGroupWidget(Static):
         self._update_classes()
         self._update_content()  # Re-render to update bullet color
 
-    def watch_span_highlight(self, value: bool) -> None:
-        self._update_classes()
-
     def _update_classes(self) -> None:
-        self.remove_class("selected", "span-highlight", "rich-style", "turn-group")
+        self.remove_class("selected", "rich-style", "turn-group")
         if self.selected:
             self.add_class("selected")
-        elif self.span_highlight:
-            self.add_class("span-highlight")
         if self.ui_style == "rich":
             self.add_class("rich-style")
             self.add_class("turn-group")
@@ -752,7 +735,6 @@ class SpanGroupWidget(Static):
 
     expanded: reactive[bool] = reactive(False)
     selected: reactive[bool] = reactive(False)
-    span_highlight: reactive[bool] = reactive(False)
 
     def __init__(self, group: SpanGroup, ui_style: str = "rich", **kwargs) -> None:
         super().__init__(**kwargs)
@@ -775,15 +757,10 @@ class SpanGroupWidget(Static):
         self._update_classes()
         self._update_content()
 
-    def watch_span_highlight(self, value: bool) -> None:
-        self._update_classes()
-
     def _update_classes(self) -> None:
-        self.remove_class("selected", "span-highlight", "rich-style", "turn-group", "turn-user")
+        self.remove_class("selected", "rich-style", "turn-group", "turn-user")
         if self.selected:
             self.add_class("selected")
-        elif self.span_highlight:
-            self.add_class("span-highlight")
         if self.ui_style == "rich":
             self.add_class("rich-style")
             self.add_class("turn-user")
@@ -1857,18 +1834,15 @@ class ConversationView(ScrollableContainer):
         self._update_selection()
 
     def _update_selection(self) -> None:
-        """Update selection and span highlight state on all turn widgets."""
+        """Update selection state on all turn widgets."""
         widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         for i, widget in enumerate(widgets):
-            widget.selected = (i == self._selected_index)
-            # Span highlight: in range but not the primary selected widget
             in_span = (
                 self._span_start is not None
                 and self._span_end is not None
                 and self._span_start <= i <= self._span_end
-                and i != self._selected_index
             )
-            widget.span_highlight = in_span
+            widget.selected = (i == self._selected_index) or in_span
 
     def scroll_to_selected(self) -> None:
         """Scroll to keep selected item visible."""
@@ -2015,8 +1989,8 @@ class BettyApp(App):
         Binding("s", "toggle_summary", "Summary", show=False),
         Binding("S", "summarize_all", "Summarize All", show=False),
         Binding("A", "analyze_turn", "Analyze", show=False),
-        Binding("]", "zoom_out", "Zoom Out", show=False),
-        Binding("[", "zoom_in", "Zoom In", show=False),
+        Binding("]", "drill_out", "Drill Out", show=False),
+        Binding("[", "drill_in", "Drill In", show=False),
         Binding("I", "toggle_analysis_panel", "Insights", show=False),
         Binding("B", "toggle_agent_panel", "Agent", show=False),
         Binding("D", "delete_session", "Delete", show=False),
@@ -2073,7 +2047,6 @@ class BettyApp(App):
         if ui_style == "rich":
             self._turn_filters = [
                 ("all", "All"),
-                ("spans", "Spans"),
                 ("tool", "Tools only"),
                 ("Read", "📄 Read"),
                 ("Write", "✏️ Write"),
@@ -2083,7 +2056,6 @@ class BettyApp(App):
         else:
             self._turn_filters = [
                 ("all", "All"),
-                ("spans", "Spans"),
                 ("tool", "Tools"),
                 ("Read", "Read"),
                 ("Write", "Write"),
@@ -2096,12 +2068,13 @@ class BettyApp(App):
         self._auto_scroll = True
         self._group_expanded_state: dict[int, bool] = {}
         self._span_expanded_state: dict[int, bool] = {}
+        self._tool_drilled_state: dict[int, bool] = {}
+        self._tool_turn_to_group: dict[int, int] = {}  # turn_number → ToolGroup first_turn_number
+        self._highlight: int | None = None  # first_turn_number of highlighted span
         self._status_message: str | None = None
         self._refresh_counter: int = 0  # Used to generate unique widget IDs
         self._annotating_turn_number: int | None = None  # Turn being annotated
         self._annotating_scroll_y: float = 0  # Scroll position before annotating
-        self._analysis_level: str = "turn"  # "turn" | "span" | "session"
-        self._analysis_radius: int = 0  # 0 = single span, 1 = ±1, etc.
         self._show_analysis_panel: bool = False
         self._show_agent_panel: bool = False
 
@@ -2203,7 +2176,10 @@ class BettyApp(App):
             sessions = [s for s in sessions if s.turns]
         active = self.store.get_active_session()
         _, filter_label = self._turn_filters[self._filter_index]
-        header = self.query_one("#header", HeaderPanel)
+        try:
+            header = self.query_one("#header", HeaderPanel)
+        except Exception:
+            return
         header.update_header(
             sessions, active, filter_label, self._auto_scroll,
             manager_active=self._manager_view_active,
@@ -2290,17 +2266,40 @@ class BettyApp(App):
 
         filter_key, _ = self._turn_filters[self._filter_index]
 
-        if filter_key == "spans":
-            return group_turns_into_spans(session, self._span_expanded_state)
-
-        if self._collapse_tools and self._use_summary and filter_key == "all":
-            return group_turns_for_display(
-                session, session.turns, use_summary=True,
-                group_expanded_state=self._group_expanded_state,
-            )
-
         if filter_key == "all":
-            return session.turns
+            span_groups = group_turns_into_spans(session, self._span_expanded_state)
+            grouped: list[Turn | ToolGroup | SpanGroup] = []
+            for sg in span_groups:
+                if not sg.expanded:
+                    grouped.append(sg)
+                else:
+                    # Expanded span: emit individual turns (with tool grouping)
+                    all_turns = []
+                    if sg.user_turn:
+                        all_turns.append(sg.user_turn)
+                    all_turns.extend(sg.response_turns)
+                    if self._collapse_tools and self._use_summary:
+                        grouped.extend(group_turns_for_display(
+                            session, all_turns, use_summary=True,
+                            group_expanded_state=self._group_expanded_state,
+                        ))
+                    else:
+                        grouped.extend(all_turns)
+
+            # Post-process: replace drilled-into ToolGroups with individual tool turns
+            result: list[Turn | ToolGroup | SpanGroup] = []
+            self._tool_turn_to_group = {}
+            for item in grouped:
+                if isinstance(item, ToolGroup) and self._tool_drilled_state.get(item.first_turn_number):
+                    for tt in item.tool_turns:
+                        self._tool_turn_to_group[tt.turn_number] = item.first_turn_number
+                        result.append(tt)
+                else:
+                    if isinstance(item, ToolGroup):
+                        for tt in item.tool_turns:
+                            self._tool_turn_to_group[tt.turn_number] = item.first_turn_number
+                    result.append(item)
+            return result
         elif filter_key == "tool":
             return [t for t in session.turns if t.role == "tool"]
         else:
@@ -2372,7 +2371,6 @@ class BettyApp(App):
 
         if not self._show_analysis_panel:
             panel.remove_class("visible")
-            self._update_span_highlighting()
             return
 
         panel.add_class("visible")
@@ -2382,13 +2380,11 @@ class BettyApp(App):
 
         if index is None:
             panel.show_empty()
-            self._update_span_highlighting()
             return
 
         result = self._get_analysis_turn_range()
         if result is None:
             panel.show_empty()
-            self._update_span_highlighting()
             return
 
         turns, label = result
@@ -2405,11 +2401,8 @@ class BettyApp(App):
         else:
             panel.show_empty()
 
-        # Update span highlighting in conversation
-        self._update_span_highlighting()
-
     def _get_analysis_turn_range(self) -> tuple[list[Turn], str] | None:
-        """Get turns and label for the current analysis level.
+        """Get turns and label for the currently selected widget.
 
         Returns:
             (turns_in_range, label) or None if no selection
@@ -2425,118 +2418,180 @@ class BettyApp(App):
 
         widget = widgets[index]
         if isinstance(widget, TurnWidget):
-            selected_turn = widget.turn
+            return [widget.turn], f"Turn {widget.turn.turn_number}"
         elif isinstance(widget, ToolGroupWidget):
-            selected_turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+            turns = list(widget.group.tool_turns)
+            return turns, f"Tool group ({len(turns)} tools)"
         elif isinstance(widget, SpanGroupWidget):
-            selected_turn = widget.group.user_turn or (widget.group.response_turns[0] if widget.group.response_turns else None)
-        else:
-            selected_turn = None
+            sg = widget.group
+            turns = ([sg.user_turn] if sg.user_turn else []) + list(sg.response_turns)
+            return turns, f"Span ({len(turns)} turns)"
 
-        if not selected_turn:
-            return None
+        return None
 
-        if self._analysis_level == "turn":
-            return [selected_turn], f"Turn {selected_turn.turn_number}"
-
-        # For span/session levels, we need the session's turns
-        session = self.store.get_active_session()
-        if not session or not session.turns:
-            return [selected_turn], f"Turn {selected_turn.turn_number}"
-
-        spans = compute_spans(session.turns)
-        if not spans:
-            return [selected_turn], f"Turn {selected_turn.turn_number}"
-
-        # Find which span contains the selected turn
-        selected_span_idx = 0
-        for si, (start, end) in enumerate(spans):
-            for ti in range(start, end + 1):
-                if session.turns[ti] is selected_turn:
-                    selected_span_idx = si
-                    break
-
-        if self._analysis_level == "session":
-            return list(session.turns), "Session"
-
-        # Span level with radius
-        span_start = max(0, selected_span_idx - self._analysis_radius)
-        span_end = min(len(spans) - 1, selected_span_idx + self._analysis_radius)
-
-        # Collect all turns in the span range
-        turn_start = spans[span_start][0]
-        turn_end = spans[span_end][1]
-        range_turns = session.turns[turn_start:turn_end + 1]
-
-        if self._analysis_radius == 0:
-            label = f"Span {selected_span_idx + 1}"
-        else:
-            label = f"Spans {span_start + 1}\u2013{span_end + 1}"
-
-        return range_turns, label
-
-    def _get_analysis_widget_range(self) -> tuple[int, int] | None:
-        """Get widget index range for the current analysis level.
-
-        Returns the (start_widget_idx, end_widget_idx) inclusive, or None.
-        """
-        result = self._get_analysis_turn_range()
-        if result is None:
-            return None
-
-        turns, _ = result
-        if len(turns) <= 1:
-            return None
-
-        # Map turns to widget indices
-        conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
-
-        turn_set = set(id(t) for t in turns)
-        widget_indices = []
-
-        for i, widget in enumerate(widgets):
-            if isinstance(widget, TurnWidget):
-                if id(widget.turn) in turn_set:
-                    widget_indices.append(i)
-            elif isinstance(widget, ToolGroupWidget):
-                for tt in widget.group.tool_turns:
-                    if id(tt) in turn_set:
-                        widget_indices.append(i)
-                        break
-            elif isinstance(widget, SpanGroupWidget):
-                sg = widget.group
-                all_turns = ([sg.user_turn] if sg.user_turn else []) + sg.response_turns
-                for st in all_turns:
-                    if id(st) in turn_set:
-                        widget_indices.append(i)
-                        break
-
-        if not widget_indices:
-            return None
-
-        return (min(widget_indices), max(widget_indices))
-
-    def _update_span_highlighting(self) -> None:
-        """Update span highlighting on conversation widgets."""
-        conversation = self.query_one("#conversation", ConversationView)
-
-        if self._analysis_level == "turn":
-            conversation.set_span_range(None, None)
+    def action_drill_in(self) -> None:
+        """Drill in: clear highlight, expand SpanGroup, or drill into ToolGroup."""
+        # If anything is highlighted, clear it
+        if self._highlight is not None:
+            self._clear_highlight()
+            self._show_status("Highlight cleared")
             return
 
-        widget_range = self._get_analysis_widget_range()
-        if widget_range:
-            conversation.set_span_range(widget_range[0], widget_range[1])
-        else:
-            conversation.set_span_range(None, None)
-
-    def _reset_analysis_level(self) -> None:
-        """Reset analysis level to turn."""
-        self._analysis_level = "turn"
-        self._analysis_radius = 0
         conversation = self.query_one("#conversation", ConversationView)
-        conversation.set_span_range(None, None)
+        index = conversation.get_selected_index()
+        if index is None:
+            return
+
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        if not (0 <= index < len(widgets)):
+            return
+
+        widget = widgets[index]
+        if isinstance(widget, SpanGroupWidget):
+            self._span_expanded_state[widget.group.first_turn_number] = True
+            self._refresh_conversation_keeping_position(index, "drill_in_span", widget.group)
+            self._show_status("Expanded span")
+        elif isinstance(widget, ToolGroupWidget):
+            self._tool_drilled_state[widget.group.first_turn_number] = True
+            self._refresh_conversation_keeping_position(index, "drill_in_tool", widget.group)
+            self._show_status("Expanded tool group")
+
+    def _find_span_widget_range(self, target_turn: Turn) -> tuple[int, int, int] | None:
+        """Find (span_key, start_widget_idx, end_widget_idx) for the span containing target_turn."""
+        session = self.store.get_active_session()
+        if not session or not session.turns:
+            return None
+
+        spans = compute_spans(session.turns)
+        span_turn_numbers: set[int] | None = None
+        span_key: int | None = None
+        for start, end in spans:
+            span_turns = session.turns[start:end + 1]
+            for t in span_turns:
+                if t is target_turn:
+                    span_turn_numbers = {t.turn_number for t in span_turns}
+                    span_key = span_turns[0].turn_number
+                    break
+            if span_turn_numbers is not None:
+                break
+
+        if span_turn_numbers is None or span_key is None:
+            return None
+
+        conversation = self.query_one("#conversation", ConversationView)
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        start_idx: int | None = None
+        end_idx: int | None = None
+        for i, widget in enumerate(widgets):
+            if isinstance(widget, TurnWidget):
+                widget_turn_nums = {widget.turn.turn_number}
+            elif isinstance(widget, ToolGroupWidget):
+                widget_turn_nums = {t.turn_number for t in widget.group.tool_turns}
+            elif isinstance(widget, SpanGroupWidget):
+                continue
+            else:
+                continue
+
+            if widget_turn_nums & span_turn_numbers:
+                if start_idx is None:
+                    start_idx = i
+                end_idx = i
+
+        if start_idx is None or end_idx is None:
+            return None
+
+        return (span_key, start_idx, end_idx)
+
+    def action_drill_out(self) -> None:
+        """Drill out: highlight parent container (visual only, no collapse)."""
+        if self._highlight is not None:
+            return  # Already highlighting
+
+        conversation = self.query_one("#conversation", ConversationView)
+        index = conversation.get_selected_index()
+        if index is None:
+            return
+
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        if not (0 <= index < len(widgets)):
+            return
+
+        widget = widgets[index]
+
+        if isinstance(widget, SpanGroupWidget):
+            return  # Already collapsed, no-op
+
+        # If on a drilled tool turn, undrill back to ToolGroup first
+        if isinstance(widget, TurnWidget) and widget.turn.role == "tool":
+            group_key = self._tool_turn_to_group.get(widget.turn.turn_number)
+            if group_key is not None and self._tool_drilled_state.get(group_key):
+                self._tool_drilled_state[group_key] = False
+                self._refresh_conversation_keeping_position(index, "drill_out_tool", group_key)
+                self._show_status("Collapsed tool group")
+                return
+
+        # Highlight the parent span
+        if isinstance(widget, TurnWidget):
+            target_turn = widget.turn
+        elif isinstance(widget, ToolGroupWidget):
+            target_turn = widget.group.tool_turns[0] if widget.group.tool_turns else None
+        else:
+            return
+
+        if not target_turn:
+            return
+
+        result = self._find_span_widget_range(target_turn)
+        if result is None:
+            return
+
+        span_key, start_idx, end_idx = result
+        self._highlight = span_key
+        conversation.set_span_range(start_idx, end_idx)
+        self._show_status("Span highlighted — Enter to collapse, [ to cancel")
+
+    def _refresh_conversation_keeping_position(self, old_index: int, action: str, context) -> None:
+        """Refresh conversation and position cursor appropriately after drill in/out."""
+        session = self.store.get_active_session()
+        items = self._get_filtered_turns(session)
+
+        if action in ("drill_in_span", "drill_in_tool"):
+            # Container was at old_index, now expanded → cursor to same index (first child)
+            target_index = min(old_index, len(items) - 1) if items else None
+        elif action == "drill_out_tool":
+            # Individual tool turns collapsed back to ToolGroup → find ToolGroup by key
+            group_key = context
+            target_index = None
+            for i, item in enumerate(items):
+                if isinstance(item, ToolGroup) and item.first_turn_number == group_key:
+                    target_index = i
+                    break
+            if target_index is None:
+                target_index = min(old_index, len(items) - 1) if items else None
+        elif action == "drill_out_span":
+            # Turns collapsed into SpanGroup → find SpanGroup by key
+            span_key = context
+            target_index = None
+            for i, item in enumerate(items):
+                if isinstance(item, SpanGroup) and item.first_turn_number == span_key:
+                    target_index = i
+                    break
+            if target_index is None:
+                target_index = min(old_index, len(items) - 1) if items else None
+        else:
+            target_index = min(old_index, len(items) - 1) if items else None
+
+        conversation = self.query_one("#conversation", ConversationView)
+        # Set index directly so _refresh_conversation picks it up during widget creation
+        conversation._selected_index = target_index
+        self._auto_scroll = False
+        self._refresh_conversation()
+        # Defer selection update until after widgets are fully mounted
+        if target_index is not None:
+            def _apply_selection(idx=target_index):
+                conversation.set_selected_index(idx)
+                conversation.scroll_to_selected()
+            conversation.call_after_refresh(_apply_selection)
 
     def action_zoom_out(self) -> None:
         """Zoom out analysis level: turn → span → span±1 → ... → session."""
@@ -2668,10 +2723,18 @@ class BettyApp(App):
         self.notify(message, timeout=3)
 
     # Action handlers
+    def _clear_highlight(self) -> None:
+        """Clear highlight if active."""
+        if self._highlight is not None:
+            self._highlight = None
+            conversation = self.query_one("#conversation", ConversationView)
+            conversation.set_span_range(None, None)
+
     def _nav_conversation_down(self) -> None:
         """Navigate down in conversation view."""
         self._auto_scroll = False
-        self._reset_analysis_level()
+        self._clear_highlight()
+
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if not widgets:
@@ -2690,7 +2753,8 @@ class BettyApp(App):
     def _nav_conversation_up(self) -> None:
         """Navigate up in conversation view."""
         self._auto_scroll = False
-        self._reset_analysis_level()
+        self._clear_highlight()
+
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if not widgets:
@@ -2775,7 +2839,7 @@ class BettyApp(App):
                 manager._update_card_selection()
             return
         self._auto_scroll = False
-        self._reset_analysis_level()
+
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if widgets:
@@ -2798,7 +2862,7 @@ class BettyApp(App):
                 manager._update_card_selection()
             return
         self._auto_scroll = True
-        self._reset_analysis_level()
+
         conversation = self.query_one("#conversation", ConversationView)
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if widgets:
@@ -2811,6 +2875,22 @@ class BettyApp(App):
         if self._manager_view_active and not (self._manager_expanded and self._focus_panel == "detail"):
             self._open_selected_session()
             return
+
+        # If span is highlighted, collapse it
+        if self._highlight is not None:
+            span_key = self._highlight
+            self._highlight = None
+            conversation = self.query_one("#conversation", ConversationView)
+            conversation.set_span_range(None, None)
+            self._span_expanded_state[span_key] = False
+            index = conversation.get_selected_index()
+            if index is not None:
+                self._refresh_conversation_keeping_position(index, "drill_out_span", span_key)
+            else:
+                self._refresh_conversation()
+            self._show_status("Collapsed span")
+            return
+
         conversation = self.query_one("#conversation", ConversationView)
         index = conversation.get_selected_index()
         if index is None:
@@ -2818,6 +2898,24 @@ class BettyApp(App):
         widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
         if 0 <= index < len(widgets):
             widget = widgets[index]
+            if isinstance(widget, SpanGroupWidget):
+                # SpanGroup: expand and auto-highlight the span
+                span_key = widget.group.first_turn_number
+                group = widget.group
+                self._span_expanded_state[span_key] = True
+                self._highlight = span_key
+                self._refresh_conversation_keeping_position(index, "drill_in_span", group)
+                # Defer span range highlighting until widgets are mounted
+                target_turn = group.user_turn or (group.response_turns[0] if group.response_turns else None)
+                if target_turn:
+                    def _apply_highlight(tt=target_turn):
+                        result = self._find_span_widget_range(tt)
+                        if result:
+                            _, start_idx, end_idx = result
+                            conversation.set_span_range(start_idx, end_idx)
+                    conversation.call_after_refresh(_apply_highlight)
+                self._show_status("Expanded span")
+                return
             # Trigger summarization for unsummarized tool groups
             if isinstance(widget, ToolGroupWidget) and not widget.group.summary:
                 self.store.summarize_tool_group(widget.group.tool_turns)
@@ -2825,8 +2923,6 @@ class BettyApp(App):
             # Persist group state
             if isinstance(widget, ToolGroupWidget):
                 self._group_expanded_state[widget.group.first_turn_number] = widget.expanded
-            elif isinstance(widget, SpanGroupWidget):
-                self._span_expanded_state[widget.group.first_turn_number] = widget.expanded
 
     def _open_selected_session(self) -> None:
         """Open the selected session from manager view."""
@@ -2841,6 +2937,9 @@ class BettyApp(App):
                 self._auto_scroll = True
                 self._group_expanded_state.clear()
                 self._span_expanded_state.clear()
+                self._tool_drilled_state.clear()
+
+                self._highlight = None
                 self._refresh_conversation()
                 self._refresh_manager()
                 self._refresh_header()
@@ -2852,6 +2951,8 @@ class BettyApp(App):
         self._auto_scroll = True
         self._group_expanded_state.clear()
         self._span_expanded_state.clear()
+        self._tool_drilled_state.clear()
+        self._highlight = None
 
         mode = self._resolve_open_mode()
         if mode == "expand":
@@ -2867,24 +2968,29 @@ class BettyApp(App):
             self._show_manager_view()
 
     def action_expand_all(self) -> None:
-        """Expand all items."""
+        """Expand all items (spans, tool groups, turns)."""
+        session = self.store.get_active_session()
+        if session and session.turns:
+            for start, _end in compute_spans(session.turns):
+                turn_num = session.turns[start].turn_number
+                self._span_expanded_state[turn_num] = True
         conversation = self.query_one("#conversation", ConversationView)
-        for widget in conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"):
+        for widget in conversation.query("ToolGroupWidget"):
+            self._group_expanded_state[widget.group.first_turn_number] = True
+        for widget in conversation.query("TurnWidget"):
             widget.expanded = True
-            if isinstance(widget, ToolGroupWidget):
-                self._group_expanded_state[widget.group.first_turn_number] = True
-            elif isinstance(widget, SpanGroupWidget):
-                self._span_expanded_state[widget.group.first_turn_number] = True
+        self._refresh_conversation()
 
     def action_collapse_all(self) -> None:
-        """Collapse all items."""
-        conversation = self.query_one("#conversation", ConversationView)
-        for widget in conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"):
-            widget.expanded = False
-            if isinstance(widget, ToolGroupWidget):
-                self._group_expanded_state[widget.group.first_turn_number] = False
-            elif isinstance(widget, SpanGroupWidget):
-                self._span_expanded_state[widget.group.first_turn_number] = False
+        """Collapse all items (spans, tool groups, turns)."""
+        session = self.store.get_active_session()
+        if session and session.turns:
+            for start, _end in compute_spans(session.turns):
+                turn_num = session.turns[start].turn_number
+                self._span_expanded_state[turn_num] = False
+        self._tool_drilled_state.clear()
+        self._group_expanded_state = {k: False for k, v in self._group_expanded_state.items()}
+        self._refresh_conversation()
 
     def action_cycle_filter(self) -> None:
         """Cycle through filters."""
@@ -3039,8 +3145,6 @@ class BettyApp(App):
     def action_toggle_analysis_panel(self) -> None:
         """Toggle the insights panel on/off."""
         self._show_analysis_panel = not self._show_analysis_panel
-        if not self._show_analysis_panel:
-            self._reset_analysis_level()
         self._refresh_analysis_panel()
         label = "shown" if self._show_analysis_panel else "hidden"
         self._show_status(f"Insights panel {label}")
@@ -3143,6 +3247,8 @@ class BettyApp(App):
                 self._show_status(f"Deleted session {session_id[:8]}...")
                 self._group_expanded_state.clear()
                 self._span_expanded_state.clear()
+                self._tool_drilled_state.clear()
+                self._highlight = None
                 self._refresh_all()
         else:
             self._show_status("No session to delete")
@@ -3159,7 +3265,12 @@ class BettyApp(App):
 
     def action_escape(self) -> None:
         """Handle escape key."""
-        self._reset_analysis_level()
+
+        # Clear highlight first
+        if self._highlight is not None:
+            self._clear_highlight()
+            return
+
         # Close analysis panel first
         if self._show_analysis_panel:
             self._show_analysis_panel = False
@@ -3198,7 +3309,8 @@ class BettyApp(App):
             self._auto_scroll = True
             self._group_expanded_state.clear()
             self._span_expanded_state.clear()
-            self._reset_analysis_level()
+            self._tool_drilled_state.clear()
+            self._highlight = None
             self.store.clear_range_analyses()
             self._refresh_all()
             self._refresh_analysis_panel()
