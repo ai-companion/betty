@@ -22,7 +22,7 @@ from textual.widgets import Static, Footer, Input, Label
 
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
-from .models import Session, Turn, ToolGroup, SpanGroup, compute_spans
+from .models import Session, Turn, ToolGroup, SpanGroup, DetailLevel, compute_spans
 from .pricing import get_pricing, estimate_cost
 
 if TYPE_CHECKING:
@@ -35,6 +35,7 @@ def group_turns_for_display(
     turns: list[Turn],
     use_summary: bool,
     group_expanded_state: dict[int, bool] | None = None,
+    group_default_expanded: bool = False,
 ) -> list[Turn | ToolGroup]:
     """
     Group consecutive tool turns into ToolGroup, keep assistant as separate Turn.
@@ -56,7 +57,7 @@ def group_turns_for_display(
         nonlocal tool_buffer
         if tool_buffer:
             first_turn_num = tool_buffer[0].turn_number
-            expanded = group_expanded_state.get(first_turn_num, False)
+            expanded = group_expanded_state.get(first_turn_num, group_default_expanded)
             summary = tool_buffer[0].summary
             result.append(ToolGroup(
                 tool_turns=tool_buffer,
@@ -79,6 +80,7 @@ def group_turns_for_display(
 def group_turns_into_spans(
     session: Session,
     span_expanded_state: dict[int, bool],
+    default_expanded: bool = True,
 ) -> list[SpanGroup]:
     """Group turns into SpanGroups (one per user turn + its responses)."""
     if not session.turns:
@@ -100,7 +102,7 @@ def group_turns_into_spans(
             user_turn=user_turn,
             response_turns=response_turns,
         )
-        group.expanded = span_expanded_state.get(group.first_turn_number, True)
+        group.expanded = span_expanded_state.get(group.first_turn_number, default_expanded)
         result.append(group)
 
     return result
@@ -933,6 +935,7 @@ class HeaderPanel(Static):
         manager_active: bool = False,
         manager_expanded: bool = False,
         focus_panel: str = "manager",
+        detail_level: DetailLevel = DetailLevel.DEFAULT,
     ) -> None:
         self._sessions = sessions
         self._active = active
@@ -941,6 +944,7 @@ class HeaderPanel(Static):
         self._manager_active = manager_active
         self._manager_expanded = manager_expanded
         self._focus_panel = focus_panel
+        self._detail_level = detail_level
         self._render_header()
 
     def _render_header(self) -> None:
@@ -988,11 +992,15 @@ class HeaderPanel(Static):
             else:
                 token_stats = f"in:{self._active.total_input_words:,} out:{self._active.total_output_words:,}"
 
+            detail_indicator = ""
+            if hasattr(self, '_detail_level') and self._detail_level != DetailLevel.DEFAULT:
+                detail_indicator = f" [bold]\\[{self._detail_level.value}][/bold]"
+
             stats = (
                 f"{self._active.model} | "
                 f"{token_stats} | "
                 f"turns:{turns_info} | "
-                f"{self._filter_label}{scroll_indicator}"
+                f"{self._filter_label}{scroll_indicator}{detail_indicator}"
             )
         else:
             stats = "[dim]Waiting for session...[/dim]"
@@ -2002,6 +2010,8 @@ class BettyApp(App):
         Binding("right", "nav_right", "Right", show=False),
         Binding("m", "focus_monitor", "Monitor", show=False),
         Binding("?", "focus_ask", "Ask", show=False),
+        Binding("v", "detail_level_next", "Detail+", show=False),
+        Binding("V", "detail_level_prev", "Detail-", show=False),
         Binding("escape", "escape", "Escape", show=False),
         Binding("1", "select_session_1", "Session 1", show=False),
         Binding("2", "select_session_2", "Session 2", show=False),
@@ -2066,6 +2076,7 @@ class BettyApp(App):
         self._show_plan = False
         self._show_alerts = True
         self._auto_scroll = True
+        self._detail_level: DetailLevel = DetailLevel.DEFAULT
         self._group_expanded_state: dict[int, bool] = {}
         self._span_expanded_state: dict[int, bool] = {}
         self._tool_drilled_state: dict[int, bool] = {}
@@ -2185,6 +2196,7 @@ class BettyApp(App):
             manager_active=self._manager_view_active,
             manager_expanded=self._manager_expanded,
             focus_panel=self._focus_panel,
+            detail_level=self._detail_level,
         )
 
     def _refresh_conversation(self) -> None:
@@ -2245,13 +2257,18 @@ class BettyApp(App):
                 )
                 widget.selected = (i == selected_index)
             else:
+                # In DETAILED mode, disable summaries and auto-expand turns
+                is_detailed = self._detail_level == DetailLevel.DETAILED
+                use_summary = self._use_summary and not is_detailed
                 widget = TurnWidget(
                     item,
                     conv_turn=conv_turn_map.get(id(item), 0),
-                    use_summary=self._use_summary,
+                    use_summary=use_summary,
                     ui_style=self._ui_style,
                     id=f"turn-{rc}-{item.turn_number}",
                 )
+                if is_detailed:
+                    widget.expanded = True
                 widget.selected = (i == selected_index)
             conversation.mount(widget)
 
@@ -2267,7 +2284,14 @@ class BettyApp(App):
         filter_key, _ = self._turn_filters[self._filter_index]
 
         if filter_key == "all":
-            span_groups = group_turns_into_spans(session, self._span_expanded_state)
+            # Derive defaults from current detail level
+            span_default_expanded = self._detail_level != DetailLevel.OVERVIEW
+            group_default_expanded = self._detail_level == DetailLevel.DETAILED
+
+            span_groups = group_turns_into_spans(
+                session, self._span_expanded_state,
+                default_expanded=span_default_expanded,
+            )
             grouped: list[Turn | ToolGroup | SpanGroup] = []
             for sg in span_groups:
                 if not sg.expanded:
@@ -2282,6 +2306,7 @@ class BettyApp(App):
                         grouped.extend(group_turns_for_display(
                             session, all_turns, use_summary=True,
                             group_expanded_state=self._group_expanded_state,
+                            group_default_expanded=group_default_expanded,
                         ))
                     else:
                         grouped.extend(all_turns)
@@ -2969,6 +2994,7 @@ class BettyApp(App):
 
     def action_expand_all(self) -> None:
         """Expand all items (spans, tool groups, turns)."""
+        self._detail_level = DetailLevel.DETAILED
         session = self.store.get_active_session()
         if session and session.turns:
             for start, _end in compute_spans(session.turns):
@@ -2980,9 +3006,11 @@ class BettyApp(App):
         for widget in conversation.query("TurnWidget"):
             widget.expanded = True
         self._refresh_conversation()
+        self._refresh_header()
 
     def action_collapse_all(self) -> None:
         """Collapse all items (spans, tool groups, turns)."""
+        self._detail_level = DetailLevel.OVERVIEW
         session = self.store.get_active_session()
         if session and session.turns:
             for start, _end in compute_spans(session.turns):
@@ -2991,6 +3019,52 @@ class BettyApp(App):
         self._tool_drilled_state.clear()
         self._group_expanded_state = {k: False for k, v in self._group_expanded_state.items()}
         self._refresh_conversation()
+        self._refresh_header()
+
+    def _apply_detail_level(self) -> None:
+        """Apply the current detail level to all span/group/drill state."""
+        session = self.store.get_active_session()
+        if self._detail_level == DetailLevel.OVERVIEW:
+            if session and session.turns:
+                for start, _end in compute_spans(session.turns):
+                    turn_num = session.turns[start].turn_number
+                    self._span_expanded_state[turn_num] = False
+            self._tool_drilled_state.clear()
+            self._group_expanded_state.clear()
+            self._highlight = None
+        elif self._detail_level == DetailLevel.DEFAULT:
+            if session and session.turns:
+                for start, _end in compute_spans(session.turns):
+                    turn_num = session.turns[start].turn_number
+                    self._span_expanded_state[turn_num] = True
+                for turn in session.turns:
+                    turn.expanded = False
+            self._group_expanded_state.clear()
+            self._tool_drilled_state.clear()
+        elif self._detail_level == DetailLevel.DETAILED:
+            if session and session.turns:
+                for start, _end in compute_spans(session.turns):
+                    turn_num = session.turns[start].turn_number
+                    self._span_expanded_state[turn_num] = True
+            self._group_expanded_state.clear()
+            self._tool_drilled_state.clear()
+
+        self._refresh_conversation()
+        self._refresh_header()
+
+    _DETAIL_LEVELS = [DetailLevel.DEFAULT, DetailLevel.OVERVIEW, DetailLevel.DETAILED]
+
+    def action_detail_level_next(self) -> None:
+        """Cycle detail level forward: default → overview → detailed → default."""
+        idx = self._DETAIL_LEVELS.index(self._detail_level)
+        self._detail_level = self._DETAIL_LEVELS[(idx + 1) % len(self._DETAIL_LEVELS)]
+        self._apply_detail_level()
+
+    def action_detail_level_prev(self) -> None:
+        """Cycle detail level backward: default → detailed → overview → default."""
+        idx = self._DETAIL_LEVELS.index(self._detail_level)
+        self._detail_level = self._DETAIL_LEVELS[(idx - 1) % len(self._DETAIL_LEVELS)]
+        self._apply_detail_level()
 
     def action_cycle_filter(self) -> None:
         """Cycle through filters."""
