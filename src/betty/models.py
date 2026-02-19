@@ -2,11 +2,19 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .analyzer import Analysis
     from .github import PRInfo
+
+
+class DetailLevel(Enum):
+    """Detail level for conversation display."""
+    OVERVIEW = "overview"
+    DEFAULT = "default"
+    DETAILED = "detailed"
 
 
 def count_words(text: str) -> int:
