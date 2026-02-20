@@ -247,6 +247,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
       betty config --llm-preset lm-studio     # Use LM Studio
       betty config --collapse-tools           # Enable tool collapsing
       betty config --debug-logging            # Enable debug logging
+      betty config --agent                    # Enable Betty Agent (continuous observer)
       betty config --show                     # Show current config
     """
     if show:
