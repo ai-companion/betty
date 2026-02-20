@@ -16,8 +16,8 @@ Or directly with uv / pip:
 
 ```bash
 uvx --from betty-cli betty  # run without installing
-uv tool install betty-cli  # install permanently
-pip install betty-cli      # with pip
+uv tool install betty-cli   # install permanently
+pip install betty-cli       # with pip
 ```
 
 ## Use

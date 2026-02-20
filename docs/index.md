@@ -2,6 +2,20 @@
 layout: default
 ---
 
+## Install
+
+```bash
+curl -fsSL https://betty4.sh/install.sh | bash
+```
+
+Or directly with uv / pip:
+
+```bash
+uvx --from betty-cli betty  # run without installing
+uv tool install betty-cli   # install permanently
+pip install betty-cli       # with pip
+```
+
 ## Quick Start (for the Shannons)
 
 ```bash
