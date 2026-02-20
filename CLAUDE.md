@@ -43,6 +43,11 @@ betty config --summary-style explanatory   # Focus on intent and reasoning
 betty config --summary-style default       # Reset to default 1-sentence style
 betty config --summary-prompt "Custom prompt text"  # Fully custom prompt
 
+# Agent configuration (continuous session observer)
+betty config --agent                     # Enable Betty Agent
+betty config --no-agent                  # Disable Betty Agent
+# Alternatively: BETTY_AGENT_ENABLED=true betty
+
 # Analyzer configuration (for on-demand analysis)
 betty config --analyzer-budget N         # Set context budget in chars
 betty config --analyzer-small-range N    # Max turns for small range
