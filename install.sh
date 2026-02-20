@@ -15,7 +15,7 @@
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────
-PACKAGE_NAME="betty"
+PACKAGE_NAME="betty-cli"
 GITHUB_REPO="ai-companion/betty"
 BIN_DIR="${HOME}/.local/bin"
 
