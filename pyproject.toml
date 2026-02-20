@@ -1,5 +1,5 @@
 [project]
-name = "betty"
+name = "betty-cli"
 dynamic = ["version"]
 description = "A CLI supervisor for Claude Code sessions"
 readme = "README.md"

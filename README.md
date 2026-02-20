@@ -15,9 +15,9 @@ curl -fsSL https://betty4.sh/install.sh | bash
 Or directly with uv / pip:
 
 ```bash
-uvx betty              # run without installing
-uv tool install betty  # install permanently
-pip install betty      # with pip
+uvx betty-cli              # run without installing
+uv tool install betty-cli  # install permanently
+pip install betty-cli      # with pip
 ```
 
 ## Use
