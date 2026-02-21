@@ -78,9 +78,15 @@ class ProjectWatcher:
             sessions_to_load = all_sessions
             sessions_to_skip = []
 
-        # Load the top sessions
-        for file, _ in sessions_to_load:
+        # Load the top sessions (skip empty files)
+        for file, mtime in sessions_to_load:
             session_id = file.stem
+            try:
+                if file.stat().st_size == 0:
+                    self._skipped_sessions[session_id] = (file, mtime)
+                    continue
+            except (PermissionError, OSError):
+                pass
             self._known_sessions.add(session_id)
             self._on_session_discovered(session_id, file)
 
@@ -135,7 +141,14 @@ class ProjectWatcher:
                             except (PermissionError, OSError):
                                 pass
                         else:
-                            # Completely new session - load it
+                            # New session - skip if empty
+                            try:
+                                stat = file.stat()
+                                if stat.st_size == 0:
+                                    self._skipped_sessions[session_id] = (file, stat.st_mtime)
+                                    continue
+                            except (PermissionError, OSError):
+                                pass
                             self._known_sessions.add(session_id)
                             self._on_session_discovered(session_id, file)
             except (PermissionError, OSError):
