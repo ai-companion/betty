@@ -22,7 +22,7 @@ from textual.widgets import Static, Footer, Input, Label
 
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
-from .models import Session, Turn, ToolGroup, SpanGroup, DetailLevel, compute_spans
+from .models import Session, Turn, ToolGroup, SpanGroup, DetailLevel, compute_spans, next_detail_level, prev_detail_level
 
 if TYPE_CHECKING:
     from .github import PRInfo
@@ -914,7 +914,7 @@ class SpanGroupWidget(Static):
 
 
 class TraceSpanWidget(Static):
-    """Widget for displaying a span in trace view (collapsed/expanded tree)."""
+    """Widget for displaying a span in trace view with 4-level progressive disclosure."""
 
     DEFAULT_CSS = """
     TraceSpanWidget {
@@ -929,15 +929,19 @@ class TraceSpanWidget(Static):
     TOOL_ICONS = TurnWidget.TOOL_ICONS
     TOOL_INDICATORS = TurnWidget.TOOL_INDICATORS
 
-    expanded: reactive[bool] = reactive(False)
+    detail_level: reactive[DetailLevel] = reactive(DetailLevel.SUMMARY)
     selected: reactive[bool] = reactive(False)
 
-    def __init__(self, group: SpanGroup, span_tokens: int = 0, ui_style: str = "rich", **kwargs) -> None:
+    def __init__(
+        self, group: SpanGroup, span_tokens: int = 0,
+        ui_style: str = "rich", detail_level: DetailLevel = DetailLevel.SUMMARY,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self.group = group
         self.span_tokens = span_tokens
         self.ui_style = ui_style
-        self.expanded = group.expanded
+        self.detail_level = detail_level
 
     def compose(self) -> ComposeResult:
         yield Static(id="trace-span-content")
@@ -946,8 +950,7 @@ class TraceSpanWidget(Static):
         self._update_content()
         self._update_classes()
 
-    def watch_expanded(self, value: bool) -> None:
-        self.group.expanded = value
+    def watch_detail_level(self, value: DetailLevel) -> None:
         self._update_content()
 
     def watch_selected(self, value: bool) -> None:
@@ -970,12 +973,12 @@ class TraceSpanWidget(Static):
         except NoMatches:
             pass
 
-    def _get_user_label(self) -> str:
+    def _get_user_label(self, max_len: int = 60) -> str:
         """Get the user turn label for the span header."""
         if self.group.user_turn:
             preview = self.group.user_turn.content_preview
-            if len(preview) > 60:
-                preview = preview[:57] + "..."
+            if len(preview) > max_len:
+                preview = preview[:max_len - 3] + "..."
             return f'"{preview}"'
         return "(no user turn)"
 
@@ -985,8 +988,17 @@ class TraceSpanWidget(Static):
             return _format_token_count(self.span_tokens)
         return ""
 
+    def _get_arrow(self) -> str:
+        """Get the arrow indicator for the current detail level."""
+        if self.detail_level == DetailLevel.COMPACT:
+            return "❯"
+        elif self.detail_level == DetailLevel.SUMMARY:
+            return "▸"
+        else:  # OUTLINE or DETAIL
+            return "▼"
+
     def _build_child_lines(self) -> list[tuple[str, str]]:
-        """Build child lines from response turns, grouping consecutive tools.
+        """Build child lines for OUTLINE level — groups consecutive tools.
 
         Returns list of (role, text) where role is 'assistant' or 'tool'.
         """
@@ -1023,20 +1035,60 @@ class TraceSpanWidget(Static):
         flush_tools()
         return lines
 
+    def _build_detail_lines(self) -> list[tuple[str, str]]:
+        """Build child lines for DETAIL level — each turn individually with fuller content.
+
+        Returns list of (role, text) where role is 'assistant' or 'tool'.
+        """
+        lines: list[tuple[str, str]] = []
+        for turn in self.group.response_turns:
+            if turn.role == "assistant":
+                text = turn.content_full[:200]
+                if len(turn.content_full) > 200:
+                    text += "..."
+                lines.append(("assistant", text))
+            elif turn.role == "tool":
+                name = turn.tool_name or "tool"
+                text = f"[{name}] {turn.content_preview}"
+                lines.append(("tool", text))
+        return lines
+
     def _render_rich_style(self):
         parts = []
-        arrow = "▼" if self.expanded else "❯"
-        user_label = self._get_user_label()
+        level = self.detail_level
+        arrow = self._get_arrow()
         tok_label = self._get_token_label()
         select_prefix = "► " if self.selected else ""
 
-        header = f"{select_prefix} {arrow} {user_label}"
-        if tok_label:
-            header += f"  {tok_label}"
-        parts.append(RichText.from_markup(f"[bold]{markup_escape(header)}[/bold]"))
+        if level == DetailLevel.COMPACT:
+            # Level 1: single line — user preview + tokens + turn count
+            user_label = self._get_user_label(max_len=40)
+            turn_count = self.group.total_turns
+            header = f"{select_prefix} {arrow} {user_label}"
+            if tok_label:
+                header += f"  {tok_label}"
+            header += f"  ({turn_count} turns)"
+            parts.append(RichText.from_markup(f"[bold]{markup_escape(header)}[/bold]"))
 
-        if self.expanded:
-            child_lines = self._build_child_lines()
+        elif level == DetailLevel.SUMMARY:
+            # Level 2: header + single summary child line
+            user_label = self._get_user_label()
+            header = f"{select_prefix} {arrow} {user_label}"
+            if tok_label:
+                header += f"  {tok_label}"
+            parts.append(RichText.from_markup(f"[bold]{markup_escape(header)}[/bold]"))
+            summary = self.group.activity_summary
+            parts.append(RichText(f" └─ 🤖 {summary}", style=""))
+
+        else:
+            # Level 3 (OUTLINE) and Level 4 (DETAIL): header + tree
+            user_label = self._get_user_label()
+            header = f"{select_prefix} {arrow} {user_label}"
+            if tok_label:
+                header += f"  {tok_label}"
+            parts.append(RichText.from_markup(f"[bold]{markup_escape(header)}[/bold]"))
+
+            child_lines = self._build_detail_lines() if level == DetailLevel.DETAIL else self._build_child_lines()
             for i, (role, text) in enumerate(child_lines):
                 is_last = (i == len(child_lines) - 1)
                 connector = "└─" if is_last else "├─"
@@ -1044,37 +1096,73 @@ class TraceSpanWidget(Static):
                 line = f" {connector} {icon} {text}"
                 style = "dim" if role == "tool" else ""
                 parts.append(RichText(line, style=style))
-            if child_lines:
-                # Add vertical connector line between header and children
-                # Already handled by the ├─/└─ connectors
-                pass
 
         return RichGroup(*parts)
 
     def _render_claude_code_style(self):
         parts = []
+        level = self.detail_level
         selected_style = "light_steel_blue" if self.selected else ""
-        arrow = "▼" if self.expanded else "❯"
-        user_label = self._get_user_label()
+        arrow = self._get_arrow()
         tok_label = self._get_token_label()
 
-        # Header row
-        row = Table.grid(padding=(0, 0))
-        row.add_column(width=3)
-        row.add_column()
-        header_text = RichText()
-        header_text.append(f"{arrow} ", style=selected_style or "bold")
-        header_text.append(user_label, style=selected_style or "")
-        if tok_label:
-            header_text.append(f"  {tok_label}", style=selected_style or "dim")
-        row.add_row(
-            RichText("   ", style="dim"),
-            header_text,
-        )
-        parts.append(row)
+        if level == DetailLevel.COMPACT:
+            # Level 1: single compact line
+            user_label = self._get_user_label(max_len=40)
+            turn_count = self.group.total_turns
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=3)
+            row.add_column()
+            header_text = RichText()
+            header_text.append(f"{arrow} ", style=selected_style or "bold")
+            header_text.append(user_label, style=selected_style or "")
+            if tok_label:
+                header_text.append(f"  {tok_label}", style=selected_style or "dim")
+            header_text.append(f"  ({turn_count} turns)", style=selected_style or "dim")
+            row.add_row(RichText("   ", style="dim"), header_text)
+            parts.append(row)
 
-        if self.expanded:
-            child_lines = self._build_child_lines()
+        elif level == DetailLevel.SUMMARY:
+            # Level 2: header + single summary child line
+            user_label = self._get_user_label()
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=3)
+            row.add_column()
+            header_text = RichText()
+            header_text.append(f"{arrow} ", style=selected_style or "bold")
+            header_text.append(user_label, style=selected_style or "")
+            if tok_label:
+                header_text.append(f"  {tok_label}", style=selected_style or "dim")
+            row.add_row(RichText("   ", style="dim"), header_text)
+            parts.append(row)
+
+            # Summary child line
+            summary = self.group.activity_summary
+            child_row = Table.grid(padding=(0, 0))
+            child_row.add_column(width=3)
+            child_row.add_column()
+            line_text = RichText()
+            line_text.append("└─ ", style="dim")
+            line_text.append(f"{self.BULLET} ", style=selected_style or "white")
+            line_text.append(summary, style=selected_style or "")
+            child_row.add_row(RichText(" ", style="dim"), line_text)
+            parts.append(child_row)
+
+        else:
+            # Level 3 (OUTLINE) and Level 4 (DETAIL): header + tree
+            user_label = self._get_user_label()
+            row = Table.grid(padding=(0, 0))
+            row.add_column(width=3)
+            row.add_column()
+            header_text = RichText()
+            header_text.append(f"{arrow} ", style=selected_style or "bold")
+            header_text.append(user_label, style=selected_style or "")
+            if tok_label:
+                header_text.append(f"  {tok_label}", style=selected_style or "dim")
+            row.add_row(RichText("   ", style="dim"), header_text)
+            parts.append(row)
+
+            child_lines = self._build_detail_lines() if level == DetailLevel.DETAIL else self._build_child_lines()
             for i, (role, text) in enumerate(child_lines):
                 is_last = (i == len(child_lines) - 1)
                 connector = "└─" if is_last else "├─"
@@ -1091,10 +1179,7 @@ class TraceSpanWidget(Static):
                 line_text.append(f"{connector} ", style="dim")
                 line_text.append(f"{self.BULLET} ", style=bullet_style)
                 line_text.append(text, style=selected_style or ("dim" if role == "tool" else ""))
-                child_row.add_row(
-                    RichText(" ", style="dim"),
-                    line_text,
-                )
+                child_row.add_row(RichText(" ", style="dim"), line_text)
                 parts.append(child_row)
 
         return RichGroup(*parts)
@@ -1130,7 +1215,7 @@ class HeaderPanel(Static):
         manager_active: bool = False,
         manager_expanded: bool = False,
         focus_panel: str = "manager",
-        detail_level: DetailLevel = DetailLevel.DEFAULT,
+        detail_level: DetailLevel = DetailLevel.SUMMARY,
     ) -> None:
         self._sessions = sessions
         self._active = active
@@ -1188,7 +1273,7 @@ class HeaderPanel(Static):
                 token_stats = f"in:{self._active.total_input_words:,} out:{self._active.total_output_words:,}"
 
             detail_indicator = ""
-            if hasattr(self, '_detail_level') and self._detail_level != DetailLevel.DEFAULT:
+            if hasattr(self, '_detail_level') and self._detail_level != DetailLevel.SUMMARY:
                 detail_indicator = f" [bold]\\[{self._detail_level.value}][/bold]"
 
             stats = (
@@ -2109,10 +2194,10 @@ class BettyApp(App):
         self._show_plan = False
         self._show_alerts = True
         self._auto_scroll = True
-        self._detail_level: DetailLevel = DetailLevel.DEFAULT
+        self._detail_level: DetailLevel = DetailLevel.SUMMARY
         self._group_expanded_state: dict[int, bool] = {}
         self._span_expanded_state: dict[int, bool] = {}
-        self._trace_expanded_state: dict[int, bool] = {}
+        self._trace_level_state: dict[int, DetailLevel] = {}  # Per-span detail level overrides
         self._tool_drilled_state: dict[int, bool] = {}
         self._tool_turn_to_group: dict[int, int] = {}  # turn_number → ToolGroup first_turn_number
         self._highlight: int | None = None  # first_turn_number of highlighted span
@@ -2292,8 +2377,8 @@ class BettyApp(App):
                 )
                 widget.selected = (i == selected_index)
             else:
-                # In DETAILED mode, disable summaries and auto-expand turns
-                is_detailed = self._detail_level == DetailLevel.DETAILED
+                # In DETAIL mode, disable summaries and auto-expand turns
+                is_detailed = self._detail_level == DetailLevel.DETAIL
                 use_summary = self._use_summary and not is_detailed
                 widget = TurnWidget(
                     item,
@@ -2319,11 +2404,8 @@ class BettyApp(App):
             conversation.mount(Static("[dim]Waiting for activity...[/dim]"))
             return
 
-        # Build spans using trace expanded state, default collapsed
-        span_default_expanded = self._detail_level != DetailLevel.OVERVIEW
-        span_groups = group_turns_into_spans(
-            session, self._trace_expanded_state, default_expanded=span_default_expanded,
-        )
+        # Build spans (expanded field on SpanGroup is unused for waterfall — detail_level drives rendering)
+        span_groups = group_turns_into_spans(session, {}, default_expanded=False)
 
         # Header with total token count
         total_tokens = sum(
@@ -2335,7 +2417,7 @@ class BettyApp(App):
             header_text += f" ────── {total_tok_str}"
         conversation.mount(Static(RichText.from_markup(f"[bold]{markup_escape(header_text)}[/bold]\n")))
 
-        # Mount TraceSpanWidgets
+        # Mount TraceSpanWidgets with per-span detail level (override or global)
         for i, group in enumerate(span_groups):
             span_tokens = 0
             if group.user_turn:
@@ -2343,10 +2425,15 @@ class BettyApp(App):
             for t in group.response_turns:
                 span_tokens += (t.input_tokens or 0) + (t.output_tokens or 0)
 
+            effective_level = self._trace_level_state.get(
+                group.first_turn_number, self._detail_level,
+            )
+
             widget = TraceSpanWidget(
                 group,
                 span_tokens=span_tokens,
-                ui_style="rich",  # TraceSpanWidget handles both styles internally
+                ui_style="rich",
+                detail_level=effective_level,
                 id=f"trace-span-{rc}-{i}",
             )
             widget.selected = (i == selected_index)
@@ -2363,9 +2450,10 @@ class BettyApp(App):
         filter_key, _ = self._turn_filters[self._filter_index]
 
         if filter_key == "all":
-            # Derive defaults from current detail level
-            span_default_expanded = self._detail_level != DetailLevel.OVERVIEW
-            group_default_expanded = self._detail_level == DetailLevel.DETAILED
+            # Derive defaults from current detail level (non-waterfall backward compat)
+            # COMPACT/SUMMARY → spans collapsed; OUTLINE → spans expanded; DETAIL → spans+groups expanded
+            span_default_expanded = self._detail_level in (DetailLevel.OUTLINE, DetailLevel.DETAIL)
+            group_default_expanded = self._detail_level == DetailLevel.DETAIL
 
             span_groups = group_turns_into_spans(
                 session, self._span_expanded_state,
@@ -2892,9 +2980,9 @@ class BettyApp(App):
                 self._show_status("Expanded span")
                 return
             if isinstance(widget, TraceSpanWidget):
-                new_expanded = not widget.expanded
-                widget.expanded = new_expanded
-                self._trace_expanded_state[widget.group.first_turn_number] = new_expanded
+                new_level = next_detail_level(widget.detail_level)
+                widget.detail_level = new_level
+                self._trace_level_state[widget.group.first_turn_number] = new_level
                 return
             # Trigger summarization for unsummarized tool groups
             if isinstance(widget, ToolGroupWidget) and not widget.group.summary:
@@ -2917,7 +3005,7 @@ class BettyApp(App):
                 self._auto_scroll = True
                 self._group_expanded_state.clear()
                 self._span_expanded_state.clear()
-                self._trace_expanded_state.clear()
+                self._trace_level_state.clear()
                 self._tool_drilled_state.clear()
 
                 self._highlight = None
@@ -2932,7 +3020,7 @@ class BettyApp(App):
         self._auto_scroll = True
         self._group_expanded_state.clear()
         self._span_expanded_state.clear()
-        self._trace_expanded_state.clear()
+        self._trace_level_state.clear()
         self._tool_drilled_state.clear()
         self._highlight = None
 
@@ -2950,14 +3038,14 @@ class BettyApp(App):
             self._show_manager_view()
 
     def action_expand_all(self) -> None:
-        """Expand all items (spans, tool groups, turns)."""
-        self._detail_level = DetailLevel.DETAILED
+        """Expand all items — set global to DETAIL, clear overrides."""
+        self._detail_level = DetailLevel.DETAIL
+        self._trace_level_state.clear()
         session = self.store.get_active_session()
         if session and session.turns:
             for start, _end in compute_spans(session.turns):
                 turn_num = session.turns[start].turn_number
                 self._span_expanded_state[turn_num] = True
-                self._trace_expanded_state[turn_num] = True
         conversation = self.query_one("#conversation", ConversationView)
         for widget in conversation.query("ToolGroupWidget"):
             self._group_expanded_state[widget.group.first_turn_number] = True
@@ -2967,23 +3055,26 @@ class BettyApp(App):
         self._refresh_header()
 
     def action_collapse_all(self) -> None:
-        """Collapse all items (spans, tool groups, turns)."""
-        self._detail_level = DetailLevel.OVERVIEW
+        """Collapse all items — set global to COMPACT, clear overrides."""
+        self._detail_level = DetailLevel.COMPACT
+        self._trace_level_state.clear()
         session = self.store.get_active_session()
         if session and session.turns:
             for start, _end in compute_spans(session.turns):
                 turn_num = session.turns[start].turn_number
                 self._span_expanded_state[turn_num] = False
-                self._trace_expanded_state[turn_num] = False
         self._tool_drilled_state.clear()
         self._group_expanded_state = {k: False for k, v in self._group_expanded_state.items()}
         self._refresh_conversation()
         self._refresh_header()
 
     def _apply_detail_level(self) -> None:
-        """Apply the current detail level to all span/group/drill state."""
+        """Apply the current detail level to all span/group/drill state, clearing overrides."""
         session = self.store.get_active_session()
-        if self._detail_level == DetailLevel.OVERVIEW:
+        self._trace_level_state.clear()
+
+        if self._detail_level in (DetailLevel.COMPACT, DetailLevel.SUMMARY):
+            # Spans collapsed, groups collapsed
             if session and session.turns:
                 for start, _end in compute_spans(session.turns):
                     turn_num = session.turns[start].turn_number
@@ -2991,7 +3082,8 @@ class BettyApp(App):
             self._tool_drilled_state.clear()
             self._group_expanded_state.clear()
             self._highlight = None
-        elif self._detail_level == DetailLevel.DEFAULT:
+        elif self._detail_level == DetailLevel.OUTLINE:
+            # Spans expanded, groups collapsed
             if session and session.turns:
                 for start, _end in compute_spans(session.turns):
                     turn_num = session.turns[start].turn_number
@@ -3000,7 +3092,8 @@ class BettyApp(App):
                     turn.expanded = False
             self._group_expanded_state.clear()
             self._tool_drilled_state.clear()
-        elif self._detail_level == DetailLevel.DETAILED:
+        elif self._detail_level == DetailLevel.DETAIL:
+            # Spans expanded, groups expanded
             if session and session.turns:
                 for start, _end in compute_spans(session.turns):
                     turn_num = session.turns[start].turn_number
@@ -3011,16 +3104,16 @@ class BettyApp(App):
         self._refresh_conversation()
         self._refresh_header()
 
-    _DETAIL_LEVELS = [DetailLevel.DEFAULT, DetailLevel.OVERVIEW, DetailLevel.DETAILED]
+    _DETAIL_LEVELS = [DetailLevel.COMPACT, DetailLevel.SUMMARY, DetailLevel.OUTLINE, DetailLevel.DETAIL]
 
     def action_detail_level_next(self) -> None:
-        """Cycle detail level forward: default → overview → detailed → default."""
+        """Cycle global detail level forward: compact → summary → outline → detail → compact."""
         idx = self._DETAIL_LEVELS.index(self._detail_level)
         self._detail_level = self._DETAIL_LEVELS[(idx + 1) % len(self._DETAIL_LEVELS)]
         self._apply_detail_level()
 
     def action_detail_level_prev(self) -> None:
-        """Cycle detail level backward: default → detailed → overview → default."""
+        """Cycle global detail level backward: compact → detail → outline → summary → compact."""
         idx = self._DETAIL_LEVELS.index(self._detail_level)
         self._detail_level = self._DETAIL_LEVELS[(idx - 1) % len(self._DETAIL_LEVELS)]
         self._apply_detail_level()
@@ -3294,7 +3387,7 @@ class BettyApp(App):
             self._auto_scroll = True
             self._group_expanded_state.clear()
             self._span_expanded_state.clear()
-            self._trace_expanded_state.clear()
+            self._trace_level_state.clear()
             self._tool_drilled_state.clear()
             self._highlight = None
             self._refresh_all()

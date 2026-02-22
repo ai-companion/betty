@@ -10,10 +10,25 @@ if TYPE_CHECKING:
 
 
 class DetailLevel(Enum):
-    """Detail level for conversation display."""
-    OVERVIEW = "overview"
-    DEFAULT = "default"
-    DETAILED = "detailed"
+    """Detail level for conversation display (4-level progressive disclosure)."""
+    COMPACT = "compact"    # Level 1: one line per span
+    SUMMARY = "summary"    # Level 2: header + single summary line
+    OUTLINE = "outline"    # Level 3: header + tree of turns
+    DETAIL = "detail"      # Level 4: header + tree with full content
+
+
+def next_detail_level(level: DetailLevel) -> DetailLevel:
+    """Cycle to the next detail level (wraps around)."""
+    levels = list(DetailLevel)
+    idx = levels.index(level)
+    return levels[(idx + 1) % len(levels)]
+
+
+def prev_detail_level(level: DetailLevel) -> DetailLevel:
+    """Cycle to the previous detail level (wraps around)."""
+    levels = list(DetailLevel)
+    idx = levels.index(level)
+    return levels[(idx - 1) % len(levels)]
 
 
 def count_words(text: str) -> int:
@@ -194,6 +209,37 @@ class SpanGroup:
             tool_str = ", ".join(unique[:3]) + ("..." if len(unique) > 3 else "")
             parts.append(f"{len(tool_turns)} tools ({tool_str})")
         return " | ".join(parts) if parts else "no response"
+
+    @property
+    def activity_summary(self) -> str:
+        """Single-line summary for Level 2 (SUMMARY).
+
+        Uses LLM summary if available, otherwise falls back to response_summary.
+        """
+        assistant_turns = [t for t in self.response_turns if t.role == "assistant"]
+        tool_turns = [t for t in self.response_turns if t.role == "tool"]
+
+        # Use first assistant's LLM summary if available
+        summary_text = ""
+        for t in assistant_turns:
+            if t.summary:
+                summary_text = t.summary
+                break
+        if not summary_text and assistant_turns:
+            summary_text = assistant_turns[0].content_preview[:80]
+
+        # Add tool count
+        if tool_turns:
+            names = [t.tool_name or "tool" for t in tool_turns]
+            unique = list(dict.fromkeys(names))
+            tool_str = ", ".join(unique[:4])
+            if len(unique) > 4:
+                tool_str += "..."
+            if summary_text:
+                return f"{summary_text} | {len(tool_turns)} tools ({tool_str})"
+            return f"{len(tool_turns)} tools ({tool_str})"
+
+        return summary_text or "no response"
 
     @property
     def total_turns(self) -> int:
