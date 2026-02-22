@@ -46,7 +46,7 @@ class EventStore:
 
         # Load config and initialize summarizer + agent
         config = load_config()
-        self._agent: Agent | None = Agent(config.agent, llm_config=config.llm) if config.agent.enabled else None
+        self._agent = Agent(config.agent, llm_config=config.llm)
         self._summarizer = Summarizer(
             model=config.llm.model,
             api_base=config.llm.api_base,
@@ -286,7 +286,7 @@ class EventStore:
     @property
     def agent_enabled(self) -> bool:
         """Whether the agent is enabled."""
-        return self._agent is not None
+        return True
 
     def set_active_session(self, index: int) -> bool:
         """Set active session by index (1-based). Returns True if successful."""

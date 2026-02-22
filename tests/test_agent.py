@@ -38,7 +38,7 @@ def _make_session(turns: list[Turn] | None = None, session_id: str = "test") -> 
 
 def _make_agent(tmp_path: Path | None = None) -> Agent:
     """Create an agent with an isolated temp cache to avoid cross-test interference."""
-    agent = Agent(AgentConfig(enabled=True))
+    agent = Agent(AgentConfig())
     if tmp_path is None:
         tmp_path = Path(tempfile.mkdtemp())
     agent._cache = AgentCache(cache_dir=tmp_path)
@@ -267,7 +267,7 @@ class TestMilestone:
 
 class TestObservationLimit:
     def test_max_observations_enforced(self):
-        agent = Agent(AgentConfig(enabled=True, max_observations=5))
+        agent = Agent(AgentConfig(max_observations=5))
         session = _make_session()
 
         now = datetime.now()

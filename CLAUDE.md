@@ -43,11 +43,6 @@ betty config --summary-style explanatory   # Focus on intent and reasoning
 betty config --summary-style default       # Reset to default 1-sentence style
 betty config --summary-prompt "Custom prompt text"  # Fully custom prompt
 
-# Agent configuration (continuous session observer)
-betty config --agent                     # Enable Betty Agent
-betty config --no-agent                  # Disable Betty Agent
-# Alternatively: BETTY_AGENT_ENABLED=true betty
-
 # Test imports
 uv run python -c "from betty import tui_textual, store, models; print('OK')"
 ```
