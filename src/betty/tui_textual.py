@@ -1540,16 +1540,6 @@ class AgentPanel(Static):
             # All expanded → collapse non-essential
             self._collapsed |= non_essential
 
-    def show_disabled(self) -> None:
-        """Show when agent is not enabled."""
-        lines = [
-            "[bold]Betty[/bold]",
-            "",
-            "[dim]Agent not enabled.[/dim]",
-            "[dim]Run: betty config --agent[/dim]",
-        ]
-        self.update(RichText.from_markup("\n".join(lines)))
-
     def show_empty(self) -> None:
         """Show when agent is enabled but no data yet."""
         lines = [
@@ -1744,7 +1734,7 @@ class SessionCard(Static):
     DEFAULT_CSS = """
     SessionCard {
         height: auto;
-        min-height: 5;
+        min-height: 8;
         padding: 1 2;
         border: solid $primary;
         margin: 0;
@@ -1767,10 +1757,11 @@ class SessionCard(Static):
 
     selected: reactive[bool] = reactive(False)
 
-    def __init__(self, session: Session, is_active: bool = False, **kwargs) -> None:
+    def __init__(self, session: Session, is_active: bool = False, agent_report=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.session = session
         self.is_active = is_active
+        self._agent_report = agent_report
 
     def on_mount(self) -> None:
         self._update_content()
@@ -1802,8 +1793,6 @@ class SessionCard(Static):
 
         turn_count = len(session.turns)
         tool_calls = session.total_tool_calls
-        words_in = session.total_input_words
-        words_out = session.total_output_words
         active_marker = " [green]*[/green]" if self.is_active else ""
 
         # Escape Rich markup chars in display name (branch names may contain [])
@@ -1811,9 +1800,42 @@ class SessionCard(Static):
         lines = [
             f"[bold]{safe_name}[/bold]{active_marker}",
             f"[dim]{session.model} | {time_str}[/dim]",
-            f"turns:{turn_count} tools:{tool_calls}",
-            f"[dim]in:{words_in:,} out:{words_out:,}[/dim]",
         ]
+
+        # Goal lines from agent report
+        report = self._agent_report
+        if report:
+            goal = report.goal
+            current = report.current_objective
+            if goal and current and goal != current:
+                lines.append(f"[cyan]Session:[/cyan] {markup_escape(goal[:80])}")
+                lines.append(f"[cyan]Current:[/cyan] {markup_escape(current[:80])}")
+            elif goal:
+                lines.append(f"[cyan]Goal:[/cyan] {markup_escape(goal[:80])}")
+            elif current:
+                lines.append(f"[cyan]Goal:[/cyan] {markup_escape(current[:80])}")
+        else:
+            # Fallback: first user message
+            for turn in session.turns:
+                if turn.role == "user" and turn.content_preview:
+                    preview = turn.content_preview[:80].replace("\n", " ")
+                    lines.append(f"[dim italic]{markup_escape(preview)}[/dim italic]")
+                    break
+
+        # Stats line
+        lines.append(f"turns:{turn_count} tools:{tool_calls}")
+
+        # Last 3 tool turns
+        recent_tools: list[tuple[str, str]] = []
+        for turn in reversed(session.turns):
+            if len(recent_tools) >= 3:
+                break
+            if turn.role == "tool":
+                tool_name = turn.tool_name or "tool"
+                content_preview = (turn.content_preview or "")[:50].replace("\n", " ")
+                recent_tools.append((tool_name, content_preview))
+        for tool_name, content_preview in reversed(recent_tools):
+            lines.append(f"[dim]  {markup_escape(tool_name)} {markup_escape(content_preview)}[/dim]")
 
         self.update(RichText.from_markup("\n".join(lines)))
 
@@ -1842,8 +1864,9 @@ class ManagerView(ScrollableContainer):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, store=None, **kwargs) -> None:
         super().__init__(**kwargs)
+        self._store = store
         self._selected_index: int = 0
         self._session_ids: list[str] = []
         self._refresh_counter: int = 0
@@ -1879,10 +1902,25 @@ class ManagerView(ScrollableContainer):
 
     def refresh_cards(self, sessions: list[Session], active_session_id: str | None) -> None:
         """Rebuild session cards from current sessions."""
+        # Pre-fetch agent reports for all sessions
+        reports: dict[str, object] = {}
+        if self._store:
+            for s in sessions:
+                reports[s.session_id] = self._store.get_agent_report(s.session_id)
+
         # Build a fingerprint of relevant data to skip no-op rebuilds.
         now_minute = int(datetime.now().timestamp() // 60)
+
+        def _report_fingerprint(sid: str) -> str:
+            r = reports.get(sid)
+            if r is None:
+                return ""
+            goal = getattr(r, "goal", None) or ""
+            current = getattr(r, "current_objective", None) or ""
+            return f"{goal[:40]}:{current[:40]}"
+
         snapshot = "|".join(
-            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}:{s.project_path}"
+            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}:{s.project_path}:{_report_fingerprint(s.session_id)}"
             for s in sessions
         ) + f"||{active_session_id}||{now_minute}"
         if snapshot == self._last_snapshot:
@@ -1950,6 +1988,7 @@ class ManagerView(ScrollableContainer):
                 card = SessionCard(
                     session,
                     is_active=is_active,
+                    agent_report=reports.get(session.session_id),
                     id=f"card-{rc}-{card_index}",
                 )
                 card.selected = (card_index == self._selected_index)
@@ -2272,7 +2311,7 @@ class BettyApp(App):
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
         with Horizontal(id="main-content"):
-            yield ManagerView(id="manager-view")
+            yield ManagerView(store=self.store, id="manager-view")
             with Vertical(id="detail-pane"):
                 yield ConversationView(id="conversation")
                 yield TaskListView(id="tasks-view")
@@ -3324,10 +3363,6 @@ class BettyApp(App):
             return
 
         panel.add_class("visible")
-
-        if not self.store.agent_enabled:
-            panel.show_disabled()
-            return
 
         session = self.store.get_active_session()
         if not session:

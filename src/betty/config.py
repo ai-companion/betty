@@ -54,7 +54,6 @@ class SummaryConfig:
 class AgentConfig:
     """Configuration for Betty Agent (continuous observer)."""
 
-    enabled: bool = False           # Off by default (opt-in)
     update_interval: int = 5        # Min turns between LLM updates
     max_observations: int = 50      # Max observations per session
 
@@ -256,7 +255,6 @@ def load_config() -> Config:
         agent_data = data.get("agent", {})
         if agent_data:
             agent_config = AgentConfig(
-                enabled=agent_data.get("enabled", False),
                 update_interval=agent_data.get("update_interval", 5),
                 max_observations=agent_data.get("max_observations", 50),
             )
@@ -274,10 +272,6 @@ def load_config() -> Config:
     manager_open_mode_env = os.getenv("BETTY_MANAGER_OPEN_MODE")
     if manager_open_mode_env is not None and manager_open_mode_env in ("swap", "expand", "auto"):
         manager_open_mode = manager_open_mode_env
-
-    agent_enabled_env = os.getenv("BETTY_AGENT_ENABLED")
-    if agent_enabled_env is not None:
-        agent_config.enabled = agent_enabled_env.lower() in ("true", "1", "yes")
 
     summary_style_env = os.getenv("BETTY_SUMMARY_STYLE")
     if summary_style_env is not None:
@@ -331,7 +325,6 @@ def save_config(config: Config) -> None:
     default_agent = AgentConfig()
     if config.agent != default_agent:
         data["agent"] = {
-            "enabled": config.agent.enabled,
             "update_interval": config.agent.update_interval,
             "max_observations": config.agent.max_observations,
         }
