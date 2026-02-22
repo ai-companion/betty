@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime
 
-from betty.models import Session, Turn, ToolGroup, SpanGroup, compute_spans
+from betty.models import Session, Turn, ToolGroup, SpanGroup, DetailLevel, compute_spans
 from betty.store import EventStore
 from betty.tui_textual import (
     BettyApp,
@@ -46,11 +46,13 @@ def _make_session() -> Session:
     return session
 
 
-def _make_app(session: Session) -> BettyApp:
+def _make_app(session: Session, detail_level: DetailLevel = DetailLevel.SUMMARY) -> BettyApp:
     store = EventStore(enable_notifications=False)
     store._sessions[session.session_id] = session
     store._active_session_id = session.session_id
-    return BettyApp(store=store, collapse_tools=True, ui_style="rich")
+    app = BettyApp(store=store, collapse_tools=True, ui_style="rich")
+    app._detail_level = detail_level
+    return app
 
 
 def _widgets(app: BettyApp):
@@ -62,12 +64,32 @@ def _widgets(app: BettyApp):
 
 
 @pytest.mark.asyncio
-async def test_initial_view_shows_expanded_turns():
-    """Default view: all spans expanded, tools grouped."""
+async def test_initial_view_shows_collapsed_spans():
+    """Default SUMMARY view: all spans collapsed as SpanGroupWidgets."""
     session = _make_session()
     app = _make_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        widgets = _widgets(app)
+
+        # SUMMARY level: 2 collapsed SpanGroupWidgets
+        assert len(widgets) == 2, f"Expected 2 widgets, got {len(widgets)}: {[type(w).__name__ for w in widgets]}"
+        assert isinstance(widgets[0], SpanGroupWidget)
+        assert isinstance(widgets[1], SpanGroupWidget)
+
+
+@pytest.mark.asyncio
+async def test_outline_view_shows_expanded_turns():
+    """OUTLINE view: all spans expanded, tools grouped."""
+    session = _make_session()
+    app = _make_app(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        # Set detail level to OUTLINE (matches old DEFAULT behavior)
+        app._detail_level = DetailLevel.OUTLINE
+        app._apply_detail_level()
         await pilot.pause()
         widgets = _widgets(app)
 
@@ -86,7 +108,7 @@ async def test_initial_view_shows_expanded_turns():
 async def test_drill_out_highlights_span():
     """] on a turn highlights the parent span (all siblings selected)."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -114,7 +136,7 @@ async def test_drill_out_highlights_span():
 async def test_drill_out_noop_when_highlighted():
     """] is a no-op when already highlighting."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -135,7 +157,7 @@ async def test_drill_out_noop_when_highlighted():
 async def test_drill_in_clears_highlight():
     """[ clears the highlight when one is active."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -160,7 +182,7 @@ async def test_drill_in_clears_highlight():
 async def test_enter_collapses_highlighted_span():
     """Enter while span is highlighted collapses it into SpanGroup."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -187,7 +209,7 @@ async def test_enter_collapses_highlighted_span():
 async def test_bracket_expands_span_group_no_highlight():
     """[ on a SpanGroupWidget expands it, cursor on first child, no highlight."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -220,7 +242,7 @@ async def test_bracket_expands_span_group_no_highlight():
 async def test_enter_expands_span_group_with_highlight():
     """Enter on a SpanGroupWidget expands it and auto-highlights the span."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -254,7 +276,7 @@ async def test_enter_expands_span_group_with_highlight():
 async def test_jk_clears_highlight():
     """j/k movement clears any active highlight."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -274,7 +296,7 @@ async def test_jk_clears_highlight():
 async def test_escape_clears_highlight():
     """Escape clears highlight."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -294,7 +316,7 @@ async def test_escape_clears_highlight():
 async def test_drill_out_on_tool_group_highlights_span():
     """] on a ToolGroupWidget highlights the parent span."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -321,7 +343,7 @@ async def test_drill_out_on_tool_group_highlights_span():
 async def test_drill_in_tool_group():
     """[ on a ToolGroupWidget drills into individual tool turns."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -345,7 +367,7 @@ async def test_drill_in_tool_group():
 async def test_drill_out_tool_turn_undrills():
     """] on a drilled tool turn undrills back to ToolGroup."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -372,7 +394,7 @@ async def test_drill_out_tool_turn_undrills():
 async def test_enter_toggles_tool_group_expand():
     """Enter on a ToolGroupWidget toggles its expanded state."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -396,7 +418,7 @@ async def test_enter_toggles_tool_group_expand():
 async def test_full_round_trip():
     """Full flow: drill tools, highlight span, collapse, expand back."""
     session = _make_session()
-    app = _make_app(session)
+    app = _make_app(session, detail_level=DetailLevel.OUTLINE)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
