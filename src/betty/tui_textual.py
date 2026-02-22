@@ -23,7 +23,6 @@ from textual.widgets import Static, Footer, Input, Label
 from .alerts import Alert, AlertLevel
 from .export import export_session_markdown, get_export_filename
 from .models import Session, Turn, ToolGroup, SpanGroup, DetailLevel, compute_spans
-from .pricing import get_pricing, estimate_cost
 
 if TYPE_CHECKING:
     from .github import PRInfo
@@ -1375,166 +1374,6 @@ class AgentPanel(Static):
         self.update(RichText.from_markup("\n".join(lines)))
 
 
-class AnalysisPanel(Static):
-    """Right-side panel for displaying turn analysis results."""
-
-    DEFAULT_CSS = """
-    AnalysisPanel {
-        dock: right;
-        width: 40;
-        height: 1fr;
-        display: none;
-        border: solid $success;
-        padding: 1 2;
-        overflow-y: auto;
-    }
-
-    AnalysisPanel.visible {
-        display: block;
-    }
-    """
-
-    def show_empty(self) -> None:
-        """Display an empty state placeholder when no analysis is available."""
-        lines = [
-            "[bold]Analysis[/bold]\n",
-            "[dim]No analysis for this selection.[/dim]",
-            "[dim]Press A to analyze.[/dim]",
-        ]
-        self.update(RichText.from_markup("\n".join(lines)))
-
-    def update_analysis(self, turn: Turn, analysis, label: str = "") -> None:
-        """Update the panel with analysis for the given turn."""
-        color = "#5fd787" if analysis.sentiment == "progress" else (
-            "#ffaf00" if analysis.sentiment == "concern" else "#ff5f5f"
-        )
-        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(
-            analysis.sentiment, "?"
-        )
-
-        role = turn.role.capitalize()
-        header_label = label or f"Turn {turn.turn_number}"
-        summary = markup_escape(analysis.summary)
-        critique = markup_escape(analysis.critique)
-
-        lines = [
-            f"[bold]Analysis[/bold]  [dim]{header_label} · {role}[/dim]\n",
-            f"[{color}]{indicator} Sentiment: {analysis.sentiment}[/{color}]\n",
-            f"[bold]Summary[/bold]\n{summary}\n",
-            f"[bold]Critique[/bold]\n{critique}\n",
-            f"[dim]Turn words: {analysis.word_count:,}[/dim]",
-            f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
-        ]
-
-        if turn.input_tokens is not None:
-            token_line = f"[dim]Tokens: {turn.input_tokens:,} in / {turn.output_tokens or 0:,} out[/dim]"
-            lines.append(token_line)
-            # Cost for this turn
-            if turn.model_id:
-                pricing = get_pricing(turn.model_id)
-                if pricing:
-                    cost = estimate_cost(
-                        turn.input_tokens or 0,
-                        turn.output_tokens or 0,
-                        turn.cache_creation_tokens or 0,
-                        turn.cache_read_tokens or 0,
-                        pricing,
-                    )
-                    lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
-
-        self._append_goal_sources(lines, analysis)
-        self.update(RichText.from_markup("\n".join(lines)))
-
-    def update_range_analysis(self, turns: list[Turn], analysis, label: str) -> None:
-        """Update panel for multi-turn range analysis."""
-        color = "#5fd787" if analysis.sentiment == "progress" else (
-            "#ffaf00" if analysis.sentiment == "concern" else "#ff5f5f"
-        )
-        indicator = {"progress": "✓", "concern": "⚠", "critical": "✗"}.get(
-            analysis.sentiment, "?"
-        )
-
-        total_words = sum(t.word_count for t in turns)
-        summary = markup_escape(analysis.summary)
-        critique = markup_escape(analysis.critique)
-
-        lines = [
-            f"[bold]Analysis[/bold]  [dim]{label} · {len(turns)} turns[/dim]\n",
-            f"[{color}]{indicator} Sentiment: {analysis.sentiment}[/{color}]\n",
-            f"[bold]Summary[/bold]\n{summary}\n",
-            f"[bold]Critique[/bold]\n{critique}\n",
-            f"[dim]Total words: {total_words:,}[/dim]",
-            f"[dim]Context words: {analysis.context_word_count:,}[/dim]",
-        ]
-
-        # Show token totals and cost if any turns have token data
-        has_tokens = any(t.input_tokens is not None for t in turns)
-        if has_tokens:
-            total_in = sum(t.input_tokens or 0 for t in turns)
-            total_out = sum(t.output_tokens or 0 for t in turns)
-            total_cache_create = sum(t.cache_creation_tokens or 0 for t in turns)
-            total_cache_read = sum(t.cache_read_tokens or 0 for t in turns)
-            lines.append(f"[dim]Tokens: {total_in:,} in / {total_out:,} out[/dim]")
-
-            # Find model from first turn with model_id
-            model_id = next((t.model_id for t in turns if t.model_id), None)
-            if model_id:
-                pricing = get_pricing(model_id)
-                if pricing:
-                    cost = estimate_cost(
-                        total_in, total_out, total_cache_create, total_cache_read, pricing,
-                    )
-                    lines.append(f"[dim]Cost: ${cost:.4f}[/dim]")
-
-        self._append_goal_sources(lines, analysis)
-        self.update(RichText.from_markup("\n".join(lines)))
-
-    def _append_goal_sources(self, lines: list[str], analysis) -> None:
-        """Append goal and objective information to display lines."""
-        goal_sources = getattr(analysis, "goal_sources", None)
-        synthesized_goal = getattr(analysis, "synthesized_goal", None)
-        local_goal = getattr(analysis, "local_goal", None)
-
-        has_content = goal_sources or synthesized_goal or local_goal
-        if not has_content:
-            return
-
-        lines.append("")
-
-        # Session Goal: synthesized if available, otherwise first user request
-        if synthesized_goal:
-            lines.append(
-                f"[bold]Session Goal[/bold]\n[dim]{markup_escape(synthesized_goal)}[/dim]"
-            )
-        elif goal_sources:
-            user_sources = [s for s in goal_sources if s.source_type == "user_request"]
-            if user_sources and user_sources[0].content != "[No user message found]":
-                preview = user_sources[0].content[:200].replace("\n", " ")
-                if len(user_sources[0].content) > 200:
-                    preview += "..."
-                lines.append(
-                    f"[bold]Session Goal[/bold]\n[dim]{markup_escape(preview)}[/dim]"
-                )
-
-        # Current Objective (local goal)
-        if local_goal:
-            lines.append(
-                f"[bold]Current Objective[/bold]\n[dim]{markup_escape(local_goal)}[/dim]"
-            )
-
-        # Detailed goal sources (when available)
-        if goal_sources:
-            lines.append(f"[bold]Goal Sources[/bold] ({len(goal_sources)})")
-            for gs in goal_sources:
-                indicator = "" if gs.fresh else " [dim italic](stale)[/dim italic]"
-                preview = gs.content[:80].replace("\n", " ")
-                if len(gs.content) > 80:
-                    preview += "..."
-                lines.append(
-                    f"  [dim]{markup_escape(gs.label)}{indicator}: {markup_escape(preview)}[/dim]"
-                )
-
-
 class ProjectGroupHeader(Static):
     """Header widget for a project group in the manager view."""
 
@@ -1996,10 +1835,8 @@ class BettyApp(App):
         Binding("a", "toggle_alerts", "Alerts", show=False),
         Binding("s", "toggle_summary", "Summary", show=False),
         Binding("S", "summarize_all", "Summarize All", show=False),
-        Binding("A", "analyze_turn", "Analyze", show=False),
         Binding("]", "drill_out", "Drill Out", show=False),
         Binding("[", "drill_in", "Drill In", show=False),
-        Binding("I", "toggle_analysis_panel", "Insights", show=False),
         Binding("B", "toggle_agent_panel", "Agent", show=False),
         Binding("D", "delete_session", "Delete", show=False),
         Binding("M", "toggle_manager", "Manager", show=False),
@@ -2086,7 +1923,6 @@ class BettyApp(App):
         self._refresh_counter: int = 0  # Used to generate unique widget IDs
         self._annotating_turn_number: int | None = None  # Turn being annotated
         self._annotating_scroll_y: float = 0  # Scroll position before annotating
-        self._show_analysis_panel: bool = False
         self._show_agent_panel: bool = False
 
     def _resolve_open_mode(self) -> str:
@@ -2104,7 +1940,6 @@ class BettyApp(App):
                 yield TaskListView(id="tasks-view")
                 yield PlanView(id="plan-view")
         yield AgentPanel(id="agent-panel")
-        yield AnalysisPanel(id="analysis-panel")
         yield AlertsPanel(id="alerts")
         yield InputPanel(id="inputs")
         yield Footer()
@@ -2143,14 +1978,12 @@ class BettyApp(App):
             self._refresh_conversation()
             if self._auto_scroll:
                 self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
-            self._refresh_analysis_panel()
         elif self._manager_view_active:
             self._refresh_manager()
         else:
             self._refresh_conversation()
             if self._auto_scroll:
                 self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
-            self._refresh_analysis_panel()
         self._refresh_agent_panel()
 
     @on(AlertAdded)
@@ -2390,70 +2223,6 @@ class BettyApp(App):
         if self._show_plan and not self._manager_view_active:
             plan_view.update_plan(session)
 
-    def _refresh_analysis_panel(self) -> None:
-        """Update the analysis panel based on toggle state and current selection."""
-        panel = self.query_one("#analysis-panel", AnalysisPanel)
-
-        if not self._show_analysis_panel:
-            panel.remove_class("visible")
-            return
-
-        panel.add_class("visible")
-
-        conversation = self.query_one("#conversation", ConversationView)
-        index = conversation.get_selected_index()
-
-        if index is None:
-            panel.show_empty()
-            return
-
-        result = self._get_analysis_turn_range()
-        if result is None:
-            panel.show_empty()
-            return
-
-        turns, label = result
-
-        if len(turns) == 1 and turns[0].analysis:
-            panel.update_analysis(turns[0], turns[0].analysis, label)
-        elif len(turns) > 1:
-            range_key = (turns[0].turn_number, turns[-1].turn_number)
-            range_analysis = self.store.get_range_analysis(range_key)
-            if range_analysis:
-                panel.update_range_analysis(turns, range_analysis, label)
-            else:
-                panel.show_empty()
-        else:
-            panel.show_empty()
-
-    def _get_analysis_turn_range(self) -> tuple[list[Turn], str] | None:
-        """Get turns and label for the currently selected widget.
-
-        Returns:
-            (turns_in_range, label) or None if no selection
-        """
-        conversation = self.query_one("#conversation", ConversationView)
-        index = conversation.get_selected_index()
-        if index is None:
-            return None
-
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
-        if not (0 <= index < len(widgets)):
-            return None
-
-        widget = widgets[index]
-        if isinstance(widget, TurnWidget):
-            return [widget.turn], f"Turn {widget.turn.turn_number}"
-        elif isinstance(widget, ToolGroupWidget):
-            turns = list(widget.group.tool_turns)
-            return turns, f"Tool group ({len(turns)} tools)"
-        elif isinstance(widget, SpanGroupWidget):
-            sg = widget.group
-            turns = ([sg.user_turn] if sg.user_turn else []) + list(sg.response_turns)
-            return turns, f"Span ({len(turns)} turns)"
-
-        return None
-
     def action_drill_in(self) -> None:
         """Drill in: clear highlight, expand SpanGroup, or drill into ToolGroup."""
         # If anything is highlighted, clear it
@@ -2618,74 +2387,6 @@ class BettyApp(App):
                 conversation.scroll_to_selected()
             conversation.call_after_refresh(_apply_selection)
 
-    def action_zoom_out(self) -> None:
-        """Zoom out analysis level: turn → span → span±1 → ... → session."""
-        conversation = self.query_one("#conversation", ConversationView)
-        if conversation.get_selected_index() is None:
-            return
-
-        session = self.store.get_active_session()
-        if not session or not session.turns:
-            return
-
-        spans = compute_spans(session.turns)
-        max_radius = len(spans) - 1  # Max meaningful radius
-
-        if self._analysis_level == "turn":
-            self._analysis_level = "span"
-            self._analysis_radius = 0
-        elif self._analysis_level in ("span",):
-            self._analysis_radius += 1
-            # Check if radius covers all spans
-            if self._analysis_radius >= max_radius:
-                self._analysis_level = "session"
-                self._analysis_radius = 0
-        elif self._analysis_level == "session":
-            return  # Already at max
-
-        self._update_span_highlighting()
-        if self._show_analysis_panel:
-            self._refresh_analysis_panel()
-        # Show level label
-        result = self._get_analysis_turn_range()
-        if result:
-            _, label = result
-            self._show_status(f"Analysis level: {label}")
-
-    def action_zoom_in(self) -> None:
-        """Zoom in analysis level: session → span±N → span → turn."""
-        conversation = self.query_one("#conversation", ConversationView)
-        if conversation.get_selected_index() is None:
-            return
-
-        if self._analysis_level == "session":
-            session = self.store.get_active_session()
-            if session and session.turns:
-                spans = compute_spans(session.turns)
-                # Set to max non-session radius
-                self._analysis_level = "span"
-                self._analysis_radius = max(0, len(spans) - 2)
-            else:
-                self._analysis_level = "turn"
-                self._analysis_radius = 0
-        elif self._analysis_level == "span":
-            if self._analysis_radius > 0:
-                self._analysis_radius -= 1
-            else:
-                self._analysis_level = "turn"
-                self._analysis_radius = 0
-        elif self._analysis_level == "turn":
-            return  # Already at min
-
-        self._update_span_highlighting()
-        if self._show_analysis_panel:
-            self._refresh_analysis_panel()
-        # Show level label
-        result = self._get_analysis_turn_range()
-        if result:
-            _, label = result
-            self._show_status(f"Analysis level: {label}")
-
     def _refresh_manager(self) -> None:
         """Refresh the manager view with current sessions."""
         if not self._manager_view_active:
@@ -2773,7 +2474,7 @@ class BettyApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
-        self._refresh_analysis_panel()
+
 
     def _nav_conversation_up(self) -> None:
         """Navigate up in conversation view."""
@@ -2793,7 +2494,7 @@ class BettyApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
-        self._refresh_analysis_panel()
+
 
     def action_nav_down(self) -> None:
         """Navigate down in conversation or manager grid."""
@@ -2870,7 +2571,7 @@ class BettyApp(App):
         if widgets:
             conversation.set_selected_index(0)
             conversation.scroll_home()
-        self._refresh_analysis_panel()
+
 
     def action_go_bottom(self) -> None:
         """Go to bottom of conversation or manager grid."""
@@ -2893,7 +2594,7 @@ class BettyApp(App):
         if widgets:
             conversation.set_selected_index(len(widgets) - 1)
             conversation.scroll_end()
-        self._refresh_analysis_panel()
+
 
     def action_toggle_expand(self) -> None:
         """Toggle expand on selected item, or open session in manager view."""
@@ -3178,51 +2879,6 @@ class BettyApp(App):
         else:
             self._show_status("No historical turns need summarization")
 
-    def action_analyze_turn(self) -> None:
-        """Analyze the selected turn or range."""
-        conversation = self.query_one("#conversation", ConversationView)
-        index = conversation.get_selected_index()
-        if index is None:
-            self._show_status("Select a turn first (j/k to navigate)")
-            return
-
-        result = self._get_analysis_turn_range()
-        if result is None:
-            return
-
-        turns, label = result
-
-        if len(turns) == 1:
-            # Single-turn analysis
-            turn = turns[0]
-            submitted = self.store.analyze_turn(turn)
-            if submitted:
-                self._show_status(f"Analyzing {label}...")
-            else:
-                if turn.analysis and not turn.analysis.summary.startswith("["):
-                    self._show_status(f"{label} already analyzed")
-                    self._refresh_conversation()
-                else:
-                    self._show_status(f"Analysis loaded for {label}")
-                    self._refresh_conversation()
-        else:
-            # Multi-turn range analysis
-            submitted = self.store.analyze_range(turns)
-            if submitted:
-                self._show_status(f"Analyzing {label}...")
-            else:
-                self._show_status(f"Analysis loaded for {label}")
-
-        self._show_analysis_panel = True
-        self._refresh_analysis_panel()
-
-    def action_toggle_analysis_panel(self) -> None:
-        """Toggle the insights panel on/off."""
-        self._show_analysis_panel = not self._show_analysis_panel
-        self._refresh_analysis_panel()
-        label = "shown" if self._show_analysis_panel else "hidden"
-        self._show_status(f"Insights panel {label}")
-
     def action_toggle_agent_panel(self) -> None:
         """Cycle the Betty Agent panel: closed → full → compact → closed."""
         try:
@@ -3345,11 +3001,6 @@ class BettyApp(App):
             self._clear_highlight()
             return
 
-        # Close analysis panel first
-        if self._show_analysis_panel:
-            self._show_analysis_panel = False
-            self._refresh_analysis_panel()
-            return
         # Always close tasks/plan overlays first, regardless of mode
         if self._show_tasks:
             self._show_tasks = False
@@ -3374,7 +3025,7 @@ class BettyApp(App):
         # Clear selection
         conversation = self.query_one("#conversation", ConversationView)
         conversation.set_selected_index(None)
-        self._refresh_analysis_panel()
+
 
     def _select_session(self, index: int) -> None:
         """Select session by index (1-based)."""
@@ -3385,9 +3036,8 @@ class BettyApp(App):
             self._span_expanded_state.clear()
             self._tool_drilled_state.clear()
             self._highlight = None
-            self.store.clear_range_analyses()
             self._refresh_all()
-            self._refresh_analysis_panel()
+
 
     def _toggle_agent_section(self, index: int) -> bool:
         """Toggle agent panel section by 1-based index. Returns True if handled."""
