@@ -997,61 +997,31 @@ class TraceSpanWidget(Static):
         else:  # OUTLINE or DETAIL
             return "▼"
 
-    def _build_child_lines(self) -> list[tuple[str, str]]:
-        """Build child lines for OUTLINE level — groups consecutive tools.
+    def _group_response_into_blocks(self) -> list[tuple["Turn | None", list["Turn"]]]:
+        """Group response turns into (assistant_turn, [tool_turns]) blocks.
 
-        Returns list of (role, text) where role is 'assistant' or 'tool'.
+        Each assistant turn and its subsequent tool turns form a block.
+        Tool turns before any assistant form a block with None.
         """
-        lines: list[tuple[str, str]] = []
-        tool_buffer: list[Turn] = []
+        blocks: list[tuple[Turn | None, list[Turn]]] = []
+        current_assistant: Turn | None = None
+        current_tools: list[Turn] = []
 
-        def flush_tools():
-            nonlocal tool_buffer
-            if not tool_buffer:
-                return
-            if len(tool_buffer) == 1:
-                t = tool_buffer[0]
-                text = t.summary or t.content_preview[:80]
-                lines.append(("tool", text))
-            else:
-                names = [t.tool_name or "tool" for t in tool_buffer]
-                unique = list(dict.fromkeys(names))
-                text = ", ".join(unique[:4])
-                if len(unique) > 4:
-                    text += "..."
-                lines.append(("tool", text))
-            tool_buffer = []
-
-        for turn in self.group.response_turns:
-            if turn.role == "tool":
-                tool_buffer.append(turn)
-            else:
-                flush_tools()
-                text = turn.summary or turn.content_preview[:80]
-                if not turn.summary and turn.content_preview:
-                    text = turn.content_preview[:80]
-                lines.append(("assistant", text))
-
-        flush_tools()
-        return lines
-
-    def _build_detail_lines(self) -> list[tuple[str, str]]:
-        """Build child lines for DETAIL level — each turn individually with fuller content.
-
-        Returns list of (role, text) where role is 'assistant' or 'tool'.
-        """
-        lines: list[tuple[str, str]] = []
         for turn in self.group.response_turns:
             if turn.role == "assistant":
-                text = turn.content_full[:200]
-                if len(turn.content_full) > 200:
-                    text += "..."
-                lines.append(("assistant", text))
-            elif turn.role == "tool":
-                name = turn.tool_name or "tool"
-                text = f"[{name}] {turn.content_preview}"
-                lines.append(("tool", text))
-        return lines
+                # Flush previous block
+                if current_assistant is not None or current_tools:
+                    blocks.append((current_assistant, current_tools))
+                current_assistant = turn
+                current_tools = []
+            else:
+                current_tools.append(turn)
+
+        # Flush last block
+        if current_assistant is not None or current_tools:
+            blocks.append((current_assistant, current_tools))
+
+        return blocks
 
     def _render_rich_style(self):
         parts = []
@@ -1081,21 +1051,50 @@ class TraceSpanWidget(Static):
             parts.append(RichText(f" └─ 🤖 {summary}", style=""))
 
         else:
-            # Level 3 (OUTLINE) and Level 4 (DETAIL): header + tree
+            # Level 3 (OUTLINE) and Level 4 (DETAIL): header + nested tree
             user_label = self._get_user_label()
             header = f"{select_prefix} {arrow} {user_label}"
             if tok_label:
                 header += f"  {tok_label}"
             parts.append(RichText.from_markup(f"[bold]{markup_escape(header)}[/bold]"))
 
-            child_lines = self._build_detail_lines() if level == DetailLevel.DETAIL else self._build_child_lines()
-            for i, (role, text) in enumerate(child_lines):
-                is_last = (i == len(child_lines) - 1)
-                connector = "└─" if is_last else "├─"
-                icon = self.ROLE_ICONS.get("assistant", "🤖") if role == "assistant" else "🔧"
-                line = f" {connector} {icon} {text}"
-                style = "dim" if role == "tool" else ""
-                parts.append(RichText(line, style=style))
+            blocks = self._group_response_into_blocks()
+            for bi, (asst, tools) in enumerate(blocks):
+                is_last_block = (bi == len(blocks) - 1)
+                block_connector = "└─" if is_last_block else "├─"
+                continuation = "   " if is_last_block else "│  "
+
+                # Render assistant at depth 1
+                if asst:
+                    if level == DetailLevel.DETAIL:
+                        text = asst.content_full[:200]
+                        if len(asst.content_full) > 200:
+                            text += "..."
+                    else:
+                        text = asst.summary or asst.content_preview[:80]
+                    parts.append(RichText(f" {block_connector} 🤖 {text}"))
+                else:
+                    # Orphan tools block (tools before first assistant)
+                    parts.append(RichText(f" {block_connector} 🔧 (tools)"))
+
+                # Render tools at depth 2
+                if tools:
+                    if level == DetailLevel.OUTLINE:
+                        # Grouped: single sub-child with tool names
+                        names = [t.tool_name or "tool" for t in tools]
+                        unique = list(dict.fromkeys(names))
+                        tool_text = ", ".join(unique[:4]) + ("..." if len(unique) > 4 else "")
+                        parts.append(RichText(f" {continuation}└─ 🔧 {tool_text}", style="dim"))
+                    else:
+                        # Detail: individual tool lines with content as sub-child
+                        for ti, tool in enumerate(tools):
+                            is_last_tool = (ti == len(tools) - 1)
+                            tool_connector = "└─" if is_last_tool else "├─"
+                            tool_continuation = "   " if is_last_tool else "│  "
+                            name = tool.tool_name or "tool"
+                            parts.append(RichText(f" {continuation}{tool_connector} 🔧 {name}", style="dim"))
+                            if tool.content_preview:
+                                parts.append(RichText(f" {continuation}{tool_continuation}└─ {tool.content_preview}", style="dim"))
 
         return RichGroup(*parts)
 
@@ -1149,7 +1148,7 @@ class TraceSpanWidget(Static):
             parts.append(child_row)
 
         else:
-            # Level 3 (OUTLINE) and Level 4 (DETAIL): header + tree
+            # Level 3 (OUTLINE) and Level 4 (DETAIL): header + nested tree
             user_label = self._get_user_label()
             row = Table.grid(padding=(0, 0))
             row.add_column(width=3)
@@ -1162,25 +1161,82 @@ class TraceSpanWidget(Static):
             row.add_row(RichText("   ", style="dim"), header_text)
             parts.append(row)
 
-            child_lines = self._build_detail_lines() if level == DetailLevel.DETAIL else self._build_child_lines()
-            for i, (role, text) in enumerate(child_lines):
-                is_last = (i == len(child_lines) - 1)
-                connector = "└─" if is_last else "├─"
+            blocks = self._group_response_into_blocks()
+            for bi, (asst, tools) in enumerate(blocks):
+                is_last_block = (bi == len(blocks) - 1)
+                block_connector = "└─" if is_last_block else "├─"
+                continuation = "   " if is_last_block else "│  "
 
-                if role == "assistant":
+                # Render assistant at depth 1
+                if asst:
+                    if level == DetailLevel.DETAIL:
+                        text = asst.content_full[:200]
+                        if len(asst.content_full) > 200:
+                            text += "..."
+                    else:
+                        text = asst.summary or asst.content_preview[:80]
                     bullet_style = selected_style or "white"
                 else:
+                    # Orphan tools block
+                    text = "(tools)"
                     bullet_style = selected_style or "#5fd787"
 
                 child_row = Table.grid(padding=(0, 0))
                 child_row.add_column(width=3)
                 child_row.add_column()
                 line_text = RichText()
-                line_text.append(f"{connector} ", style="dim")
+                line_text.append(f"{block_connector} ", style="dim")
                 line_text.append(f"{self.BULLET} ", style=bullet_style)
-                line_text.append(text, style=selected_style or ("dim" if role == "tool" else ""))
+                line_text.append(text, style=selected_style or "")
                 child_row.add_row(RichText(" ", style="dim"), line_text)
                 parts.append(child_row)
+
+                # Render tools at depth 2
+                if tools:
+                    if level == DetailLevel.OUTLINE:
+                        # Grouped: single sub-child with tool names
+                        names = [t.tool_name or "tool" for t in tools]
+                        unique = list(dict.fromkeys(names))
+                        tool_text = ", ".join(unique[:4]) + ("..." if len(unique) > 4 else "")
+
+                        tool_row = Table.grid(padding=(0, 0))
+                        tool_row.add_column(width=3)
+                        tool_row.add_column()
+                        tline = RichText()
+                        tline.append(f"{continuation}└─ ", style="dim")
+                        tline.append(f"{self.BULLET} ", style=selected_style or "#5fd787")
+                        tline.append(tool_text, style=selected_style or "dim")
+                        tool_row.add_row(RichText(" ", style="dim"), tline)
+                        parts.append(tool_row)
+                    else:
+                        # Detail: individual tool lines with content as sub-child
+                        for ti, tool in enumerate(tools):
+                            is_last_tool = (ti == len(tools) - 1)
+                            tool_connector = "└─" if is_last_tool else "├─"
+                            tool_continuation = "   " if is_last_tool else "│  "
+                            name = tool.tool_name or "tool"
+
+                            # Tool name at depth 2
+                            tool_row = Table.grid(padding=(0, 0))
+                            tool_row.add_column(width=3)
+                            tool_row.add_column()
+                            tline = RichText()
+                            tline.append(f"{continuation}{tool_connector} ", style="dim")
+                            tline.append(f"{self.BULLET} ", style=selected_style or "#5fd787")
+                            tline.append(name, style=selected_style or "dim")
+                            tool_row.add_row(RichText(" ", style="dim"), tline)
+                            parts.append(tool_row)
+
+                            # Tool content at depth 3
+                            if tool.content_preview:
+                                detail_row = Table.grid(padding=(0, 0))
+                                detail_row.add_column(width=3)
+                                detail_row.add_column()
+                                dline = RichText()
+                                dline.append(f"{continuation}{tool_continuation}└─ ", style="dim")
+                                dline.append(tool.content_preview, style=selected_style or "dim")
+                                detail_row.add_row(RichText(" ", style="dim"), dline)
+                                parts.append(detail_row)
 
         return RichGroup(*parts)
 
