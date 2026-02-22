@@ -1825,17 +1825,13 @@ class SessionCard(Static):
         # Stats line
         lines.append(f"turns:{turn_count} tools:{tool_calls}")
 
-        # Last 3 tool turns
-        recent_tools: list[tuple[str, str]] = []
-        for turn in reversed(session.turns):
-            if len(recent_tools) >= 3:
-                break
-            if turn.role == "tool":
-                tool_name = turn.tool_name or "tool"
-                content_preview = (turn.content_preview or "")[:50].replace("\n", " ")
-                recent_tools.append((tool_name, content_preview))
-        for tool_name, content_preview in reversed(recent_tools):
-            lines.append(f"[dim]  {markup_escape(tool_name)} {markup_escape(content_preview)}[/dim]")
+        # Narrative from agent report (situation summary)
+        if report and report.narrative:
+            # Truncate to ~120 chars and clean up
+            narrative = report.narrative[:120].replace("\n", " ")
+            if len(report.narrative) > 120:
+                narrative += "..."
+            lines.append(f"[dim]{markup_escape(narrative)}[/dim]")
 
         self.update(RichText.from_markup("\n".join(lines)))
 
@@ -1917,7 +1913,8 @@ class ManagerView(ScrollableContainer):
                 return ""
             goal = getattr(r, "goal", None) or ""
             current = getattr(r, "current_objective", None) or ""
-            return f"{goal[:40]}:{current[:40]}"
+            narrative = getattr(r, "narrative", None) or ""
+            return f"{goal[:40]}:{current[:40]}:{narrative[:40]}"
 
         snapshot = "|".join(
             f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}:{s.project_path}:{_report_fingerprint(s.session_id)}"

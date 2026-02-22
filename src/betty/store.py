@@ -855,6 +855,14 @@ class EventStore:
                 content, plan_path = plan_info
                 self._on_plan_update(session_id, content, plan_path)
 
+            # Feed historical turns to agent so goals and narrative are populated
+            if self._agent:
+                for turn in transcript_turns:
+                    try:
+                        self._agent.on_turn(turn, session)
+                    except Exception:
+                        pass
+
             # Apply cached summaries or submit for summarization
             for turn in transcript_turns:
                 # Summarize tools before user or assistant turns
