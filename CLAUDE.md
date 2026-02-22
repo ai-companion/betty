@@ -21,7 +21,7 @@ betty --worktree     # Watch git worktrees of current repo
 # Run with uv (no install needed)
 uv run betty
 
-# LLM configuration (for summarization and analysis)
+# LLM configuration (for summarization)
 betty config --show                    # Show current config
 betty config --llm-preset lm-studio    # Use LM Studio preset
 betty config --llm-preset ollama       # Use Ollama preset
@@ -48,11 +48,6 @@ betty config --agent                     # Enable Betty Agent
 betty config --no-agent                  # Disable Betty Agent
 # Alternatively: BETTY_AGENT_ENABLED=true betty
 
-# Analyzer configuration (for on-demand analysis)
-betty config --analyzer-budget N         # Set context budget in chars
-betty config --analyzer-small-range N    # Max turns for small range
-betty config --analyzer-large-range N    # Min turns for large range
-
 # Test imports
 uv run python -c "from betty import tui_textual, store, models; print('OK')"
 ```
@@ -70,7 +65,7 @@ uv run python -c "from betty import tui_textual, store, models; print('OK')"
 ### Key Components
 
 - **`tui_textual.py`** - Main Textual-based TUI: session detail view, manager view, keyboard input, CSS styling
-- **`store.py`** - Central `EventStore` class: thread-safe session/turn storage, coordinates watchers/alerts/summarizer/analyzer
+- **`store.py`** - Central `EventStore` class: thread-safe session/turn storage, coordinates watchers/alerts/summarizer
 - **`project_watcher.py`** - `ProjectWatcher`: scans project directories for session files, notifies on new sessions
 - **`watcher.py`** - `TranscriptWatcher`: polls transcript file, parses JSONL entries into `Turn` objects
 - **`transcript.py`** - Parses `session.jsonl` files to load conversation history on session start
@@ -79,7 +74,7 @@ uv run python -c "from betty import tui_textual, store, models; print('OK')"
 - **`styles.py`** - UI style renderers: `RichStyle` (emoji/box-based) and `ClaudeCodeStyle` (minimal)
 - **`alerts.py`** - Pattern matching for dangerous operations (force push, rm -rf, etc.)
 - **`summarizer.py`** - Optional LLM summarization of assistant turns via litellm, with configurable style presets
-- **`analyzer.py`** - On-demand LLM analysis: structured analysis (summary, critique, sentiment), multi-level analysis (turn/span/session), multi-source goal extraction, cost tracking
+- **`goals.py`** - Multi-source goal extraction (user messages, GitHub issues, plan files, tasks) for Agent
 - **`cache.py`** - Persistent disk cache for summaries and annotations (`~/.cache/betty/`)
 - **`config.py`** - Configuration management (env vars, `~/.betty/config.toml`, defaults)
 - **`export.py`** - Export session data to Markdown or JSON formats
@@ -102,7 +97,6 @@ By default, only sessions for the current directory are shown. Use `--global` to
 - Watcher threads: Transcript file polling (daemon, one per session)
 - Plan file watcher threads: Monitor PLAN.md / .claude/plan.md per session (daemon)
 - Summarizer threads: ThreadPoolExecutor for async LLM calls (2 workers)
-- Analyzer threads: ThreadPoolExecutor for async LLM analysis (1 worker)
 - PR detection threads: Background threads for `gh` CLI calls (spawned by PRDetector)
 - All shared state in `EventStore` protected by `threading.Lock`
 
@@ -129,8 +123,6 @@ Configuration priority:
 Use `betty config` to set up your LLM server. Summaries are cached to disk and persist across sessions. The feature gracefully degrades if the server is unavailable.
 
 **Summarization Styles**: Summaries can be customized with preset styles (`default`, `brief`, `detailed`, `technical`, `explanatory`) or a fully custom prompt. Set via `betty config --summary-style <style>` or `betty config --summary-prompt "..."`. Environment variables `BETTY_SUMMARY_STYLE` and `BETTY_SUMMARY_PROMPT` override the config file. Changing styles automatically invalidates the summary cache.
-
-**On-Demand Analysis**: Turns, spans, and sessions can be analyzed on-demand. The analyzer provides structured analysis (summary, critique, sentiment) with multi-source goal extraction (first user message, GitHub issues, plan files, active tasks). Triggered via `A` keybinding in the TUI, with `[`/`]` to zoom between turn, span, and session levels. Toggle analysis panel with `I`. Analysis results are cached to disk.
 
 **GitHub PR Integration**: Automatic PR detection for each session's git branch using the `gh` CLI. PR info (number, title, URL, state) is displayed on manager view headers and session cards. Press `O` to open the PR in a browser.
 

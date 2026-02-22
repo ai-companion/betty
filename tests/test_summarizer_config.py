@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from betty.config import Config, LLMConfig, SummaryConfig, AnalyzerConfig, load_config, save_config
+from betty.config import Config, LLMConfig, SummaryConfig, load_config, save_config
 from betty.summarizer import (
     SUMMARY_STYLES,
     SYSTEM_PROMPT,

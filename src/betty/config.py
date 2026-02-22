@@ -44,16 +44,6 @@ class LLMConfig:
 
 
 @dataclass
-class AnalyzerConfig:
-    """Configuration for the turn/range analyzer."""
-
-    context_budget: int = 20000       # Max chars for context window
-    small_range_max: int = 10         # Turns threshold for "small" range (full content)
-    large_range_min: int = 31         # Turns threshold for "large" range (span summaries)
-    per_turn_budget: int = 2000       # Max chars per turn in small ranges
-
-
-@dataclass
 class SummaryConfig:
     """Configuration for summarization style and prompts."""
     style: str = "default"
@@ -74,7 +64,6 @@ class Config:
     """Betty configuration."""
 
     llm: LLMConfig
-    analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     summary: SummaryConfig = field(default_factory=SummaryConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     style: str = field(default=DEFAULT_STYLE)
@@ -88,7 +77,6 @@ DEFAULT_CONFIG = Config(
     llm=LLMConfig(
         model="claude-code/haiku",
     ),
-    analyzer=AnalyzerConfig(),
     summary=SummaryConfig(),
     agent=AgentConfig(),
     style=DEFAULT_STYLE,
@@ -252,18 +240,6 @@ def load_config() -> Config:
         debug_logging = data.get("debug_logging", debug_logging)
         manager_open_mode = data.get("manager_open_mode", manager_open_mode)
 
-    # Load analyzer config from file
-    analyzer_config = AnalyzerConfig()
-    if data is not None:
-        analyzer_data = data.get("analyzer", {})
-        if analyzer_data:
-            analyzer_config = AnalyzerConfig(
-                context_budget=analyzer_data.get("context_budget", 20000),
-                small_range_max=analyzer_data.get("small_range_max", 10),
-                large_range_min=analyzer_data.get("large_range_min", 31),
-                per_turn_budget=analyzer_data.get("per_turn_budget", 2000),
-            )
-
     # Load summary config from file
     summary_config = SummaryConfig()
     if data is not None:
@@ -321,7 +297,6 @@ def load_config() -> Config:
             model=llm_model,
             api_base=api_base,
         ),
-        analyzer=analyzer_config,
         summary=summary_config,
         agent=agent_config,
         style=style,
@@ -351,16 +326,6 @@ def save_config(config: Config) -> None:
     # Save api_base when set (for local/custom endpoints)
     if config.llm.api_base:
         data["llm"]["api_base"] = config.llm.api_base
-
-    # Save analyzer config only if non-default
-    default_analyzer = AnalyzerConfig()
-    if config.analyzer != default_analyzer:
-        data["analyzer"] = {
-            "context_budget": config.analyzer.context_budget,
-            "small_range_max": config.analyzer.small_range_max,
-            "large_range_min": config.analyzer.large_range_min,
-            "per_turn_budget": config.analyzer.per_turn_budget,
-        }
 
     # Save agent config only if non-default
     default_agent = AgentConfig()

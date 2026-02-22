@@ -18,7 +18,7 @@ import litellm
 import openai
 
 from .agent_models import AgentObservation, FileChange, SessionReport
-from .analyzer import GoalExtractor
+from .goals import GoalExtractor
 from .cache import AgentCache
 from .metrics import SessionMetrics, compute_session_metrics, _is_error_turn
 
@@ -100,7 +100,7 @@ class Agent:
         self._user_turn_count_at_goal: dict[str, int] = {}
         # Track whether session goal has been locked in by LLM
         self._session_goal_locked: set[str] = set()
-        # Reuse the existing multi-source goal extractor from the analyzer
+        # Reuse the existing multi-source goal extractor
         self._goal_extractor = GoalExtractor()
         # Persistent cache for reports
         self._cache = AgentCache(max_observations=config.max_observations)
