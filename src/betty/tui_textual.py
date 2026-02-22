@@ -29,6 +29,15 @@ if TYPE_CHECKING:
     from .store import EventStore
 
 
+def _format_token_count(tokens: int) -> str:
+    """Format token count for compact display."""
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M tok"
+    elif tokens >= 1000:
+        return f"{tokens / 1000:.1f}k tok"
+    return f"{tokens} tok"
+
+
 def group_turns_for_display(
     session: Session,
     turns: list[Turn],
@@ -270,7 +279,7 @@ ManagerView.expand-visible .project-grid {
 }
 
 /* Selection highlighting - only change background, no border to avoid layout shift */
-TurnWidget.selected, ToolGroupWidget.selected, SpanGroupWidget.selected {
+TurnWidget.selected, ToolGroupWidget.selected, SpanGroupWidget.selected, TraceSpanWidget.selected {
     background: $primary 30%;
 }
 
@@ -902,6 +911,193 @@ class SpanGroupWidget(Static):
                     parts.append(row)
 
         return RichGroup(*parts) if len(parts) > 1 else parts[0]
+
+
+class TraceSpanWidget(Static):
+    """Widget for displaying a span in trace view (collapsed/expanded tree)."""
+
+    DEFAULT_CSS = """
+    TraceSpanWidget {
+        height: auto;
+        padding: 0 1;
+        margin-bottom: 0;
+    }
+    """
+
+    BULLET = "⏺"
+    ROLE_ICONS = TurnWidget.ROLE_ICONS
+    TOOL_ICONS = TurnWidget.TOOL_ICONS
+    TOOL_INDICATORS = TurnWidget.TOOL_INDICATORS
+
+    expanded: reactive[bool] = reactive(False)
+    selected: reactive[bool] = reactive(False)
+
+    def __init__(self, group: SpanGroup, span_tokens: int = 0, ui_style: str = "rich", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.group = group
+        self.span_tokens = span_tokens
+        self.ui_style = ui_style
+        self.expanded = group.expanded
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="trace-span-content")
+
+    def on_mount(self) -> None:
+        self._update_content()
+        self._update_classes()
+
+    def watch_expanded(self, value: bool) -> None:
+        self.group.expanded = value
+        self._update_content()
+
+    def watch_selected(self, value: bool) -> None:
+        self._update_classes()
+        self._update_content()
+
+    def _update_classes(self) -> None:
+        self.remove_class("selected")
+        if self.selected:
+            self.add_class("selected")
+
+    def _update_content(self) -> None:
+        if self.ui_style == "rich":
+            renderable = self._render_rich_style()
+        else:
+            renderable = self._render_claude_code_style()
+        try:
+            content_widget = self.query_one("#trace-span-content", Static)
+            content_widget.update(renderable)
+        except NoMatches:
+            pass
+
+    def _get_user_label(self) -> str:
+        """Get the user turn label for the span header."""
+        if self.group.user_turn:
+            preview = self.group.user_turn.content_preview
+            if len(preview) > 60:
+                preview = preview[:57] + "..."
+            return f'"{preview}"'
+        return "(no user turn)"
+
+    def _get_token_label(self) -> str:
+        """Get formatted token count."""
+        if self.span_tokens > 0:
+            return _format_token_count(self.span_tokens)
+        return ""
+
+    def _build_child_lines(self) -> list[tuple[str, str]]:
+        """Build child lines from response turns, grouping consecutive tools.
+
+        Returns list of (role, text) where role is 'assistant' or 'tool'.
+        """
+        lines: list[tuple[str, str]] = []
+        tool_buffer: list[Turn] = []
+
+        def flush_tools():
+            nonlocal tool_buffer
+            if not tool_buffer:
+                return
+            if len(tool_buffer) == 1:
+                t = tool_buffer[0]
+                text = t.summary or t.content_preview[:80]
+                lines.append(("tool", text))
+            else:
+                names = [t.tool_name or "tool" for t in tool_buffer]
+                unique = list(dict.fromkeys(names))
+                text = ", ".join(unique[:4])
+                if len(unique) > 4:
+                    text += "..."
+                lines.append(("tool", text))
+            tool_buffer = []
+
+        for turn in self.group.response_turns:
+            if turn.role == "tool":
+                tool_buffer.append(turn)
+            else:
+                flush_tools()
+                text = turn.summary or turn.content_preview[:80]
+                if not turn.summary and turn.content_preview:
+                    text = turn.content_preview[:80]
+                lines.append(("assistant", text))
+
+        flush_tools()
+        return lines
+
+    def _render_rich_style(self):
+        parts = []
+        arrow = "▼" if self.expanded else "❯"
+        user_label = self._get_user_label()
+        tok_label = self._get_token_label()
+        select_prefix = "► " if self.selected else ""
+
+        header = f"{select_prefix} {arrow} {user_label}"
+        if tok_label:
+            header += f"  {tok_label}"
+        parts.append(RichText.from_markup(f"[bold]{markup_escape(header)}[/bold]"))
+
+        if self.expanded:
+            child_lines = self._build_child_lines()
+            for i, (role, text) in enumerate(child_lines):
+                is_last = (i == len(child_lines) - 1)
+                connector = "└─" if is_last else "├─"
+                icon = self.ROLE_ICONS.get("assistant", "🤖") if role == "assistant" else "🔧"
+                line = f" {connector} {icon} {text}"
+                style = "dim" if role == "tool" else ""
+                parts.append(RichText(line, style=style))
+            if child_lines:
+                # Add vertical connector line between header and children
+                # Already handled by the ├─/└─ connectors
+                pass
+
+        return RichGroup(*parts)
+
+    def _render_claude_code_style(self):
+        parts = []
+        selected_style = "light_steel_blue" if self.selected else ""
+        arrow = "▼" if self.expanded else "❯"
+        user_label = self._get_user_label()
+        tok_label = self._get_token_label()
+
+        # Header row
+        row = Table.grid(padding=(0, 0))
+        row.add_column(width=3)
+        row.add_column()
+        header_text = RichText()
+        header_text.append(f"{arrow} ", style=selected_style or "bold")
+        header_text.append(user_label, style=selected_style or "")
+        if tok_label:
+            header_text.append(f"  {tok_label}", style=selected_style or "dim")
+        row.add_row(
+            RichText("   ", style="dim"),
+            header_text,
+        )
+        parts.append(row)
+
+        if self.expanded:
+            child_lines = self._build_child_lines()
+            for i, (role, text) in enumerate(child_lines):
+                is_last = (i == len(child_lines) - 1)
+                connector = "└─" if is_last else "├─"
+
+                if role == "assistant":
+                    bullet_style = selected_style or "white"
+                else:
+                    bullet_style = selected_style or "#5fd787"
+
+                child_row = Table.grid(padding=(0, 0))
+                child_row.add_column(width=3)
+                child_row.add_column()
+                line_text = RichText()
+                line_text.append(f"{connector} ", style="dim")
+                line_text.append(f"{self.BULLET} ", style=bullet_style)
+                line_text.append(text, style=selected_style or ("dim" if role == "tool" else ""))
+                child_row.add_row(
+                    RichText(" ", style="dim"),
+                    line_text,
+                )
+                parts.append(child_row)
+
+        return RichGroup(*parts)
 
 
 class HeaderPanel(Static):
@@ -1682,7 +1878,7 @@ class ConversationView(ScrollableContainer):
 
     def _update_selection(self) -> None:
         """Update selection state on all turn widgets."""
-        widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         for i, widget in enumerate(widgets):
             in_span = (
                 self._span_start is not None
@@ -1695,7 +1891,7 @@ class ConversationView(ScrollableContainer):
         """Scroll to keep selected item visible."""
         if self._selected_index is None:
             return
-        widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(self.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if 0 <= self._selected_index < len(widgets):
             widgets[self._selected_index].scroll_visible()
 
@@ -1916,6 +2112,7 @@ class BettyApp(App):
         self._detail_level: DetailLevel = DetailLevel.DEFAULT
         self._group_expanded_state: dict[int, bool] = {}
         self._span_expanded_state: dict[int, bool] = {}
+        self._trace_expanded_state: dict[int, bool] = {}
         self._tool_drilled_state: dict[int, bool] = {}
         self._tool_turn_to_group: dict[int, int] = {}  # turn_number → ToolGroup first_turn_number
         self._highlight: int | None = None  # first_turn_number of highlighted span
@@ -2051,6 +2248,11 @@ class BettyApp(App):
             conversation.mount(Static("[dim]Waiting for activity...[/dim]"))
             return
 
+        # Waterfall style: render TraceSpanWidgets instead of normal widgets
+        if self._ui_style == "waterfall":
+            self._refresh_conversation_waterfall(conversation, session, selected_index, rc)
+            return
+
         # Get filtered and grouped turns
         items = self._get_filtered_turns(session)
 
@@ -2106,6 +2308,50 @@ class BettyApp(App):
             conversation.mount(widget)
 
         # Scroll to end if auto-scroll
+        if self._auto_scroll:
+            conversation.call_after_refresh(conversation.scroll_end)
+
+    def _refresh_conversation_waterfall(
+        self, conversation: ConversationView, session: Session, selected_index: int | None, rc: int,
+    ) -> None:
+        """Render conversation as waterfall trace (TraceSpanWidget per span)."""
+        if not session.turns:
+            conversation.mount(Static("[dim]Waiting for activity...[/dim]"))
+            return
+
+        # Build spans using trace expanded state, default collapsed
+        span_default_expanded = self._detail_level != DetailLevel.OVERVIEW
+        span_groups = group_turns_into_spans(
+            session, self._trace_expanded_state, default_expanded=span_default_expanded,
+        )
+
+        # Header with total token count
+        total_tokens = sum(
+            (t.input_tokens or 0) + (t.output_tokens or 0) for t in session.turns
+        )
+        total_tok_str = _format_token_count(total_tokens) if total_tokens > 0 else ""
+        header_text = "Trace"
+        if total_tok_str:
+            header_text += f" ────── {total_tok_str}"
+        conversation.mount(Static(RichText.from_markup(f"[bold]{markup_escape(header_text)}[/bold]\n")))
+
+        # Mount TraceSpanWidgets
+        for i, group in enumerate(span_groups):
+            span_tokens = 0
+            if group.user_turn:
+                span_tokens += (group.user_turn.input_tokens or 0) + (group.user_turn.output_tokens or 0)
+            for t in group.response_turns:
+                span_tokens += (t.input_tokens or 0) + (t.output_tokens or 0)
+
+            widget = TraceSpanWidget(
+                group,
+                span_tokens=span_tokens,
+                ui_style="rich",  # TraceSpanWidget handles both styles internally
+                id=f"trace-span-{rc}-{i}",
+            )
+            widget.selected = (i == selected_index)
+            conversation.mount(widget)
+
         if self._auto_scroll:
             conversation.call_after_refresh(conversation.scroll_end)
 
@@ -2236,7 +2482,7 @@ class BettyApp(App):
         if index is None:
             return
 
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if not (0 <= index < len(widgets)):
             return
 
@@ -2273,7 +2519,7 @@ class BettyApp(App):
             return None
 
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         start_idx: int | None = None
         end_idx: int | None = None
         for i, widget in enumerate(widgets):
@@ -2306,7 +2552,7 @@ class BettyApp(App):
         if index is None:
             return
 
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if not (0 <= index < len(widgets)):
             return
 
@@ -2405,6 +2651,7 @@ class BettyApp(App):
         self._manager_view_active = True
         self._show_tasks = False
         self._show_plan = False
+
         self._refresh_manager()
         self._refresh_views()
         self._refresh_header()
@@ -2425,6 +2672,7 @@ class BettyApp(App):
         self._focus_panel = "detail"
         self._show_tasks = False
         self._show_plan = False
+
         self._refresh_manager()
         self._refresh_views()
         self._refresh_header()
@@ -2462,7 +2710,7 @@ class BettyApp(App):
         self._clear_highlight()
 
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if not widgets:
             return
         current = conversation.get_selected_index()
@@ -2482,7 +2730,7 @@ class BettyApp(App):
         self._clear_highlight()
 
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if not widgets:
             return
         current = conversation.get_selected_index()
@@ -2494,6 +2742,7 @@ class BettyApp(App):
             new_index = current
         conversation.set_selected_index(new_index)
         conversation.scroll_to_selected()
+
 
 
     def action_nav_down(self) -> None:
@@ -2567,7 +2816,7 @@ class BettyApp(App):
         self._auto_scroll = False
 
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if widgets:
             conversation.set_selected_index(0)
             conversation.scroll_home()
@@ -2590,7 +2839,7 @@ class BettyApp(App):
         self._auto_scroll = True
 
         conversation = self.query_one("#conversation", ConversationView)
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if widgets:
             conversation.set_selected_index(len(widgets) - 1)
             conversation.scroll_end()
@@ -2621,7 +2870,7 @@ class BettyApp(App):
         index = conversation.get_selected_index()
         if index is None:
             return
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if 0 <= index < len(widgets):
             widget = widgets[index]
             if isinstance(widget, SpanGroupWidget):
@@ -2641,6 +2890,11 @@ class BettyApp(App):
                             conversation.set_span_range(start_idx, end_idx)
                     conversation.call_after_refresh(_apply_highlight)
                 self._show_status("Expanded span")
+                return
+            if isinstance(widget, TraceSpanWidget):
+                new_expanded = not widget.expanded
+                widget.expanded = new_expanded
+                self._trace_expanded_state[widget.group.first_turn_number] = new_expanded
                 return
             # Trigger summarization for unsummarized tool groups
             if isinstance(widget, ToolGroupWidget) and not widget.group.summary:
@@ -2663,6 +2917,7 @@ class BettyApp(App):
                 self._auto_scroll = True
                 self._group_expanded_state.clear()
                 self._span_expanded_state.clear()
+                self._trace_expanded_state.clear()
                 self._tool_drilled_state.clear()
 
                 self._highlight = None
@@ -2677,6 +2932,7 @@ class BettyApp(App):
         self._auto_scroll = True
         self._group_expanded_state.clear()
         self._span_expanded_state.clear()
+        self._trace_expanded_state.clear()
         self._tool_drilled_state.clear()
         self._highlight = None
 
@@ -2701,6 +2957,7 @@ class BettyApp(App):
             for start, _end in compute_spans(session.turns):
                 turn_num = session.turns[start].turn_number
                 self._span_expanded_state[turn_num] = True
+                self._trace_expanded_state[turn_num] = True
         conversation = self.query_one("#conversation", ConversationView)
         for widget in conversation.query("ToolGroupWidget"):
             self._group_expanded_state[widget.group.first_turn_number] = True
@@ -2717,6 +2974,7 @@ class BettyApp(App):
             for start, _end in compute_spans(session.turns):
                 turn_num = session.turns[start].turn_number
                 self._span_expanded_state[turn_num] = False
+                self._trace_expanded_state[turn_num] = False
         self._tool_drilled_state.clear()
         self._group_expanded_state = {k: False for k, v in self._group_expanded_state.items()}
         self._refresh_conversation()
@@ -2782,6 +3040,7 @@ class BettyApp(App):
             return
         self._show_tasks = not self._show_tasks
         self._show_plan = False
+
         self._refresh_views()
         self._show_status("Showing task list" if self._show_tasks else "Showing conversation")
 
@@ -2791,6 +3050,7 @@ class BettyApp(App):
             return
         self._show_plan = not self._show_plan
         self._show_tasks = False
+
         self._refresh_views()
         self._show_status("Showing plan" if self._show_plan else "Showing conversation")
 
@@ -2817,7 +3077,7 @@ class BettyApp(App):
             self._show_status("Select a turn first (j/k to navigate)")
             return
 
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if not (0 <= index < len(widgets)):
             return
 
@@ -3034,6 +3294,7 @@ class BettyApp(App):
             self._auto_scroll = True
             self._group_expanded_state.clear()
             self._span_expanded_state.clear()
+            self._trace_expanded_state.clear()
             self._tool_drilled_state.clear()
             self._highlight = None
             self._refresh_all()
@@ -3107,7 +3368,7 @@ class BettyApp(App):
         index = conversation.get_selected_index()
         if index is None:
             return None
-        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget"))
+        widgets = list(conversation.query("TurnWidget, ToolGroupWidget, SpanGroupWidget, TraceSpanWidget"))
         if not (0 <= index < len(widgets)):
             return None
         widget = widgets[index]
