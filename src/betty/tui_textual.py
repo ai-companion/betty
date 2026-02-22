@@ -1825,13 +1825,17 @@ class SessionCard(Static):
         # Stats line
         lines.append(f"turns:{turn_count} tools:{tool_calls}")
 
-        # Narrative from agent report (situation summary)
-        if report and report.narrative:
-            # Truncate to ~120 chars and clean up
-            narrative = report.narrative[:120].replace("\n", " ")
-            if len(report.narrative) > 120:
-                narrative += "..."
-            lines.append(f"[dim]{markup_escape(narrative)}[/dim]")
+        # Last activity: summary from the most recent assistant or tool turn
+        last_summary = None
+        for turn in reversed(session.turns):
+            if turn.summary:
+                last_summary = turn.summary
+                break
+        if last_summary:
+            text = last_summary[:120].replace("\n", " ")
+            if len(last_summary) > 120:
+                text += "..."
+            lines.append(f"[dim]{markup_escape(text)}[/dim]")
 
         self.update(RichText.from_markup("\n".join(lines)))
 
@@ -1913,11 +1917,16 @@ class ManagerView(ScrollableContainer):
                 return ""
             goal = getattr(r, "goal", None) or ""
             current = getattr(r, "current_objective", None) or ""
-            narrative = getattr(r, "narrative", None) or ""
-            return f"{goal[:40]}:{current[:40]}:{narrative[:40]}"
+            return f"{goal[:40]}:{current[:40]}"
+
+        def _last_summary(s: Session) -> str:
+            for turn in reversed(s.turns):
+                if turn.summary:
+                    return turn.summary[:40]
+            return ""
 
         snapshot = "|".join(
-            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}:{s.project_path}:{_report_fingerprint(s.session_id)}"
+            f"{s.session_id}:{len(s.turns)}:{s.total_tool_calls}:{s.model}:{s.display_name}:{s.branch or ''}:{s.pr_info.number if s.pr_info else ''}:{s.project_path}:{_report_fingerprint(s.session_id)}:{_last_summary(s)}"
             for s in sessions
         ) + f"||{active_session_id}||{now_minute}"
         if snapshot == self._last_snapshot:
