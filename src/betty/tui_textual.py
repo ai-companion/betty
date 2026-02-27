@@ -1497,10 +1497,19 @@ class AgentPanel(Static):
         overflow-y: auto;
     }
 
+    AgentPanel.vertical-dock {
+        dock: bottom;
+        width: 1fr;
+        height: 40%;
+    }
+
     AgentPanel.visible {
         display: block;
     }
     """
+
+    # Terminal width below which the panel docks to the bottom instead of the right
+    VERTICAL_BREAKPOINT = 130
 
     PROGRESS_LABELS = {
         "on_track": ("[green]on track[/green]", "[green]●[/green]"),
@@ -1517,7 +1526,7 @@ class AgentPanel(Static):
     # Separator sized to fit content area (60 width - 2 border - 4 padding = 54)
     SECTION_SEP = "[dim]" + "\u2500" * 54 + "[/dim]"
 
-    SECTION_NAMES = ("ask", "goals", "narrative", "metrics", "activity", "files")
+    SECTION_NAMES = ("insight", "ask", "goals", "narrative", "metrics", "activity", "files")
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -1569,6 +1578,20 @@ class AgentPanel(Static):
         def _section_header(name: str, title: str, style: str = "bold") -> str:
             arrow = "[dim]▸[/dim]" if name in self._collapsed else "[dim]▾[/dim]"
             return f"{arrow} [{style}]{title}[/{style}]"
+
+        # ── Insight (on-demand turn analysis) ──
+        if report.insight or report.insight_pending:
+            lines.append("")
+            lines.append(sep)
+            lines.append("")
+            lines.append(_section_header("insight", "Insight", "bold cyan"))
+            if "insight" not in self._collapsed:
+                if report.insight_pending:
+                    lines.append(f"\n  [dim italic]Analyzing {markup_escape(report.insight_label or 'selection')}...[/dim italic]")
+                elif report.insight:
+                    if report.insight_label:
+                        lines.append(f"\n  [dim]{markup_escape(report.insight_label)}[/dim]")
+                    lines.append(f"  {markup_escape(report.insight)}")
 
         # ── Ask Betty ──
         if report.ask_question:
@@ -1902,6 +1925,10 @@ class ManagerView(ScrollableContainer):
 
     def refresh_cards(self, sessions: list[Session], active_session_id: str | None) -> None:
         """Rebuild session cards from current sessions."""
+        # Guard: skip if widget is not yet attached to the DOM (can happen during startup
+        # or when Textual is in an intermediate layout state between view transitions).
+        if not self.is_attached:
+            return
         # Pre-fetch agent reports for all sessions
         reports: dict[str, object] = {}
         if self._store:
@@ -2229,6 +2256,7 @@ class BettyApp(App):
         Binding("right", "nav_right", "Right", show=False),
         Binding("m", "focus_monitor", "Monitor", show=False),
         Binding("?", "focus_ask", "Ask", show=False),
+        Binding("A", "generate_insight", "Insight", show=False),
         Binding("v", "detail_level_next", "Detail+", show=False),
         Binding("V", "detail_level_prev", "Detail-", show=False),
         Binding("escape", "escape", "Escape", show=False),
@@ -2258,6 +2286,10 @@ class BettyApp(App):
 
     class AskResponseReady(Message):
         """Message posted when an Ask Betty response is ready."""
+        pass
+
+    class InsightReady(Message):
+        """Message posted when a Betty insight is ready."""
         pass
 
     def __init__(self, store: "EventStore", collapse_tools: bool = True, ui_style: str = "rich", manager_mode: bool = False, manager_open_mode: str = "auto") -> None:
@@ -2338,11 +2370,22 @@ class BettyApp(App):
             self._show_manager_view()
         # Set up periodic refresh for summaries
         self.set_interval(0.5, self._check_for_updates)
+        # Set initial dock direction based on terminal width
+        try:
+            panel = self.query_one("#agent-panel", AgentPanel)
+            panel.set_class(self.size.width < AgentPanel.VERTICAL_BREAKPOINT, "vertical-dock")
+        except NoMatches:
+            pass
 
     def on_resize(self, event) -> None:
         """Handle terminal resize — collapse expand mode if too narrow in auto mode."""
         if self._manager_expanded and self._manager_open_mode == "auto" and self.size.width < 120:
             self._exit_expand_mode()
+        try:
+            panel = self.query_one("#agent-panel", AgentPanel)
+            panel.set_class(self.size.width < AgentPanel.VERTICAL_BREAKPOINT, "vertical-dock")
+        except NoMatches:
+            pass
 
     def _on_store_turn(self, turn: Turn) -> None:
         """Called from watcher thread - post message for thread safety."""
@@ -2418,6 +2461,10 @@ class BettyApp(App):
     def _refresh_conversation(self) -> None:
         """Refresh conversation view."""
         conversation = self.query_one("#conversation", ConversationView)
+        # Guard: skip if widget is not yet attached to the DOM (can happen during startup
+        # or when Textual is in an intermediate layout state between view transitions).
+        if not conversation.is_attached:
+            return
         session = self.store.get_active_session()
 
         # Get current selection
@@ -3443,6 +3490,34 @@ class BettyApp(App):
         inputs = self.query_one("#inputs", InputPanel)
         inputs.focus_ask()
 
+    def action_generate_insight(self) -> None:
+        """Generate a Betty insight for the selected turn or range."""
+        turns = self._get_selected_turns()
+        if not turns:
+            self._show_status("No turn selected for insight")
+            return
+
+        if len(turns) == 1:
+            label = f"turn {turns[0].turn_number}"
+        else:
+            label = f"{len(turns)} turns"
+
+        def on_insight_ready():
+            self.post_message(self.InsightReady())
+
+        status = self.store.generate_insight(turns, label, callback=on_insight_ready)
+        if status == "no_llm":
+            self._show_status("No LLM configured — run: betty config --llm-preset ...")
+        elif status == "no_session":
+            self._show_status("No active session")
+        elif status == "no_agent":
+            self._show_status("Agent not enabled")
+        else:
+            self._show_status(f"Insight: analyzing {label}...")
+            if not self._show_agent_panel:
+                self._show_agent_panel = True
+                self._refresh_agent_panel()
+
     def action_escape(self) -> None:
         """Handle escape key."""
 
@@ -3610,6 +3685,11 @@ class BettyApp(App):
     @on(AskResponseReady)
     def handle_ask_response(self, message: AskResponseReady) -> None:
         """Handle Ask Betty response arriving — refresh agent panel."""
+        self._refresh_agent_panel()
+
+    @on(InsightReady)
+    def handle_insight_ready(self, message: InsightReady) -> None:
+        """Handle Betty insight arriving — refresh agent panel."""
         self._refresh_agent_panel()
 
     @on(Input.Submitted, "#annotate-input")

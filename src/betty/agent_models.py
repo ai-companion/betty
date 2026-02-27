@@ -51,3 +51,7 @@ class SessionReport:
     ask_question: str | None = None
     ask_response: str | None = None
     ask_pending: bool = False
+    # Insight state (on-demand turn analysis)
+    insight: str | None = None
+    insight_label: str | None = None
+    insight_pending: bool = False
