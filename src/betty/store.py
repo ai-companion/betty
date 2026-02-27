@@ -283,6 +283,24 @@ class EventStore:
         submitted = self._agent.ask(session_id, question, session, callback, selected_turns)
         return "submitted" if submitted else "no_llm"
 
+    def generate_insight(self, turns: list, label: str, callback: "Callable[[], None] | None" = None) -> str:
+        """Generate a Betty insight for the given turns.
+
+        Returns status string: "submitted", "no_agent", "no_session", "no_llm"
+        """
+        if not self._agent:
+            return "no_agent"
+
+        with self._lock:
+            session_id = self._active_session_id
+            session = self._sessions.get(session_id) if session_id else None
+
+        if not session_id or not session:
+            return "no_session"
+
+        submitted = self._agent.generate_insight(session_id, turns, label, session, callback)
+        return "submitted" if submitted else "no_llm"
+
     @property
     def agent_enabled(self) -> bool:
         """Whether the agent is enabled."""

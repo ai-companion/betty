@@ -50,6 +50,13 @@ DRIFT_SYSTEM_PROMPT = (
     "Return ONLY valid JSON, no markdown fences, no extra text."
 )
 
+INSIGHT_SYSTEM_PROMPT = (
+    "You are Betty, an expert supervisor monitoring an AI coding assistant's session. "
+    "Analyze and critique the selected turns. Summarize what happened, any issues, "
+    "and your assessment. Cite turn numbers (e.g. T12) and file paths when relevant. "
+    "Be concise: 3-5 sentences."
+)
+
 ASK_SYSTEM_PROMPT = (
     "You are Betty, an expert supervisor monitoring an AI coding assistant's session. "
     "A human observer is asking you a question about the session. "
@@ -265,6 +272,69 @@ class Agent:
                 if report:
                     report.ask_response = f"[Error: {e}]"
                     report.ask_pending = False
+
+        if callback:
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def generate_insight(
+        self,
+        session_id: str,
+        turns: list,
+        label: str,
+        session: Session,
+        callback: Callable[[], None] | None = None,
+    ) -> bool:
+        """Generate a Betty insight for the selected turns.
+
+        Returns True if submitted, False if no executor/LLM config.
+        """
+        if not self._executor or not self._llm_config:
+            return False
+
+        with self._lock:
+            report = self._reports.get(session_id)
+            if not report:
+                report = SessionReport(session_id=session_id)
+                self._reports[session_id] = report
+            report.insight_pending = True
+            report.insight_label = label
+            report.insight = None
+
+        self._executor.submit(self._insight_async, session_id, turns, label, session, callback)
+        return True
+
+    def _insight_async(
+        self,
+        session_id: str,
+        turns: list,
+        label: str,
+        session: Session,
+        callback: Callable[[], None] | None,
+    ) -> None:
+        """LLM call to generate insight for the selected turns."""
+        try:
+            question = (
+                f"Analyze and critique the selected {label}. "
+                "Summarize what happened, any issues, and your assessment."
+            )
+            prompt = self._build_ask_prompt(session_id, question, session, turns)
+            response = self._call_llm(prompt, INSIGHT_SYSTEM_PROMPT, max_tokens=800)
+
+            with self._lock:
+                report = self._reports.get(session_id)
+                if report:
+                    report.insight = response
+                    report.insight_pending = False
+        except Exception as e:
+            logger.debug(f"Insight LLM call failed: {e}")
+            with self._lock:
+                report = self._reports.get(session_id)
+                if report:
+                    report.insight = f"[Error: {e}]"
+                    report.insight_pending = False
 
         if callback:
             try:
