@@ -2370,22 +2370,11 @@ class BettyApp(App):
             self._show_manager_view()
         # Set up periodic refresh for summaries
         self.set_interval(0.5, self._check_for_updates)
-        # Set initial dock direction based on terminal width
-        try:
-            panel = self.query_one("#agent-panel", AgentPanel)
-            panel.set_class(self.size.width < AgentPanel.VERTICAL_BREAKPOINT, "vertical-dock")
-        except NoMatches:
-            pass
 
     def on_resize(self, event) -> None:
         """Handle terminal resize — collapse expand mode if too narrow in auto mode."""
         if self._manager_expanded and self._manager_open_mode == "auto" and self.size.width < 120:
             self._exit_expand_mode()
-        try:
-            panel = self.query_one("#agent-panel", AgentPanel)
-            panel.set_class(self.size.width < AgentPanel.VERTICAL_BREAKPOINT, "vertical-dock")
-        except NoMatches:
-            pass
 
     def _on_store_turn(self, turn: Turn) -> None:
         """Called from watcher thread - post message for thread safety."""
@@ -3412,9 +3401,11 @@ class BettyApp(App):
             return
 
         if not self._show_agent_panel:
-            panel.remove_class("visible")
+            panel.remove_class("visible", "vertical-dock")
             return
 
+        # Apply correct dock direction based on current terminal width, then show
+        panel.set_class(self.size.width < AgentPanel.VERTICAL_BREAKPOINT, "vertical-dock")
         panel.add_class("visible")
 
         session = self.store.get_active_session()
