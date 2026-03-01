@@ -18,6 +18,7 @@ from textual.containers import Container, ScrollableContainer, Horizontal, Verti
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Static, Footer, Input, Label
 
 from .alerts import Alert, AlertLevel
@@ -1483,7 +1484,7 @@ class PlanView(Static):
         self.update(RichGroup(RichText.from_markup(header), md_content))
 
 
-class AgentPanel(Static):
+class AgentPanel(Widget):
     """Right-side panel for Betty Agent situation report."""
 
     DEFAULT_CSS = """
@@ -1493,8 +1494,6 @@ class AgentPanel(Static):
         height: 1fr;
         display: none;
         border: solid $warning;
-        padding: 1 2;
-        overflow-y: auto;
     }
 
     AgentPanel.vertical-dock {
@@ -1505,6 +1504,13 @@ class AgentPanel(Static):
 
     AgentPanel.visible {
         display: block;
+    }
+
+    AgentPanel #agent-scroll {
+        height: 1fr;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+        padding: 1 2;
     }
     """
 
@@ -1532,6 +1538,17 @@ class AgentPanel(Static):
         super().__init__(**kwargs)
         self._collapsed: set[str] = set()
 
+    def compose(self) -> ComposeResult:
+        with ScrollableContainer(id="agent-scroll"):
+            yield Static("", id="agent-content")
+
+    def _update(self, content) -> None:
+        """Update the inner Static with new content."""
+        try:
+            self.query_one("#agent-content", Static).update(content)
+        except NoMatches:
+            pass
+
     def toggle_section(self, section: str) -> None:
         """Toggle a single section's collapsed state."""
         if section in self._collapsed:
@@ -1556,7 +1573,7 @@ class AgentPanel(Static):
             "",
             "[dim]Waiting for session data...[/dim]",
         ]
-        self.update(RichText.from_markup("\n".join(lines)))
+        self._update(RichText.from_markup("\n".join(lines)))
 
     def update_report(self, report) -> None:
         """Update panel with agent report data."""
@@ -1721,7 +1738,7 @@ class AgentPanel(Static):
                     lines.append(f"  {op_str} {markup_escape(short_path)}{delta}")
 
         lines.append("")
-        self.update(RichText.from_markup("\n".join(lines)))
+        self._update(RichText.from_markup("\n".join(lines)))
 
 
 class ProjectGroupHeader(Static):
