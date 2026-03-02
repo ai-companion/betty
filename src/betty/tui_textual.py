@@ -964,7 +964,9 @@ class TraceSpanWidget(Static):
             self.add_class("selected")
 
     def _update_content(self) -> None:
-        if self.ui_style == "rich":
+        if self.ui_style == "berry":
+            renderable = self._render_berry_style()
+        elif self.ui_style == "rich":
             renderable = self._render_rich_style()
         else:
             renderable = self._render_claude_code_style()
@@ -1238,6 +1240,142 @@ class TraceSpanWidget(Static):
                                 dline.append(tool.content_preview, style=selected_style or "dim")
                                 detail_row.add_row(RichText(" ", style="dim"), dline)
                                 parts.append(detail_row)
+
+        return RichGroup(*parts)
+
+    def _render_berry_style(self):
+        from .berry import BERRY_SPRITES, BERRY_COLORS, infer_berry_state, get_tool_powerup
+
+        parts = []
+        level = self.detail_level
+        tok_label = self._get_token_label()
+        select_prefix = "► " if self.selected else ""
+        berry_state = infer_berry_state(self.group)
+        sprite_lines = BERRY_SPRITES.get(berry_state, BERRY_SPRITES["idle"])
+        primary = BERRY_COLORS["primary"]
+        accent = BERRY_COLORS["accent"]
+        highlight = BERRY_COLORS["highlight"]
+
+        if level == DetailLevel.COMPACT:
+            # Single line: 🫐 "user preview..."  1.2k tok  (5 turns)
+            user_label = self._get_user_label(max_len=40)
+            turn_count = self.group.total_turns
+            line = RichText()
+            line.append(f"{select_prefix}🫐 ", style=f"bold {primary}")
+            line.append(user_label, style=primary if not self.selected else "bold")
+            if tok_label:
+                line.append(f"  {tok_label}", style="dim")
+            line.append(f"  ({turn_count} turns)", style="dim")
+            parts.append(line)
+
+        elif level == DetailLevel.SUMMARY:
+            # Berry character (left) + info (right) in a 2-column grid
+            user_label = self._get_user_label()
+            summary = self.group.activity_summary
+
+            # Collect tool icons used in this span
+            tool_names = []
+            for t in self.group.response_turns:
+                if t.role == "tool" and t.tool_name:
+                    tool_names.append(t.tool_name)
+            unique_tools = list(dict.fromkeys(tool_names))
+            tool_icons = " ".join(get_tool_powerup(n) for n in unique_tools[:6])
+
+            # Build right side
+            info = RichText()
+            info.append(f"{select_prefix}", style="bold" if self.selected else "")
+            info.append(user_label, style=f"bold {primary}")
+            if tok_label:
+                info.append(f"  {tok_label}", style="dim")
+            info.append("\n")
+            info.append(f"  {summary}", style="")
+            if tool_icons:
+                info.append(f"\n  {tool_icons}", style="")
+
+            # Build sprite column
+            sprite_text = RichText()
+            for i, line in enumerate(sprite_lines):
+                sprite_text.append(line, style=primary)
+                if i < len(sprite_lines) - 1:
+                    sprite_text.append("\n")
+
+            grid = Table.grid(padding=(0, 1))
+            grid.add_column(width=20)  # sprite column
+            grid.add_column()          # info column
+            grid.add_row(sprite_text, info)
+            parts.append(grid)
+
+        else:
+            # OUTLINE and DETAIL: Berry character (left) + turn tree (right)
+            user_label = self._get_user_label()
+            blocks = self._group_response_into_blocks()
+
+            # Build tree lines for right column
+            tree = RichText()
+            tree.append(f"{select_prefix}", style="bold" if self.selected else "")
+            tree.append(user_label, style=f"bold {primary}")
+            if tok_label:
+                tree.append(f"  {tok_label}", style="dim")
+
+            for bi, (asst, tools) in enumerate(blocks):
+                is_last_block = (bi == len(blocks) - 1)
+                block_connector = "└─" if is_last_block else "├─"
+                continuation = "   " if is_last_block else "│  "
+
+                tree.append("\n")
+                if asst:
+                    if level == DetailLevel.DETAIL:
+                        text = asst.content_full[:200]
+                        if len(asst.content_full) > 200:
+                            text += "..."
+                    else:
+                        text = asst.summary or asst.content_preview[:80]
+                    tree.append(f" {block_connector} ", style="dim")
+                    tree.append("🤖 ", style="")
+                    tree.append(text, style="")
+                else:
+                    tree.append(f" {block_connector} ", style="dim")
+                    tree.append("🔧 (tools)", style=accent)
+
+                if tools:
+                    if level == DetailLevel.OUTLINE:
+                        names = [t.tool_name or "tool" for t in tools]
+                        unique = list(dict.fromkeys(names))
+                        tool_text = ", ".join(
+                            f"{get_tool_powerup(n)} {n}" for n in unique[:4]
+                        )
+                        if len(unique) > 4:
+                            tool_text += "..."
+                        tree.append("\n")
+                        tree.append(f" {continuation}└─ ", style="dim")
+                        tree.append(tool_text, style="dim")
+                    else:
+                        for ti, tool in enumerate(tools):
+                            is_last_tool = (ti == len(tools) - 1)
+                            tool_connector = "└─" if is_last_tool else "├─"
+                            tool_continuation = "   " if is_last_tool else "│  "
+                            name = tool.tool_name or "tool"
+                            icon = get_tool_powerup(name)
+                            tree.append("\n")
+                            tree.append(f" {continuation}{tool_connector} ", style="dim")
+                            tree.append(f"{icon} {name}", style="dim")
+                            if tool.content_preview:
+                                tree.append("\n")
+                                tree.append(f" {continuation}{tool_continuation}└─ ", style="dim")
+                                tree.append(tool.content_preview, style="dim")
+
+            # Build sprite column
+            sprite_text = RichText()
+            for i, line in enumerate(sprite_lines):
+                sprite_text.append(line, style=primary)
+                if i < len(sprite_lines) - 1:
+                    sprite_text.append("\n")
+
+            grid = Table.grid(padding=(0, 1))
+            grid.add_column(width=20)  # sprite column
+            grid.add_column()          # info column
+            grid.add_row(sprite_text, tree)
+            parts.append(grid)
 
         return RichGroup(*parts)
 
@@ -2331,6 +2469,15 @@ class BettyApp(App):
                 ("Edit", "✏️ Edit"),
                 ("Bash", "💻 Bash"),
             ]
+        elif ui_style == "berry":
+            self._turn_filters = [
+                ("all", "All"),
+                ("tool", "Tools"),
+                ("Read", "📖 Read"),
+                ("Write", "✏️ Write"),
+                ("Edit", "✏️ Edit"),
+                ("Bash", "💻 Bash"),
+            ]
         else:
             self._turn_filters = [
                 ("all", "All"),
@@ -2487,8 +2634,8 @@ class BettyApp(App):
             conversation.mount(Static("[dim]Waiting for activity...[/dim]"))
             return
 
-        # Waterfall style: render TraceSpanWidgets instead of normal widgets
-        if self._ui_style == "waterfall":
+        # Waterfall / Berry style: render TraceSpanWidgets instead of normal widgets
+        if self._ui_style in ("waterfall", "berry"):
             self._refresh_conversation_waterfall(conversation, session, selected_index, rc)
             return
 
@@ -2586,7 +2733,7 @@ class BettyApp(App):
             widget = TraceSpanWidget(
                 group,
                 span_tokens=span_tokens,
-                ui_style="rich",
+                ui_style=self._ui_style,
                 detail_level=effective_level,
                 id=f"trace-span-{rc}-{i}",
             )
