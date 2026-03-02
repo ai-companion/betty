@@ -120,7 +120,7 @@ def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Pa
 @click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects (not just current directory)")
 @click.option("--worktree", "-w", "worktree_mode", is_flag=True, help="Watch all git worktrees of the current repository")
 @click.option("--manager", "-M", "manager_mode", is_flag=True, help="Start in manager view showing all session cards")
-@click.option("--style", type=click.Choice(["rich", "claude-code", "waterfall"]), default=None, help="UI style override for this run")
+@click.option("--style", type=click.Choice(["rich", "claude-code", "waterfall", "berry"]), default=None, help="UI style override for this run")
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--manager-open-mode", type=click.Choice(["swap", "expand", "auto"]), default=None, help="Manager view open mode (swap, expand, or auto)")
@@ -224,7 +224,7 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 
 
 @main.command()
-@click.option("--style", type=click.Choice(["rich", "claude-code", "waterfall"]), help="UI style")
+@click.option("--style", type=click.Choice(["rich", "claude-code", "waterfall", "berry"]), help="UI style")
 @click.option("--url", help="LLM server API base URL (e.g., http://localhost:1234/v1)")
 @click.option("--model", help="LLM model name with litellm prefix (e.g., openai/gpt-4o-mini)")
 @click.option("--llm-preset", "preset", type=click.Choice(["claude-code", "vllm", "lm-studio", "ollama", "openai", "openrouter", "anthropic"]), help="Use preset LLM configuration")
@@ -409,6 +409,7 @@ def config(style: str | None, url: str | None, model: str | None, preset: str | 
         console.print("  [cyan]rich[/cyan]        Boxes with emojis (default)")
         console.print("  [cyan]claude-code[/cyan]  Minimal style matching Claude Code")
         console.print("  [cyan]waterfall[/cyan]   Trace/span outline with token counts")
+        console.print("  [cyan]berry[/cyan]      Berry character reflects Claude's activity")
 
         console.print("\n[bold]LLM Presets:[/bold]\n")
         examples = get_example_configs()

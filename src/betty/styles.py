@@ -544,10 +544,117 @@ class ClaudeCodeStyle(StyleRenderer):
         return f"[{style}]{indicator} {title}[/{style}]: {message}"
 
 
+class BerryStyle(StyleRenderer):
+    """Berry-themed style with purple/pink palette and blueberry character."""
+
+    name = "berry"
+    filters = [
+        ("all", "All"),
+        ("tool", "Tools"),
+        ("Read", "📖 Read"),
+        ("Write", "✏️ Write"),
+        ("Edit", "✏️ Edit"),
+        ("Bash", "💻 Bash"),
+    ]
+
+    # Re-use RichStyle's rendering logic for turns/tool groups
+    _rich = None
+
+    def _get_rich(self) -> RichStyle:
+        if self._rich is None:
+            self._rich = RichStyle()
+        return self._rich
+
+    def render_turn(
+        self, turn: "Turn", is_selected: bool, conv_turn: int, use_summary: bool
+    ) -> Text | Group | Panel:
+        return self._get_rich().render_turn(turn, is_selected, conv_turn, use_summary)
+
+    def render_tool_group(
+        self, group: "ToolGroup", is_selected: bool
+    ) -> Panel | Group:
+        return self._get_rich().render_tool_group(group, is_selected)
+
+    def render_header(
+        self,
+        sessions_text: str,
+        active: "Session | None",
+        filter_label: str,
+        auto_scroll: bool,
+    ) -> Panel:
+        if active:
+            scroll_indicator = "" if auto_scroll else " [dim](paused)[/dim]"
+            historical_count = sum(1 for t in active.turns if t.is_historical)
+            live_count = len(active.turns) - historical_count
+            turns_info = (
+                f"◷{historical_count}+{live_count}" if historical_count else f"{live_count}"
+            )
+            stats = (
+                f"[dim]Model:[/dim] {active.model}  "
+                f"[dim]Words:[/dim] ↓{active.total_input_words:,} ↑{active.total_output_words:,}  "
+                f"[dim]Turns:[/dim] {turns_info}  "
+                f"[dim]Filter:[/dim] {filter_label}{scroll_indicator}"
+            )
+        else:
+            stats = "[dim]Waiting for session...[/dim]"
+
+        content = f"{sessions_text}\n{stats}"
+        return Panel(
+            content,
+            title="[bold #c084fc]🫐 Berry[/bold #c084fc]",
+            title_align="left",
+            border_style="#9333ea",
+        )
+
+    def render_status_line(self, monitor_text: str) -> Table:
+        table = Table.grid(expand=True)
+        table.add_column(ratio=1)
+        table.add_column(ratio=1)
+
+        monitor_content = (
+            monitor_text if monitor_text else "[dim]Press \\[m] to set monitoring rules[/dim]"
+        )
+        monitor_box = Panel(
+            monitor_content,
+            title="[#c084fc]📋 Monitor[/#c084fc]",
+            title_align="left",
+            border_style="#a78bfa",
+            padding=(0, 1),
+        )
+
+        ask_box = Panel(
+            "[dim]Press \\[?] to ask about trace[/dim]",
+            title="[#f472b6]❓ Ask[/#f472b6]",
+            title_align="left",
+            border_style="#f472b6",
+            padding=(0, 1),
+        )
+
+        table.add_row(monitor_box, ask_box)
+        return table
+
+    def get_alert_indicator(self, danger_count: int, warn_count: int) -> str:
+        if danger_count > 0:
+            return f"[bold red]🚨{danger_count}[/bold red] "
+        elif warn_count > 0:
+            return f"[yellow]⚠️{warn_count}[/yellow] "
+        return ""
+
+    def format_alert_line(self, level: str, title: str, message: str) -> str:
+        if level == "danger":
+            indicator = "🚨"
+            style = "bold red"
+        else:
+            indicator = "⚠️ "
+            style = "yellow"
+        return f"[{style}]{indicator} {title}[/{style}]: {message}"
+
+
 # Style registry
 STYLES: dict[str, type[StyleRenderer]] = {
     "rich": RichStyle,
     "claude-code": ClaudeCodeStyle,
+    "berry": BerryStyle,
 }
 
 
