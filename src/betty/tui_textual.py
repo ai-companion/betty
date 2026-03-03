@@ -289,7 +289,156 @@ TurnWidget.selected, ToolGroupWidget.selected, SpanGroupWidget.selected, TraceSp
     padding: 0 1;
     background: $surface;
 }
+
+#berry-scene {
+    display: none;
+    height: auto;
+    max-height: 14;
+    border: solid #9333ea;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: #1a0a2e;
+}
+
+#berry-scene.visible {
+    display: block;
+}
 """
+
+
+class BerrySceneWidget(Widget):
+    """Persistent animated Berry scene widget shown at the top in berry UI style.
+
+    Renders: sprite animation + speech bubble | activity feed
+    Below:   status line + tool inventory + ground
+    """
+
+    DEFAULT_CSS = """
+    BerrySceneWidget {
+        height: auto;
+        max-height: 14;
+    }
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._tick: int = 0
+        self._berry_state: str = "idle"
+        self._speech_text: str = ""
+        self._activity_entries: list = []
+        self._tools_used: list[tuple[str, str]] = []
+        self._turn_count: int = 0
+        self._animation_timer = None
+        self._content = Static(id="berry-scene-content")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def on_mount(self) -> None:
+        self._animation_timer = self.set_interval(0.25, self._on_tick)
+        self._render_scene()
+
+    def _on_tick(self) -> None:
+        """Advance animation frame (4fps)."""
+        self._tick += 1
+        self._render_scene()
+
+    def update_from_session(self, session: "Session | None") -> None:
+        """Update scene data from current session state."""
+        from .berry import (
+            infer_session_berry_state,
+            build_activity_feed,
+            collect_tools_used,
+        )
+
+        if not session:
+            self._berry_state = "idle"
+            self._speech_text = ""
+            self._activity_entries = []
+            self._tools_used = []
+            self._turn_count = 0
+            return
+
+        self._berry_state = infer_session_berry_state(session)
+        self._turn_count = len(session.turns)
+
+        # Extract speech text from last assistant turn
+        for turn in reversed(session.turns):
+            if turn.role == "assistant":
+                if turn.summary:
+                    self._speech_text = turn.summary
+                else:
+                    text = turn.content_preview[:60]
+                    if len(turn.content_preview) > 60:
+                        text += "..."
+                    self._speech_text = text
+                break
+        else:
+            self._speech_text = ""
+
+        self._activity_entries = build_activity_feed(session, max_entries=6)
+        self._tools_used = collect_tools_used(session)
+        self._render_scene()
+
+    def _render_scene(self) -> None:
+        """Build the full scene as a Rich renderable and update the content widget."""
+        from .berry import (
+            get_sprite_frame,
+            render_speech_bubble,
+            BERRY_COLORS,
+        )
+
+        sprite_lines = get_sprite_frame(self._berry_state, self._tick)
+        bubble_lines = render_speech_bubble(self._speech_text, max_width=28) if self._speech_text else []
+
+        # Build left column: sprite + bubble side by side
+        left_lines: list[str] = []
+        max_lines = max(len(sprite_lines), len(bubble_lines))
+        for i in range(max_lines):
+            sprite_part = sprite_lines[i] if i < len(sprite_lines) else " " * 18
+            bubble_part = bubble_lines[i] if i < len(bubble_lines) else ""
+            left_lines.append(f"{sprite_part}  {bubble_part}")
+
+        # Status line: state | turn count | tool icons
+        tool_icons = " ".join(icon for icon, _ in self._tools_used[:8])
+        status = f"  {self._berry_state} | {self._turn_count} turns | {tool_icons}"
+        left_lines.append(status)
+
+        # Ground line
+        left_lines.append("  " + "~" * 40)
+
+        # Build right column: activity feed
+        right_lines: list[str] = ["Activity"]
+        for i, entry in enumerate(self._activity_entries):
+            connector = "└─" if i == len(self._activity_entries) - 1 else "├─"
+            ts = entry.timestamp.strftime("%H:%M")
+            label = entry.label[:30]
+            right_lines.append(f"{connector} {entry.icon} {label} {ts}")
+
+        # Pad to same height
+        max_h = max(len(left_lines), len(right_lines))
+        while len(left_lines) < max_h:
+            left_lines.append("")
+        while len(right_lines) < max_h:
+            right_lines.append("")
+
+        # Build Rich Table grid (2 columns)
+        grid = Table.grid(expand=True)
+        grid.add_column(ratio=6)
+        grid.add_column(ratio=4)
+
+        purple = BERRY_COLORS["primary"]
+        text_color = BERRY_COLORS["text"]
+
+        for left, right in zip(left_lines, right_lines):
+            left_text = RichText(left, style=purple)
+            right_text = RichText(right, style=f"{text_color} dim")
+            grid.add_row(left_text, right_text)
+
+        try:
+            self._content.update(grid)
+        except Exception:
+            pass
 
 
 class TurnWidget(Static):
@@ -1244,85 +1393,49 @@ class TraceSpanWidget(Static):
         return RichGroup(*parts)
 
     def _render_berry_style(self):
-        from .berry import BERRY_SPRITES, BERRY_COLORS, infer_berry_state, get_tool_powerup
+        """Render span in berry style — compact purple-themed text, no per-span sprites."""
+        from .berry import BERRY_COLORS, get_tool_powerup
 
         parts = []
         level = self.detail_level
         tok_label = self._get_token_label()
+        purple = BERRY_COLORS["primary"]
         select_prefix = "► " if self.selected else ""
-        berry_state = infer_berry_state(self.group)
-        sprite_lines = BERRY_SPRITES.get(berry_state, BERRY_SPRITES["idle"])
-        primary = BERRY_COLORS["primary"]
-        accent = BERRY_COLORS["accent"]
-        highlight = BERRY_COLORS["highlight"]
 
         if level == DetailLevel.COMPACT:
-            # Single line: 🫐 "user preview..."  1.2k tok  (5 turns)
+            # 🫐 "user preview..."  1.2k tok  (5 turns)
             user_label = self._get_user_label(max_len=40)
             turn_count = self.group.total_turns
-            line = RichText()
-            line.append(f"{select_prefix}🫐 ", style=f"bold {primary}")
-            line.append(user_label, style=primary if not self.selected else "bold")
+            line = f"{select_prefix}🫐 {user_label}"
             if tok_label:
-                line.append(f"  {tok_label}", style="dim")
-            line.append(f"  ({turn_count} turns)", style="dim")
-            parts.append(line)
+                line += f"  {tok_label}"
+            line += f"  ({turn_count} turns)"
+            parts.append(RichText.from_markup(f"[{purple}]{markup_escape(line)}[/{purple}]"))
 
         elif level == DetailLevel.SUMMARY:
-            # Berry character (left) + info (right) in a 2-column grid
+            # Header + └─ 🤖 summary + tool icons
             user_label = self._get_user_label()
-            summary = self.group.activity_summary
-
-            # Collect tool icons used in this span
-            tool_names = []
-            for t in self.group.response_turns:
-                if t.role == "tool" and t.tool_name:
-                    tool_names.append(t.tool_name)
-            unique_tools = list(dict.fromkeys(tool_names))
-            tool_icons = " ".join(get_tool_powerup(n) for n in unique_tools[:6])
-
-            # Build right side
-            info = RichText()
-            info.append(f"{select_prefix}", style="bold" if self.selected else "")
-            info.append(user_label, style=f"bold {primary}")
+            header = f"{select_prefix}🫐 {user_label}"
             if tok_label:
-                info.append(f"  {tok_label}", style="dim")
-            info.append("\n")
-            info.append(f"  {summary}", style="")
-            if tool_icons:
-                info.append(f"\n  {tool_icons}", style="")
-
-            # Build sprite column
-            sprite_text = RichText()
-            for i, line in enumerate(sprite_lines):
-                sprite_text.append(line, style=primary)
-                if i < len(sprite_lines) - 1:
-                    sprite_text.append("\n")
-
-            grid = Table.grid(padding=(0, 1))
-            grid.add_column(width=20)  # sprite column
-            grid.add_column()          # info column
-            grid.add_row(sprite_text, info)
-            parts.append(grid)
+                header += f"  {tok_label}"
+            parts.append(RichText.from_markup(f"[bold {purple}]{markup_escape(header)}[/bold {purple}]"))
+            summary = self.group.activity_summary
+            parts.append(RichText.from_markup(f"[{purple}] └─ 🤖 {markup_escape(summary)}[/{purple}]"))
 
         else:
-            # OUTLINE and DETAIL: Berry character (left) + turn tree (right)
+            # OUTLINE / DETAIL — header + tree of turns with tool icons
             user_label = self._get_user_label()
-            blocks = self._group_response_into_blocks()
-
-            # Build tree lines for right column
-            tree = RichText()
-            tree.append(f"{select_prefix}", style="bold" if self.selected else "")
-            tree.append(user_label, style=f"bold {primary}")
+            header = f"{select_prefix}🫐 {user_label}"
             if tok_label:
-                tree.append(f"  {tok_label}", style="dim")
+                header += f"  {tok_label}"
+            parts.append(RichText.from_markup(f"[bold {purple}]{markup_escape(header)}[/bold {purple}]"))
 
+            blocks = self._group_response_into_blocks()
             for bi, (asst, tools) in enumerate(blocks):
                 is_last_block = (bi == len(blocks) - 1)
                 block_connector = "└─" if is_last_block else "├─"
                 continuation = "   " if is_last_block else "│  "
 
-                tree.append("\n")
                 if asst:
                     if level == DetailLevel.DETAIL:
                         text = asst.content_full[:200]
@@ -1330,52 +1443,32 @@ class TraceSpanWidget(Static):
                             text += "..."
                     else:
                         text = asst.summary or asst.content_preview[:80]
-                    tree.append(f" {block_connector} ", style="dim")
-                    tree.append("🤖 ", style="")
-                    tree.append(text, style="")
+                    parts.append(RichText.from_markup(
+                        f"[{purple}] {block_connector} 🤖 {markup_escape(text)}[/{purple}]"
+                    ))
                 else:
-                    tree.append(f" {block_connector} ", style="dim")
-                    tree.append("🔧 (tools)", style=accent)
+                    parts.append(RichText.from_markup(
+                        f"[{purple}] {block_connector} 🔧 (tools)[/{purple}]"
+                    ))
 
                 if tools:
                     if level == DetailLevel.OUTLINE:
-                        names = [t.tool_name or "tool" for t in tools]
-                        unique = list(dict.fromkeys(names))
-                        tool_text = ", ".join(
-                            f"{get_tool_powerup(n)} {n}" for n in unique[:4]
-                        )
-                        if len(unique) > 4:
-                            tool_text += "..."
-                        tree.append("\n")
-                        tree.append(f" {continuation}└─ ", style="dim")
-                        tree.append(tool_text, style="dim")
+                        icons = []
+                        for t in tools:
+                            icon, _ = get_tool_powerup(t.tool_name)
+                            icons.append(icon)
+                        tool_str = " ".join(icons[:6])
+                        parts.append(RichText.from_markup(
+                            f"[dim {purple}] {continuation}└─ {tool_str}[/dim {purple}]"
+                        ))
                     else:
                         for ti, tool in enumerate(tools):
                             is_last_tool = (ti == len(tools) - 1)
-                            tool_connector = "└─" if is_last_tool else "├─"
-                            tool_continuation = "   " if is_last_tool else "│  "
-                            name = tool.tool_name or "tool"
-                            icon = get_tool_powerup(name)
-                            tree.append("\n")
-                            tree.append(f" {continuation}{tool_connector} ", style="dim")
-                            tree.append(f"{icon} {name}", style="dim")
-                            if tool.content_preview:
-                                tree.append("\n")
-                                tree.append(f" {continuation}{tool_continuation}└─ ", style="dim")
-                                tree.append(tool.content_preview, style="dim")
-
-            # Build sprite column
-            sprite_text = RichText()
-            for i, line in enumerate(sprite_lines):
-                sprite_text.append(line, style=primary)
-                if i < len(sprite_lines) - 1:
-                    sprite_text.append("\n")
-
-            grid = Table.grid(padding=(0, 1))
-            grid.add_column(width=20)  # sprite column
-            grid.add_column()          # info column
-            grid.add_row(sprite_text, tree)
-            parts.append(grid)
+                            tc = "└─" if is_last_tool else "├─"
+                            icon, name = get_tool_powerup(tool.tool_name)
+                            parts.append(RichText.from_markup(
+                                f"[dim {purple}] {continuation}{tc} {icon} {markup_escape(name)}: {markup_escape(tool.content_preview[:40])}[/dim {purple}]"
+                            ))
 
         return RichGroup(*parts)
 
@@ -2512,6 +2605,7 @@ class BettyApp(App):
 
     def compose(self) -> ComposeResult:
         yield HeaderPanel(id="header")
+        yield BerrySceneWidget(id="berry-scene")
         with Horizontal(id="main-content"):
             yield ManagerView(store=self.store, id="manager-view")
             with Vertical(id="detail-pane"):
@@ -2532,6 +2626,12 @@ class BettyApp(App):
         # Show manager view if started with --manager
         if self._manager_mode:
             self._show_manager_view()
+        # Show berry scene if berry style
+        if self._ui_style == "berry":
+            try:
+                self.query_one("#berry-scene", BerrySceneWidget).add_class("visible")
+            except NoMatches:
+                pass
         # Set up periodic refresh for summaries
         self.set_interval(0.5, self._check_for_updates)
 
@@ -2564,6 +2664,7 @@ class BettyApp(App):
             if self._auto_scroll:
                 self.query_one("#conversation", ConversationView).scroll_to_end_if_auto()
         self._refresh_agent_panel()
+        self._refresh_berry_scene()
 
     @on(AlertAdded)
     def handle_alert_added(self, message: AlertAdded) -> None:
@@ -2583,6 +2684,18 @@ class BettyApp(App):
             self._refresh_views()  # Refresh plan/tasks in case they changed
         if self._show_agent_panel:
             self._refresh_agent_panel()
+        self._refresh_berry_scene()
+
+    def _refresh_berry_scene(self) -> None:
+        """Refresh the Berry scene widget (berry style only)."""
+        if self._ui_style != "berry":
+            return
+        try:
+            berry_scene = self.query_one("#berry-scene", BerrySceneWidget)
+        except NoMatches:
+            return
+        session = self.store.get_active_session()
+        berry_scene.update_from_session(session)
 
     def _refresh_all(self) -> None:
         """Refresh all UI components."""
@@ -2590,6 +2703,7 @@ class BettyApp(App):
         self._refresh_conversation()
         self._refresh_alerts()
         self._refresh_views()
+        self._refresh_berry_scene()
 
     def _refresh_header(self) -> None:
         """Refresh header panel."""
