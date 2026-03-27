@@ -397,7 +397,7 @@ class Summarizer:
         claude_model = self.model.split("/", 1)[1] if "/" in self.model else self.model
 
         result = subprocess.run(
-            ["claude", "-p", "--no-session-persistence", "--model", claude_model,
+            ["claude", "-p", "--bare", "--no-session-persistence", "--model", claude_model,
              "--disable-slash-commands", "--tools", "", "--setting-sources", "",
              "--system-prompt", system_prompt],
             input=prompt,
