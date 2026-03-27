@@ -397,13 +397,16 @@ class Summarizer:
         # Extract model name from "claude-code/<model>" prefix
         claude_model = self.model.split("/", 1)[1] if "/" in self.model else self.model
 
-        cmd = ["claude", "-p", "--no-session-persistence", "--model", claude_model,
-               "--disable-slash-commands", "--tools", "", "--setting-sources", "",
-               "--system-prompt", system_prompt]
-
         # Only add --bare when using API key or Vertex auth (--bare blocks OAuth/keychain)
-        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_USE_VERTEX"):
-            cmd.insert(2, "--bare")
+        bare_flag = (
+            ["--bare"]
+            if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_USE_VERTEX")
+            else []
+        )
+        cmd = ["claude", "-p"] + bare_flag + [
+            "--no-session-persistence", "--model", claude_model,
+            "--disable-slash-commands", "--tools", "", "--setting-sources", "",
+            "--system-prompt", system_prompt]
 
         result = subprocess.run(
             cmd,
