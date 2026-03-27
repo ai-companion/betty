@@ -401,8 +401,8 @@ class Summarizer:
                "--disable-slash-commands", "--tools", "", "--setting-sources", "",
                "--system-prompt", system_prompt]
 
-        # Only add --bare when using API key auth (--bare blocks OAuth/keychain)
-        if os.environ.get("ANTHROPIC_API_KEY"):
+        # Only add --bare when using API key or Vertex auth (--bare blocks OAuth/keychain)
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_USE_VERTEX"):
             cmd.insert(2, "--bare")
 
         result = subprocess.run(
