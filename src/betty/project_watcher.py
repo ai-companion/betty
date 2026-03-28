@@ -49,10 +49,11 @@ class ProjectWatcher:
         self._known_sessions: set[str] = set()  # Sessions we've loaded
         self._skipped_sessions: dict[str, tuple[Path, float]] = {}  # session_id -> (path, last_mtime)
         self._running = False
+        self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._observer: Observer | None = None
         self._watched_paths: set[str] = set()  # Paths already scheduled in observer
-        self._lock = threading.Lock()  # Protects _known_sessions, _skipped_sessions, _watched_paths, _project_paths
+        self._lock = threading.Lock()  # Protects _known_sessions, _skipped_sessions, _watched_paths, _project_paths, _observer
 
     class _SessionFileHandler(FileSystemEventHandler):
         """Handle filesystem events for session .jsonl files."""
@@ -86,11 +87,16 @@ class ProjectWatcher:
             if session_id in self._skipped_sessions:
                 old_path, old_mtime = self._skipped_sessions[session_id]
                 try:
-                    new_mtime = file.stat().st_mtime
-                    if new_mtime > old_mtime:
-                        # Session has new activity - load it now
+                    st = file.stat()
+                    if st.st_mtime > old_mtime and st.st_size > 0:
+                        # Session has new activity and content - load it now
                         del self._skipped_sessions[session_id]
                         self._known_sessions.add(session_id)
+                    else:
+                        # Still empty or not updated
+                        if st.st_mtime > old_mtime:
+                            self._skipped_sessions[session_id] = (file, st.st_mtime)
+                        return
                 except (PermissionError, OSError):
                     return
                 # Call outside lock (callback may do heavy work)
@@ -114,10 +120,11 @@ class ProjectWatcher:
         with self._lock:
             if path_str in self._watched_paths or not self._observer:
                 return
+            observer = self._observer  # Capture under lock
         if not path.exists():
             return
         try:
-            self._observer.schedule(
+            observer.schedule(
                 self._SessionFileHandler(self), path_str, recursive=False
             )
             with self._lock:
@@ -210,14 +217,18 @@ class ProjectWatcher:
         """Slow poll loop for global mode directory discovery only."""
         while self._running:
             self._discover_new_project_dirs()
-            time.sleep(5.0)
+            # Use event wait so stop() can wake us immediately
+            self._stop_event.wait(timeout=5.0)
 
     def stop(self) -> None:
         """Stop the watcher thread and observer."""
         self._running = False
-        if self._observer:
-            self._observer.stop()
-            self._observer.join(timeout=2.0)
+        self._stop_event.set()  # Wake poll loop immediately
+        with self._lock:
+            observer = self._observer
             self._observer = None
+        if observer:
+            observer.stop()
+            observer.join(timeout=2.0)
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=6.0)

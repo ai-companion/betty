@@ -84,10 +84,10 @@ class TranscriptWatcher:
 
         class Handler(FileSystemEventHandler):
             def __init__(self, target_path):
-                self._target = str(target_path)
+                self._target = str(Path(target_path).resolve())
 
             def on_modified(self, event):
-                if event.src_path == self._target:
+                if str(Path(event.src_path).resolve()) == self._target:
                     wake_event.set()
 
         observer = Observer()
