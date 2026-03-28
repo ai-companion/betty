@@ -182,15 +182,21 @@ class ProjectWatcher:
         if self._on_initial_load_done:
             self._on_initial_load_done()
 
-        # Set up watchdog observer
-        self._observer = Observer()
-        for project_path in self._project_paths:
-            self._add_watch(project_path)
-        self._observer.start()
-
-        # Start background thread (for global mode directory discovery)
+        # Set up watchdog observer (fall back to polling if it fails)
         self._running = True
-        if self._global_mode:
+        watchdog_ok = False
+        try:
+            self._observer = Observer()
+            for project_path in self._project_paths:
+                self._add_watch(project_path)
+            self._observer.start()
+            watchdog_ok = True
+        except Exception:
+            self._observer = None
+
+        # In global mode, always run discovery thread.
+        # If watchdog failed, run discovery thread even in non-global mode as fallback.
+        if self._global_mode or not watchdog_ok:
             self._thread = threading.Thread(target=self._watch_loop, daemon=True)
             self._thread.start()
 
@@ -213,10 +219,29 @@ class ProjectWatcher:
         except (PermissionError, OSError):
             pass
 
+    def _scan_for_new_sessions(self) -> None:
+        """Poll scan for new/updated session files (fallback when watchdog unavailable)."""
+        with self._lock:
+            paths = list(self._project_paths)
+        for project_path in paths:
+            if not project_path.exists():
+                continue
+            try:
+                for file in project_path.iterdir():
+                    if file.suffix == ".jsonl" and file.is_file():
+                        self._on_new_or_updated_session(file.stem, file)
+            except (PermissionError, OSError):
+                pass
+
     def _watch_loop(self) -> None:
-        """Slow poll loop for global mode directory discovery only."""
+        """Poll loop for directory discovery and fallback session scanning."""
         while self._running:
             self._discover_new_project_dirs()
+            # If watchdog is not running, also poll for new session files
+            with self._lock:
+                has_observer = self._observer is not None
+            if not has_observer:
+                self._scan_for_new_sessions()
             # Use event wait so stop() can wake us immediately
             self._stop_event.wait(timeout=5.0)
 

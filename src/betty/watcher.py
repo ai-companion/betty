@@ -101,10 +101,14 @@ class TranscriptWatcher:
             path = self._current_path
 
         if path and path.parent.exists():
-            handler = Handler(path)
-            observer.schedule(handler, str(path.parent), recursive=False)
-            observer.start()
-            observer_started = True
+            try:
+                handler = Handler(path)
+                observer.schedule(handler, str(path.parent), recursive=False)
+                observer.start()
+                observer_started = True
+            except Exception:
+                logger.debug("Watchdog setup failed, using polling fallback")
+                observer_started = False
 
         try:
             while self._running:
