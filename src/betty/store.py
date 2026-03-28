@@ -477,8 +477,9 @@ class EventStore:
         with self._lock:
             session = self._sessions.get(session_id)
             if session:
-                # Renumber turn based on current session turns
-                turn.turn_number = len(session.turns) + 1
+                # Use monotonic turn number based on last turn (survives pruning)
+                last_num = session.turns[-1].turn_number if session.turns else 0
+                turn.turn_number = last_num + 1
                 session.turns.append(turn)
                 # Prune old turns to cap memory usage
                 if len(session.turns) > MAX_TURNS_IN_MEMORY:
@@ -816,8 +817,14 @@ class EventStore:
         # Log peak memory usage
         try:
             import resource
-            peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            logging.info(f"Betty peak RSS: {peak_kb / 1024:.1f} MB")
+            import sys
+            peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # macOS reports bytes, Linux reports KB
+            if sys.platform == "darwin":
+                peak_mb = peak_rss / (1024 * 1024)
+            else:
+                peak_mb = peak_rss / 1024
+            logging.info(f"Betty peak RSS: {peak_mb:.1f} MB")
         except Exception:
             pass
         # Stop project watcher first (prevents new sessions from being discovered)

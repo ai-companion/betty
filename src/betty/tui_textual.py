@@ -2898,10 +2898,11 @@ class BettyApp(App):
             span_default_expanded = self._detail_level in (DetailLevel.OUTLINE, DetailLevel.DETAIL)
             group_default_expanded = self._detail_level == DetailLevel.DETAIL
 
-            # Check span cache
-            cache_key = (session.session_id, len(session.turns))
-            if self._span_cache and self._span_cache[0] == cache_key[0] and self._span_cache[1] == cache_key[1]:
-                span_groups = self._span_cache[2]
+            # Check span cache (keyed by session_id, turn count, last turn number)
+            last_turn_num = session.turns[-1].turn_number if session.turns else 0
+            cache_key = (session.session_id, len(session.turns), last_turn_num)
+            if self._span_cache and self._span_cache[:3] == cache_key:
+                span_groups = self._span_cache[3]
                 # Re-apply expanded state
                 for sg in span_groups:
                     sg.expanded = self._span_expanded_state.get(sg.first_turn_number, span_default_expanded)
@@ -2910,7 +2911,7 @@ class BettyApp(App):
                     session, self._span_expanded_state,
                     default_expanded=span_default_expanded,
                 )
-                self._span_cache = (cache_key[0], cache_key[1], span_groups)
+                self._span_cache = (*cache_key, span_groups)
             grouped: list[Turn | ToolGroup | SpanGroup] = []
             for sg in span_groups:
                 if not sg.expanded:

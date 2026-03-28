@@ -290,12 +290,20 @@ class Session:
     _display_name_from_path: str | None = field(default=None, init=False, repr=False)
     # Cache for aggregate properties
     _cache_turns_len: int = field(default=0, init=False, repr=False)
+    _cache_last_turn_num: int = field(default=0, init=False, repr=False)
     _cached_totals: dict = field(default_factory=dict, init=False, repr=False)
 
     def _check_cache(self) -> None:
-        """Invalidate cache if turns changed."""
-        if len(self.turns) != self._cache_turns_len:
-            self._cache_turns_len = len(self.turns)
+        """Invalidate cache if turns changed.
+
+        Uses both length and last turn number so cache invalidates
+        even when turns are pruned+appended at the same length.
+        """
+        cur_len = len(self.turns)
+        cur_last = self.turns[-1].turn_number if self.turns else 0
+        if cur_len != self._cache_turns_len or cur_last != self._cache_last_turn_num:
+            self._cache_turns_len = cur_len
+            self._cache_last_turn_num = cur_last
             self._cached_totals.clear()
 
     @property
