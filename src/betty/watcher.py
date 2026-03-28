@@ -24,6 +24,7 @@ class TranscriptWatcher:
         self._turn_number: int = 0
         self._running = False
         self._cancelled = False  # Set by cancel() to prevent watch() from starting
+        self._stop_event = threading.Event()
         self._pending_command: str | None = None  # Command name from metadata entry
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -72,8 +73,9 @@ class TranscriptWatcher:
         with self._lock:
             self._cancelled = True  # Prevent late starts from watch()
             self._running = False
+        self._stop_event.set()  # Wake wait loop immediately
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=3.0)
 
     def _watch_loop(self) -> None:
         """Main watch loop - use watchdog with fallback polling."""
@@ -108,9 +110,11 @@ class TranscriptWatcher:
                     self._check_for_updates()
                 except Exception as e:
                     logger.error(f"Error in transcript watcher: {e}", exc_info=True)
-                # Wait for watchdog event or fallback timeout
+                # Wait for watchdog event, stop signal, or fallback timeout
                 wake_event.wait(timeout=2.0)
                 wake_event.clear()
+                if self._stop_event.is_set():
+                    break
         finally:
             if observer_started and observer.is_alive():
                 observer.stop()

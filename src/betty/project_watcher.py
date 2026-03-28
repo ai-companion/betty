@@ -85,7 +85,7 @@ class ProjectWatcher:
 
             # Check if this was a skipped session that got updated
             if session_id in self._skipped_sessions:
-                old_path, old_mtime = self._skipped_sessions[session_id]
+                _, old_mtime = self._skipped_sessions[session_id]
                 try:
                     st = file.stat()
                     if st.st_mtime > old_mtime and st.st_size > 0:
