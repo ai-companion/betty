@@ -26,6 +26,10 @@ from .summarizer import (
 from .transcript import parse_transcript
 from .watcher import TranscriptWatcher
 
+# Maximum turns to keep in memory per session.
+# Older turns can be re-read from the transcript file on demand.
+MAX_TURNS_IN_MEMORY = 500
+
 
 class EventStore:
     """Thread-safe store for Claude Code sessions."""
@@ -476,6 +480,9 @@ class EventStore:
                 # Renumber turn based on current session turns
                 turn.turn_number = len(session.turns) + 1
                 session.turns.append(turn)
+                # Prune old turns to cap memory usage
+                if len(session.turns) > MAX_TURNS_IN_MEMORY:
+                    session.turns = session.turns[-MAX_TURNS_IN_MEMORY:]
 
                 # Process task operations
                 self._process_task_operation(session, turn)
@@ -806,6 +813,13 @@ class EventStore:
 
     def stop(self) -> None:
         """Stop all watchers and summarizer."""
+        # Log peak memory usage
+        try:
+            import resource
+            peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            logging.info(f"Betty peak RSS: {peak_kb / 1024:.1f} MB")
+        except Exception:
+            pass
         # Stop project watcher first (prevents new sessions from being discovered)
         if self._project_watcher:
             self._project_watcher.stop()
@@ -861,6 +875,9 @@ class EventStore:
                 if session_id not in self._sessions:
                     return file_position
                 session.turns = transcript_turns
+                # Prune to max turns
+                if len(session.turns) > MAX_TURNS_IN_MEMORY:
+                    session.turns = session.turns[-MAX_TURNS_IN_MEMORY:]
                 if plan_info:
                     session.plan_content = plan_info[0]
 
