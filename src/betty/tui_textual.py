@@ -2687,6 +2687,9 @@ class BettyApp(App):
                 fp_parts.append(str(last.summary or ""))
                 fp_parts.append(str(last.critic or ""))
             fp_parts.append(str(session.plan_updated_at or ""))
+            # Include PR info so manager refreshes when PR is detected
+            if session.pr_info:
+                fp_parts.append(str(session.pr_info.number))
             # Include first tool summary for tool group updates
             for t in reversed(session.turns[-20:] if session.turns else []):
                 if t.role == "tool" and t.summary:
