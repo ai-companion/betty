@@ -114,15 +114,16 @@ class ProjectWatcher:
         with self._lock:
             if path_str in self._watched_paths or not self._observer:
                 return
-            self._watched_paths.add(path_str)
-        if path.exists():
-            try:
-                self._observer.schedule(
-                    self._SessionFileHandler(self), path_str, recursive=False
-                )
-            except OSError:
-                with self._lock:
-                    self._watched_paths.discard(path_str)
+        if not path.exists():
+            return
+        try:
+            self._observer.schedule(
+                self._SessionFileHandler(self), path_str, recursive=False
+            )
+            with self._lock:
+                self._watched_paths.add(path_str)
+        except OSError:
+            pass
 
     def start(self) -> None:
         """Initial scan and start watching."""
