@@ -52,6 +52,7 @@ class ProjectWatcher:
         self._thread: threading.Thread | None = None
         self._observer: Observer | None = None
         self._watched_paths: set[str] = set()  # Paths already scheduled in observer
+        self._lock = threading.Lock()  # Protects _known_sessions, _skipped_sessions, _watched_paths, _project_paths
 
     class _SessionFileHandler(FileSystemEventHandler):
         """Handle filesystem events for session .jsonl files."""
@@ -72,46 +73,56 @@ class ProjectWatcher:
                     self._watcher._on_new_or_updated_session(path.stem, path)
 
     def _on_new_or_updated_session(self, session_id: str, file: Path) -> None:
-        """Handle a new or updated session file."""
-        # Already loaded - skip
-        if session_id in self._known_sessions:
-            return
+        """Handle a new or updated session file.
 
-        # Check if this was a skipped session that got updated
-        if session_id in self._skipped_sessions:
-            old_path, old_mtime = self._skipped_sessions[session_id]
-            try:
-                new_mtime = file.stat().st_mtime
-                if new_mtime > old_mtime:
-                    # Session has new activity - load it now
-                    del self._skipped_sessions[session_id]
-                    self._known_sessions.add(session_id)
-                    self._on_session_discovered(session_id, file)
-            except (PermissionError, OSError):
-                pass
-        else:
-            # New session - skip if empty
-            try:
-                stat = file.stat()
-                if stat.st_size == 0:
-                    self._skipped_sessions[session_id] = (file, stat.st_mtime)
+        Thread-safe: called from watchdog threads and the global-mode poll thread.
+        """
+        with self._lock:
+            # Already loaded - skip
+            if session_id in self._known_sessions:
+                return
+
+            # Check if this was a skipped session that got updated
+            if session_id in self._skipped_sessions:
+                old_path, old_mtime = self._skipped_sessions[session_id]
+                try:
+                    new_mtime = file.stat().st_mtime
+                    if new_mtime > old_mtime:
+                        # Session has new activity - load it now
+                        del self._skipped_sessions[session_id]
+                        self._known_sessions.add(session_id)
+                except (PermissionError, OSError):
                     return
-            except (PermissionError, OSError):
-                pass
-            self._known_sessions.add(session_id)
-            self._on_session_discovered(session_id, file)
+                # Call outside lock (callback may do heavy work)
+            else:
+                # New session - skip if empty
+                try:
+                    stat = file.stat()
+                    if stat.st_size == 0:
+                        self._skipped_sessions[session_id] = (file, stat.st_mtime)
+                        return
+                except (PermissionError, OSError):
+                    pass
+                self._known_sessions.add(session_id)
+
+        # Callback outside lock to avoid holding it during heavy I/O
+        self._on_session_discovered(session_id, file)
 
     def _add_watch(self, path: Path) -> None:
         """Add a watchdog watch for a directory if not already watched."""
         path_str = str(path)
-        if path_str not in self._watched_paths and self._observer and path.exists():
+        with self._lock:
+            if path_str in self._watched_paths or not self._observer:
+                return
+            self._watched_paths.add(path_str)
+        if path.exists():
             try:
                 self._observer.schedule(
                     self._SessionFileHandler(self), path_str, recursive=False
                 )
-                self._watched_paths.add(path_str)
             except OSError:
-                pass
+                with self._lock:
+                    self._watched_paths.discard(path_str)
 
     def start(self) -> None:
         """Initial scan and start watching."""
@@ -180,10 +191,16 @@ class ProjectWatcher:
         if not self._projects_dir or not self._projects_dir.exists():
             return
         try:
-            known_paths = set(self._project_paths)
+            with self._lock:
+                known_paths = set(self._project_paths)
+            new_dirs = []
             for p in self._projects_dir.iterdir():
                 if p.is_dir() and p.name.startswith("-") and p not in known_paths:
-                    self._project_paths.append(p)
+                    new_dirs.append(p)
+            if new_dirs:
+                with self._lock:
+                    self._project_paths.extend(new_dirs)
+                for p in new_dirs:
                     self._add_watch(p)
         except (PermissionError, OSError):
             pass

@@ -2596,7 +2596,7 @@ class BettyApp(App):
         self._annotating_turn_number: int | None = None  # Turn being annotated
         self._annotating_scroll_y: float = 0  # Scroll position before annotating
         self._show_agent_panel: bool = False
-        self._span_cache: tuple[str, int, list] | None = None  # (session_id, turns_len, spans)
+        self._span_cache: tuple[str, int, int, list] | None = None  # (session_id, turns_len, last_turn_num, spans)
         self._last_conversation_fingerprint: str = ""
 
     def _resolve_open_mode(self) -> str:
@@ -2695,9 +2695,12 @@ class BettyApp(App):
         fp = "|".join(fp_parts)
 
         if fp == self._last_conversation_fingerprint:
-            # Nothing changed, skip expensive refreshes
-            # Still refresh header (lightweight) for cost updates
+            # Nothing changed in conversation, skip expensive manager/view refreshes.
+            # Still refresh header and panels that update independently.
             self._refresh_header()
+            if self._show_agent_panel:
+                self._refresh_agent_panel()
+            self._refresh_berry_scene()
             return
 
         self._last_conversation_fingerprint = fp

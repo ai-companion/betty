@@ -119,6 +119,15 @@ class Agent:
             self._executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _trim_observations(self, report: SessionReport) -> None:
+        """Trim observations to max_observations. Caller must hold _lock."""
+        if len(report.observations) > self._config.max_observations:
+            report.observations = report.observations[-self._config.max_observations:]
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -170,9 +179,7 @@ class Agent:
             report = self._reports[sid]
             for o in observations:
                 report.observations.append(o)
-            # Trim to max observations
-            if len(report.observations) > self._config.max_observations:
-                report.observations = report.observations[-self._config.max_observations:]
+            self._trim_observations(report)
             report.metrics = metrics
             report.updated_at = datetime.now()
 
@@ -648,6 +655,7 @@ class Agent:
                         severity="warning",
                         metadata={"assessment": report.progress_assessment},
                     ))
+                    self._trim_observations(report)
                     report.updated_at = datetime.now()
 
         except Exception as e:
@@ -916,6 +924,7 @@ class Agent:
                             "source": "llm",
                         },
                     ))
+                    self._trim_observations(report)
 
                 # Current goal: always update
                 report.current_objective = current_goal or session_goal
@@ -934,6 +943,7 @@ class Agent:
                             "source": "llm",
                         },
                     ))
+                    self._trim_observations(report)
 
         except Exception as e:
             logger.debug(f"Goal determination LLM call failed: {e}")
