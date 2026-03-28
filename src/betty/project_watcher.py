@@ -184,6 +184,7 @@ class ProjectWatcher:
 
         # Set up watchdog observer (fall back to polling if it fails)
         self._running = True
+        self._stop_event.clear()
         watchdog_ok = False
         try:
             self._observer = Observer()
