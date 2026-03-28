@@ -82,7 +82,9 @@ class TranscriptWatcher:
         from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
 
-        wake_event = threading.Event()
+        # Use _stop_event as the single wake signal for both filesystem
+        # events and stop requests, so stop() immediately unblocks the wait.
+        stop_event = self._stop_event
 
         class Handler(FileSystemEventHandler):
             def __init__(self, target_path):
@@ -90,7 +92,7 @@ class TranscriptWatcher:
 
             def on_modified(self, event):
                 if str(Path(event.src_path).resolve()) == self._target:
-                    wake_event.set()
+                    stop_event.set()
 
         observer = Observer()
         observer_started = False
@@ -111,10 +113,10 @@ class TranscriptWatcher:
                 except Exception as e:
                     logger.error(f"Error in transcript watcher: {e}", exc_info=True)
                 # Wait for watchdog event, stop signal, or fallback timeout
-                wake_event.wait(timeout=2.0)
-                wake_event.clear()
-                if self._stop_event.is_set():
+                stop_event.wait(timeout=2.0)
+                if not self._running:
                     break
+                stop_event.clear()
         finally:
             if observer_started and observer.is_alive():
                 observer.stop()
