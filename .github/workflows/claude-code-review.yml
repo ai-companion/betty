@@ -6,6 +6,6 @@ on:
 
 jobs:
   review:
-    uses: xukai92/claude-code-review-config/.github/workflows/pr-review.yml@main
+    uses: xukai92/claude-code-review-config/.github/workflows/claude-review.yml@main
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
