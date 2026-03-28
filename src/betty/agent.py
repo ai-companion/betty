@@ -170,6 +170,9 @@ class Agent:
             report = self._reports[sid]
             for o in observations:
                 report.observations.append(o)
+            # Trim to max observations
+            if len(report.observations) > self._config.max_observations:
+                report.observations = report.observations[-self._config.max_observations:]
             report.metrics = metrics
             report.updated_at = datetime.now()
 

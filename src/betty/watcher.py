@@ -78,7 +78,7 @@ class TranscriptWatcher:
     def _watch_loop(self) -> None:
         """Main watch loop - use watchdog with fallback polling."""
         from watchdog.observers import Observer
-        from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+        from watchdog.events import FileSystemEventHandler
 
         wake_event = threading.Event()
 
