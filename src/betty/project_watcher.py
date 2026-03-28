@@ -1,7 +1,6 @@
 """Watch project directories for session files."""
 
 import threading
-import time
 from pathlib import Path
 from typing import Callable
 
