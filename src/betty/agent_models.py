@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -43,7 +44,7 @@ class SessionReport:
     current_objective: str | None = None
     narrative: str = ""
     progress_assessment: str = "on_track"  # "on_track" | "stalled" | "spinning"
-    observations: list[AgentObservation] = field(default_factory=list)
+    observations: deque[AgentObservation] = field(default_factory=lambda: deque(maxlen=100))
     file_changes: list[FileChange] = field(default_factory=list)
     metrics: SessionMetrics | None = None
     updated_at: datetime = field(default_factory=datetime.now)

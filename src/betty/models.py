@@ -38,7 +38,7 @@ def count_words(text: str) -> int:
     return len(text.split())
 
 
-@dataclass
+@dataclass(slots=True)
 class Turn:
     """A turn in the conversation (user message, assistant response, or tool use)."""
 
@@ -63,7 +63,7 @@ class Turn:
     annotation: str | None = None  # User-provided annotation
 
 
-@dataclass
+@dataclass(slots=True)
 class TaskState:
     """State of a task from TaskCreate/TaskUpdate operations."""
 
@@ -288,6 +288,15 @@ class Session:
     branch: str | None = None  # Git branch name if detected
     pr_info: "PRInfo | None" = None  # GitHub PR linked to this branch
     _display_name_from_path: str | None = field(default=None, init=False, repr=False)
+    # Cache for aggregate properties
+    _cache_turns_len: int = field(default=0, init=False, repr=False)
+    _cached_totals: dict = field(default_factory=dict, init=False, repr=False)
+
+    def _check_cache(self) -> None:
+        """Invalidate cache if turns changed."""
+        if len(self.turns) != self._cache_turns_len:
+            self._cache_turns_len = len(self.turns)
+            self._cached_totals.clear()
 
     @property
     def display_name(self) -> str:
@@ -322,46 +331,77 @@ class Session:
     @property
     def total_input_words(self) -> int:
         """Total words from user turns."""
-        return sum(t.word_count for t in self.turns if t.role == "user")
+        self._check_cache()
+        if 'input_words' not in self._cached_totals:
+            self._cached_totals['input_words'] = sum(t.word_count for t in self.turns if t.role == "user")
+        return self._cached_totals['input_words']
 
     @property
     def total_output_words(self) -> int:
         """Total words from assistant turns."""
-        return sum(t.word_count for t in self.turns if t.role == "assistant")
+        self._check_cache()
+        if 'output_words' not in self._cached_totals:
+            self._cached_totals['output_words'] = sum(t.word_count for t in self.turns if t.role == "assistant")
+        return self._cached_totals['output_words']
 
     @property
     def total_tool_calls(self) -> int:
         """Total tool calls."""
-        return sum(1 for t in self.turns if t.role == "tool")
+        self._check_cache()
+        if 'tool_calls' not in self._cached_totals:
+            self._cached_totals['tool_calls'] = sum(1 for t in self.turns if t.role == "tool")
+        return self._cached_totals['tool_calls']
 
     @property
     def total_input_tokens(self) -> int:
         """Total input tokens across all turns with usage data."""
-        return sum(t.input_tokens or 0 for t in self.turns)
+        self._check_cache()
+        if 'input_tokens' not in self._cached_totals:
+            self._cached_totals['input_tokens'] = sum(t.input_tokens or 0 for t in self.turns)
+        return self._cached_totals['input_tokens']
 
     @property
     def total_output_tokens(self) -> int:
         """Total output tokens across all turns with usage data."""
-        return sum(t.output_tokens or 0 for t in self.turns)
+        self._check_cache()
+        if 'output_tokens' not in self._cached_totals:
+            self._cached_totals['output_tokens'] = sum(t.output_tokens or 0 for t in self.turns)
+        return self._cached_totals['output_tokens']
 
     @property
     def total_cache_creation_tokens(self) -> int:
         """Total cache creation tokens across all turns."""
-        return sum(t.cache_creation_tokens or 0 for t in self.turns)
+        self._check_cache()
+        if 'cache_creation_tokens' not in self._cached_totals:
+            self._cached_totals['cache_creation_tokens'] = sum(t.cache_creation_tokens or 0 for t in self.turns)
+        return self._cached_totals['cache_creation_tokens']
 
     @property
     def total_cache_read_tokens(self) -> int:
         """Total cache read tokens across all turns."""
-        return sum(t.cache_read_tokens or 0 for t in self.turns)
+        self._check_cache()
+        if 'cache_read_tokens' not in self._cached_totals:
+            self._cached_totals['cache_read_tokens'] = sum(t.cache_read_tokens or 0 for t in self.turns)
+        return self._cached_totals['cache_read_tokens']
 
     @property
     def has_token_data(self) -> bool:
         """Whether any turns have real token usage data."""
-        return any(t.input_tokens is not None for t in self.turns)
+        self._check_cache()
+        if 'has_token_data' not in self._cached_totals:
+            self._cached_totals['has_token_data'] = any(t.input_tokens is not None for t in self.turns)
+        return self._cached_totals['has_token_data']
 
     @property
     def estimated_cost(self) -> float | None:
         """Estimated session cost in USD, or None if no pricing data."""
+        self._check_cache()
+        if 'estimated_cost' not in self._cached_totals:
+            self._cached_totals['estimated_cost'] = self._compute_estimated_cost()
+        return self._cached_totals['estimated_cost']
+
+    def _compute_estimated_cost(self) -> float | None:
+        """Compute estimated session cost in USD, or None if no pricing data."""
         if not self.has_token_data:
             return None
         # Find model from first turn with model_id

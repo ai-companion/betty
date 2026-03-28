@@ -5,6 +5,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
+
 
 class ProjectWatcher:
     """Watch project directories for session files.
@@ -47,9 +50,71 @@ class ProjectWatcher:
         self._skipped_sessions: dict[str, tuple[Path, float]] = {}  # session_id -> (path, last_mtime)
         self._running = False
         self._thread: threading.Thread | None = None
+        self._observer: Observer | None = None
+        self._watched_paths: set[str] = set()  # Paths already scheduled in observer
+
+    class _SessionFileHandler(FileSystemEventHandler):
+        """Handle filesystem events for session .jsonl files."""
+
+        def __init__(self, watcher: "ProjectWatcher"):
+            self._watcher = watcher
+
+        def on_created(self, event):
+            if isinstance(event, FileCreatedEvent) and event.src_path.endswith(".jsonl"):
+                path = Path(event.src_path)
+                if path.is_file():
+                    self._watcher._on_new_or_updated_session(path.stem, path)
+
+        def on_modified(self, event):
+            if isinstance(event, FileModifiedEvent) and event.src_path.endswith(".jsonl"):
+                path = Path(event.src_path)
+                if path.is_file():
+                    self._watcher._on_new_or_updated_session(path.stem, path)
+
+    def _on_new_or_updated_session(self, session_id: str, file: Path) -> None:
+        """Handle a new or updated session file."""
+        # Already loaded - skip
+        if session_id in self._known_sessions:
+            return
+
+        # Check if this was a skipped session that got updated
+        if session_id in self._skipped_sessions:
+            old_path, old_mtime = self._skipped_sessions[session_id]
+            try:
+                new_mtime = file.stat().st_mtime
+                if new_mtime > old_mtime:
+                    # Session has new activity - load it now
+                    del self._skipped_sessions[session_id]
+                    self._known_sessions.add(session_id)
+                    self._on_session_discovered(session_id, file)
+            except (PermissionError, OSError):
+                pass
+        else:
+            # New session - skip if empty
+            try:
+                stat = file.stat()
+                if stat.st_size == 0:
+                    self._skipped_sessions[session_id] = (file, stat.st_mtime)
+                    return
+            except (PermissionError, OSError):
+                pass
+            self._known_sessions.add(session_id)
+            self._on_session_discovered(session_id, file)
+
+    def _add_watch(self, path: Path) -> None:
+        """Add a watchdog watch for a directory if not already watched."""
+        path_str = str(path)
+        if path_str not in self._watched_paths and self._observer and path.exists():
+            try:
+                self._observer.schedule(
+                    self._SessionFileHandler(self), path_str, recursive=False
+                )
+                self._watched_paths.add(path_str)
+            except OSError:
+                pass
 
     def start(self) -> None:
-        """Initial scan and start polling thread."""
+        """Initial scan and start watching."""
         # Initial scan - collect all sessions with their modification times
         all_sessions: list[tuple[Path, float]] = []  # (path, mtime)
 
@@ -98,70 +163,43 @@ class ProjectWatcher:
         if self._on_initial_load_done:
             self._on_initial_load_done()
 
-        # Start background polling thread
-        self._running = True
-        self._thread = threading.Thread(target=self._watch_loop, daemon=True)
-        self._thread.start()
-
-    def _scan_for_new_sessions(self) -> None:
-        """Scan for new sessions and check if skipped sessions became active."""
-        # In global mode, discover new project directories
-        if self._global_mode and self._projects_dir and self._projects_dir.exists():
-            try:
-                known_paths = set(self._project_paths)
-                for p in self._projects_dir.iterdir():
-                    if p.is_dir() and p.name.startswith("-") and p not in known_paths:
-                        self._project_paths.append(p)
-            except (PermissionError, OSError):
-                pass
-
+        # Set up watchdog observer
+        self._observer = Observer()
         for project_path in self._project_paths:
-            if not project_path.exists():
-                continue
+            self._add_watch(project_path)
+        self._observer.start()
 
-            try:
-                for file in project_path.iterdir():
-                    if file.suffix == ".jsonl" and file.is_file():
-                        session_id = file.stem
+        # Start background thread (for global mode directory discovery)
+        self._running = True
+        if self._global_mode:
+            self._thread = threading.Thread(target=self._watch_loop, daemon=True)
+            self._thread.start()
 
-                        # Already loaded - skip
-                        if session_id in self._known_sessions:
-                            continue
-
-                        # Check if this was a skipped session that got updated
-                        if session_id in self._skipped_sessions:
-                            old_path, old_mtime = self._skipped_sessions[session_id]
-                            try:
-                                new_mtime = file.stat().st_mtime
-                                if new_mtime > old_mtime:
-                                    # Session has new activity - load it now
-                                    del self._skipped_sessions[session_id]
-                                    self._known_sessions.add(session_id)
-                                    self._on_session_discovered(session_id, file)
-                            except (PermissionError, OSError):
-                                pass
-                        else:
-                            # New session - skip if empty
-                            try:
-                                stat = file.stat()
-                                if stat.st_size == 0:
-                                    self._skipped_sessions[session_id] = (file, stat.st_mtime)
-                                    continue
-                            except (PermissionError, OSError):
-                                pass
-                            self._known_sessions.add(session_id)
-                            self._on_session_discovered(session_id, file)
-            except (PermissionError, OSError):
-                pass
+    def _discover_new_project_dirs(self) -> None:
+        """In global mode, discover new project directories and add watches."""
+        if not self._projects_dir or not self._projects_dir.exists():
+            return
+        try:
+            known_paths = set(self._project_paths)
+            for p in self._projects_dir.iterdir():
+                if p.is_dir() and p.name.startswith("-") and p not in known_paths:
+                    self._project_paths.append(p)
+                    self._add_watch(p)
+        except (PermissionError, OSError):
+            pass
 
     def _watch_loop(self) -> None:
-        """Poll project directories for new sessions."""
+        """Slow poll loop for global mode directory discovery only."""
         while self._running:
-            self._scan_for_new_sessions()
-            time.sleep(1.0)  # Poll every second
+            self._discover_new_project_dirs()
+            time.sleep(5.0)
 
     def stop(self) -> None:
-        """Stop the watcher thread."""
+        """Stop the watcher thread and observer."""
         self._running = False
+        if self._observer:
+            self._observer.stop()
+            self._observer.join(timeout=2.0)
+            self._observer = None
         if self._thread:
             self._thread.join(timeout=1.0)

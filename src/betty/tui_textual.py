@@ -2596,6 +2596,8 @@ class BettyApp(App):
         self._annotating_turn_number: int | None = None  # Turn being annotated
         self._annotating_scroll_y: float = 0  # Scroll position before annotating
         self._show_agent_panel: bool = False
+        self._span_cache: tuple[str, int, list] | None = None  # (session_id, turns_len, spans)
+        self._last_conversation_fingerprint: str = ""
 
     def _resolve_open_mode(self) -> str:
         """Resolve 'auto' manager open mode based on terminal width."""
@@ -2674,6 +2676,32 @@ class BettyApp(App):
     def _check_for_updates(self) -> None:
         """Periodic check for updates (summaries, plan changes, etc.)."""
         self.store.update_pr_info()
+
+        session = self.store.get_active_session()
+        # Build fingerprint: turns count + last turn summary + plan timestamp
+        fp_parts: list[str] = []
+        if session:
+            fp_parts.append(str(len(session.turns)))
+            if session.turns:
+                last = session.turns[-1]
+                fp_parts.append(str(last.summary or ""))
+                fp_parts.append(str(last.critic or ""))
+            fp_parts.append(str(session.plan_updated_at or ""))
+            # Include first tool summary for tool group updates
+            for t in reversed(session.turns[-20:] if session.turns else []):
+                if t.role == "tool" and t.summary:
+                    fp_parts.append(t.summary)
+                    break
+        fp = "|".join(fp_parts)
+
+        if fp == self._last_conversation_fingerprint:
+            # Nothing changed, skip expensive refreshes
+            # Still refresh header (lightweight) for cost updates
+            self._refresh_header()
+            return
+
+        self._last_conversation_fingerprint = fp
+
         self._refresh_header()
         if self._manager_expanded:
             self._refresh_manager()
@@ -2681,7 +2709,7 @@ class BettyApp(App):
         elif self._manager_view_active:
             self._refresh_manager()
         else:
-            self._refresh_views()  # Refresh plan/tasks in case they changed
+            self._refresh_views()
         if self._show_agent_panel:
             self._refresh_agent_panel()
         self._refresh_berry_scene()
@@ -2870,10 +2898,19 @@ class BettyApp(App):
             span_default_expanded = self._detail_level in (DetailLevel.OUTLINE, DetailLevel.DETAIL)
             group_default_expanded = self._detail_level == DetailLevel.DETAIL
 
-            span_groups = group_turns_into_spans(
-                session, self._span_expanded_state,
-                default_expanded=span_default_expanded,
-            )
+            # Check span cache
+            cache_key = (session.session_id, len(session.turns))
+            if self._span_cache and self._span_cache[0] == cache_key[0] and self._span_cache[1] == cache_key[1]:
+                span_groups = self._span_cache[2]
+                # Re-apply expanded state
+                for sg in span_groups:
+                    sg.expanded = self._span_expanded_state.get(sg.first_turn_number, span_default_expanded)
+            else:
+                span_groups = group_turns_into_spans(
+                    session, self._span_expanded_state,
+                    default_expanded=span_default_expanded,
+                )
+                self._span_cache = (cache_key[0], cache_key[1], span_groups)
             grouped: list[Turn | ToolGroup | SpanGroup] = []
             for sg in span_groups:
                 if not sg.expanded:

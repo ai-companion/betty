@@ -170,9 +170,6 @@ class Agent:
             report = self._reports[sid]
             for o in observations:
                 report.observations.append(o)
-                # Trim to max observations
-                if len(report.observations) > self._config.max_observations:
-                    report.observations = report.observations[-self._config.max_observations:]
             report.metrics = metrics
             report.updated_at = datetime.now()
 
@@ -648,9 +645,6 @@ class Agent:
                         severity="warning",
                         metadata={"assessment": report.progress_assessment},
                     ))
-                    # Trim observations
-                    if len(report.observations) > self._config.max_observations:
-                        report.observations = report.observations[-self._config.max_observations:]
                     report.updated_at = datetime.now()
 
         except Exception as e:
@@ -937,10 +931,6 @@ class Agent:
                             "source": "llm",
                         },
                     ))
-
-                # Trim observations
-                if len(report.observations) > self._config.max_observations:
-                    report.observations = report.observations[-self._config.max_observations:]
 
         except Exception as e:
             logger.debug(f"Goal determination LLM call failed: {e}")

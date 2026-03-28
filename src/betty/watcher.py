@@ -76,13 +76,45 @@ class TranscriptWatcher:
             self._thread.join(timeout=1.0)
 
     def _watch_loop(self) -> None:
-        """Main watch loop - poll for new content."""
-        while self._running:
-            try:
-                self._check_for_updates()
-            except Exception as e:
-                logger.error(f"Error in transcript watcher: {e}", exc_info=True)
-            time.sleep(0.5)  # Poll every 500ms
+        """Main watch loop - use watchdog with fallback polling."""
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+
+        wake_event = threading.Event()
+
+        class Handler(FileSystemEventHandler):
+            def __init__(self, target_path):
+                self._target = str(target_path)
+
+            def on_modified(self, event):
+                if event.src_path == self._target:
+                    wake_event.set()
+
+        observer = Observer()
+        observer_started = False
+
+        with self._lock:
+            path = self._current_path
+
+        if path and path.parent.exists():
+            handler = Handler(path)
+            observer.schedule(handler, str(path.parent), recursive=False)
+            observer.start()
+            observer_started = True
+
+        try:
+            while self._running:
+                try:
+                    self._check_for_updates()
+                except Exception as e:
+                    logger.error(f"Error in transcript watcher: {e}", exc_info=True)
+                # Wait for watchdog event or fallback timeout
+                wake_event.wait(timeout=2.0)
+                wake_event.clear()
+        finally:
+            if observer_started and observer.is_alive():
+                observer.stop()
+                observer.join(timeout=1.0)
 
     def _check_for_updates(self) -> None:
         """Check for new content in the transcript file.
