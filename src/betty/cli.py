@@ -248,15 +248,19 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
 @click.option("--port", "-p", type=int, default=5557, help="Port to listen on (default: 5557)")
 @click.option("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
 @click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects")
-def server_cmd(port: int, host: str, global_mode: bool) -> None:
+@click.option("--backend", type=click.Choice(["file", "tmux"]), default="file", help="Session discovery backend (default: file)")
+@click.option("--tmux-socket", default=None, help="Tmux socket name (for --backend tmux)")
+def server_cmd(port: int, host: str, global_mode: bool, backend: str, tmux_socket: str | None) -> None:
     """Start the Betty API server.
 
     Exposes session data via a REST API so remote TUI clients can connect.
 
     Examples:
-      betty server                  # Start on default port 5557
-      betty server --port 8080      # Custom port
-      betty server --global         # Watch all projects
+      betty server                          # Start on default port 5557
+      betty server --port 8080              # Custom port
+      betty server --global                 # Watch all projects
+      betty server --backend tmux           # Discover sessions from tmux panes
+      betty server --backend tmux --tmux-socket main  # Custom tmux socket
     """
     from .server import run_server
 
@@ -274,6 +278,8 @@ def server_cmd(port: int, host: str, global_mode: bool) -> None:
         host=host,
         global_mode=global_mode,
         projects_dir=projects_dir if global_mode else None,
+        backend=backend,
+        tmux_socket=tmux_socket,
     )
 
 

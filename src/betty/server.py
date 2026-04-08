@@ -257,6 +257,8 @@ def run_server(
     host: str = "127.0.0.1",
     global_mode: bool = False,
     projects_dir: Path | None = None,
+    backend: str = "file",
+    tmux_socket: str | None = None,
 ) -> None:
     """Start the Betty API server.
 
@@ -268,14 +270,19 @@ def run_server(
         host: Host to bind to.
         global_mode: Watch all projects.
         projects_dir: Parent projects directory (for global mode).
+        backend: Discovery backend: ``"file"`` (default) or ``"tmux"``.
+        tmux_socket: Tmux socket name for the tmux backend.
     """
     store = EventStore(enable_notifications=False)
-    store.start_watching(
-        project_paths,
-        max_sessions=None,
-        projects_dir=projects_dir,
-        global_mode=global_mode,
-    )
+    if backend == "tmux":
+        store.start_watching_tmux(socket=tmux_socket)
+    else:
+        store.start_watching(
+            project_paths,
+            max_sessions=None,
+            projects_dir=projects_dir,
+            global_mode=global_mode,
+        )
 
     handler = _make_handler(store)
     server = ThreadingHTTPServer((host, port), handler)

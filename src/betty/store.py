@@ -87,6 +87,21 @@ class EventStore:
         )
         self._project_watcher.start()
 
+    def start_watching_tmux(self, socket: str | None = None) -> None:
+        """Start watching tmux panes for Claude Code sessions.
+
+        Args:
+            socket: Optional tmux socket name (``-L`` flag).
+        """
+        from .tmux_backend import TmuxProjectWatcher
+
+        self._project_watcher = TmuxProjectWatcher(
+            on_session_discovered=self._on_session_discovered,
+            socket=socket,
+            on_initial_load_done=self._on_initial_load_done,
+        )
+        self._project_watcher.start()
+
     def _on_initial_load_done(self) -> None:
         """Called when ProjectWatcher finishes its initial scan."""
         with self._lock:
