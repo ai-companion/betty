@@ -8,6 +8,7 @@ Discovers Claude Code sessions by inspecting tmux panes for running
 import logging
 import subprocess
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -54,6 +55,10 @@ def _find_claude_processes(pane_pid: str) -> list[dict]:
     """Find claude processes that are children of the given pane PID.
 
     Returns list of dicts with 'pid' and 'cwd' keys.
+
+    Note: This function issues its own ``ps`` call and is intentionally kept
+    separate from ``discover_sessions_from_tmux`` (which batches the call
+    across all panes) so that the BFS logic can be unit-tested in isolation.
     """
     # Use ps to find child processes that look like claude
     try:
@@ -79,9 +84,9 @@ def _find_claude_processes(pane_pid: str) -> list[dict]:
 
     # BFS to find all descendants
     descendants = set()
-    queue = [pane_pid]
+    queue: deque[str] = deque([pane_pid])
     while queue:
-        p = queue.pop(0)
+        p = queue.popleft()
         for child in children.get(p, []):
             if child not in descendants:
                 descendants.add(child)
@@ -178,9 +183,9 @@ def discover_sessions_from_tmux(
     for _, pane_pid in panes:
         # BFS to find all descendants of this pane process.
         descendants: set[str] = set()
-        queue = [pane_pid]
+        queue: deque[str] = deque([pane_pid])
         while queue:
-            p = queue.pop(0)
+            p = queue.popleft()
             for child in children.get(p, []):
                 if child not in descendants:
                     descendants.add(child)
@@ -244,13 +249,15 @@ class TmuxProjectWatcher:
 
     def start(self) -> None:
         """Initial scan and start polling."""
-        # Initial discovery
+        # Initial discovery — mirror _poll_once(): only mark known after
+        # confirming non-empty so files that are initially empty will be
+        # retried on the next poll cycle.
         sessions = discover_sessions_from_tmux(socket=self._socket)
         for session_id, transcript_path in sessions:
             if session_id not in self._known_sessions:
-                self._known_sessions.add(session_id)
                 try:
                     if transcript_path.stat().st_size > 0:
+                        self._known_sessions.add(session_id)
                         self._on_session_discovered(session_id, transcript_path)
                 except (PermissionError, OSError):
                     pass

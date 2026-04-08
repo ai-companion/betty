@@ -276,13 +276,15 @@ def run_server(
     store = EventStore(enable_notifications=False)
     if backend == "tmux":
         store.start_watching_tmux(socket=tmux_socket)
-    else:
+    elif backend == "file":
         store.start_watching(
             project_paths,
             max_sessions=None,
             projects_dir=projects_dir,
             global_mode=global_mode,
         )
+    else:
+        raise ValueError(f"Unsupported backend {backend!r}. Expected one of: 'file', 'tmux'.")
 
     handler = _make_handler(store)
     server = ThreadingHTTPServer((host, port), handler)

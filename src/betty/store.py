@@ -4,7 +4,7 @@ import logging
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from .agent import Agent
 from .agent_models import SessionReport
@@ -27,6 +27,11 @@ from .transcript import parse_transcript
 from .watcher import TranscriptWatcher
 
 # Maximum turns to keep in memory per session.
+# Protocol shared by ProjectWatcher and TmuxProjectWatcher so _project_watcher
+# can hold either without a type error.
+class _WatcherLike(Protocol):
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
 # Older turns can be re-read from the transcript file on demand.
 MAX_TURNS_IN_MEMORY = 500
 
@@ -43,7 +48,7 @@ class EventStore:
         self._active_session_id: str | None = None
         self._enable_notifications = enable_notifications
         self._transcript_watchers: dict[str, TranscriptWatcher] = {}  # session_id -> watcher
-        self._project_watcher: ProjectWatcher | None = None
+        self._project_watcher: _WatcherLike | None = None
         self._initial_load_done = False  # Set after initial scan completes
         self._branch_cache: dict[str, str | None] = {}  # project_dir -> branch name
         self._pr_detector = PRDetector()
