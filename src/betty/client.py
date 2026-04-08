@@ -171,8 +171,10 @@ class RemoteStore:
 
     def _poll_once(self) -> None:
         """Fetch sessions list and active session detail."""
+        if self._stop_event.is_set():
+            return
         try:
-            data = _api_get(self._base_url, "/api/sessions")
+            data = _api_get(self._base_url, "/api/sessions", timeout=2.0)
         except Exception:
             return
 
@@ -193,9 +195,9 @@ class RemoteStore:
             self._active_session_id = server_active_id
 
         # Fetch full detail for active session (with turns)
-        if server_active_id:
+        if server_active_id and not self._stop_event.is_set():
             try:
-                detail = _api_get(self._base_url, f"/api/sessions/{server_active_id}")
+                detail = _api_get(self._base_url, f"/api/sessions/{server_active_id}", timeout=2.0)
                 sd = detail.get("session")
                 if sd:
                     full_session = _dict_to_session(sd, include_turns=True)
@@ -227,8 +229,10 @@ class RemoteStore:
                 pass
 
         # Poll alerts
+        if self._stop_event.is_set():
+            return
         try:
-            alert_data = _api_get(self._base_url, "/api/alerts")
+            alert_data = _api_get(self._base_url, "/api/alerts", timeout=2.0)
             new_alerts = []
             for ad in alert_data.get("alerts", []):
                 new_alerts.append(Alert(
@@ -375,4 +379,8 @@ class RemoteStore:
     def stop(self) -> None:
         self._stop_event.set()
         if self._poll_thread:
-            self._poll_thread.join(timeout=3.0)
+            try:
+                self._poll_thread.join(timeout=2.0)
+            except RuntimeError:
+                # Thread may already be dead during interpreter shutdown.
+                pass
