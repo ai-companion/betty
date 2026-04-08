@@ -2,11 +2,8 @@
 
 import os
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from betty.tmux_backend import (
     TmuxProjectWatcher,
@@ -133,10 +130,11 @@ class TestDiscoverSessionsFromTmux:
             session_file = project_dir / "abc123.jsonl"
             session_file.write_text('{"type":"user"}\n')
 
-            # Mock the tmux/process functions
+            # Simulate: pane 1000 has a claude child process 1001
+            ps_output = "  PID  PPID COMMAND\n 1001 1000 claude\n"
             with patch("betty.tmux_backend._get_pane_pids", return_value=[("%0", "1000")]), \
-                 patch("betty.tmux_backend._find_claude_processes", return_value=[{"pid": "1001", "cwd": "/home/user/myproject"}]), \
-                 patch("betty.tmux_backend._encode_project_path", return_value="-home-user-myproject"), \
+                 patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_output)), \
+                 patch("betty.tmux_backend._get_process_cwd", return_value="/home/user/myproject"), \
                  patch("pathlib.Path.home", return_value=Path(tmpdir)):
                 result = discover_sessions_from_tmux()
                 assert len(result) == 1
@@ -187,11 +185,11 @@ class TestTmuxProjectWatcher:
                     on_session_discovered=callback,
                 )
                 watcher.start()
-                # Manually trigger another poll cycle
-                watcher._poll_loop.__wrapped__ if hasattr(watcher._poll_loop, '__wrapped__') else None
+                # Explicitly trigger a second poll cycle to verify deduplication
+                watcher._poll_once()
                 watcher.stop()
 
-            # Should only be called once despite multiple scans
+            # Should only be called once despite two discovery cycles
             callback.assert_called_once()
 
     def test_skips_empty_files(self):
