@@ -378,9 +378,7 @@ class RemoteStore:
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._poll_thread:
-            try:
-                self._poll_thread.join(timeout=2.0)
-            except RuntimeError:
-                # Thread may already be dead during interpreter shutdown.
-                pass
+        # No join — the polling thread is a daemon thread so Python
+        # will not wait for it on exit.  Joining here would block the
+        # main thread for up to the HTTP timeout when a request is
+        # in-flight, which is exactly the hang Kai reported.
