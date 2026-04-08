@@ -260,6 +260,12 @@ def server_cmd(port: int, host: str, global_mode: bool) -> None:
     """
     from .server import run_server
 
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        console.print(
+            f"[yellow]Warning:[/yellow] Binding to {host} exposes session data "
+            "on the network without authentication. Use only on trusted networks."
+        )
+
     projects_dir = Path.home() / ".claude" / "projects"
     project_paths = get_project_paths(global_mode)
     run_server(

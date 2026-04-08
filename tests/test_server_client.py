@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 from http.server import HTTPServer
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,7 +18,6 @@ from betty.client import (
 )
 from betty.models import Session, Turn, TaskState, count_words
 from betty.server import (
-    DEFAULT_PORT,
     _make_handler,
     _session_to_dict,
     _turn_to_dict,
@@ -212,6 +211,7 @@ class TestServerEndpoints:
         self.server, self.base_url = _create_test_server(self.store)
         yield
         self.server.shutdown()
+        self.server.server_close()
 
     def _get(self, path):
         import urllib.request
@@ -337,6 +337,7 @@ class TestCheckServer:
             assert check_server(base_url) is True
         finally:
             server.shutdown()
+            server.server_close()
 
 
 class TestRemoteStore:
@@ -359,6 +360,7 @@ class TestRemoteStore:
         yield
         self.client.stop()
         self.server.shutdown()
+        self.server.server_close()
 
     def test_get_sessions(self):
         self.client._poll_once()
@@ -377,9 +379,9 @@ class TestRemoteStore:
         received = []
         self.client.add_turn_listener(lambda t: received.append(t))
 
-        # First poll sets baseline
+        # First poll sets baseline — no listeners fired (matches EventStore semantics)
         self.client._poll_once()
-        assert len(received) == 2  # Initial turns
+        assert len(received) == 0
 
         # Add a turn on the "server" side
         new_turn = _make_turn(3, "user", "Follow up")
@@ -387,8 +389,8 @@ class TestRemoteStore:
 
         # Second poll should detect the new turn
         self.client._poll_once()
-        assert len(received) == 3
-        assert received[-1].content_full == "Follow up"
+        assert len(received) == 1
+        assert received[0].content_full == "Follow up"
 
     def test_set_active_session(self):
         assert self.client.set_active_session(1) is True

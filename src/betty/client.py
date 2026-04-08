@@ -8,7 +8,6 @@ Betty server over HTTP.
 import json
 import logging
 import threading
-import urllib.error
 import urllib.request
 from datetime import datetime
 from typing import Any, Callable
@@ -148,6 +147,7 @@ class RemoteStore:
         self._turn_listeners: list[Callable[[Turn], None]] = []
         self._alert_listeners: list[Callable[[Alert], None]] = []
         self._lock = threading.Lock()
+        self._listener_lock = threading.Lock()
         self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         # Track turn counts per session to detect new turns
@@ -185,6 +185,10 @@ class RemoteStore:
             for sd in session_dicts:
                 sid = sd["session_id"]
                 new_sessions[sid] = _dict_to_session(sd)
+            # Prune turn counts for removed sessions
+            removed_ids = old_ids - set(new_sessions.keys())
+            for removed_id in removed_ids:
+                self._turn_counts.pop(removed_id, None)
             self._sessions = new_sessions
             self._active_session_id = server_active_id
 
@@ -198,19 +202,27 @@ class RemoteStore:
                     with self._lock:
                         self._sessions[server_active_id] = full_session
 
-                    # Detect new turns
+                    # Detect new turns and fire listeners only for genuinely new ones.
+                    # On the very first fetch for a session, initialize the count
+                    # without firing (matches EventStore semantics where listeners
+                    # only see turns appended after registration).
                     new_count = len(full_session.turns)
-                    old_count = self._turn_counts.get(server_active_id, 0)
-                    if new_count > old_count:
-                        # Fire listeners for new turns
-                        new_turns = full_session.turns[old_count:]
-                        for turn in new_turns:
-                            for listener in self._turn_listeners:
-                                try:
-                                    listener(turn)
-                                except Exception:
-                                    pass
-                    self._turn_counts[server_active_id] = new_count
+                    if server_active_id not in self._turn_counts:
+                        # First fetch — set baseline, don't fire
+                        self._turn_counts[server_active_id] = new_count
+                    else:
+                        old_count = self._turn_counts[server_active_id]
+                        if new_count > old_count:
+                            new_turns = full_session.turns[old_count:]
+                            with self._listener_lock:
+                                listeners = list(self._turn_listeners)
+                            for turn in new_turns:
+                                for listener in listeners:
+                                    try:
+                                        listener(turn)
+                                    except Exception:
+                                        pass
+                        self._turn_counts[server_active_id] = new_count
             except Exception:
                 pass
 
@@ -229,8 +241,10 @@ class RemoteStore:
                 self._alerts = new_alerts
             # Fire listeners for new alerts
             if len(new_alerts) > old_count:
+                with self._listener_lock:
+                    alert_listeners = list(self._alert_listeners)
                 for alert in new_alerts[old_count:]:
-                    for listener in self._alert_listeners:
+                    for listener in alert_listeners:
                         try:
                             listener(alert)
                         except Exception:
@@ -302,18 +316,22 @@ class RemoteStore:
             self._alerts.clear()
 
     def add_turn_listener(self, listener: Callable[[Turn], None]) -> None:
-        self._turn_listeners.append(listener)
+        with self._listener_lock:
+            self._turn_listeners.append(listener)
 
     def remove_turn_listener(self, listener: Callable[[Turn], None]) -> None:
-        if listener in self._turn_listeners:
-            self._turn_listeners.remove(listener)
+        with self._listener_lock:
+            if listener in self._turn_listeners:
+                self._turn_listeners.remove(listener)
 
     def add_alert_listener(self, listener: Callable[[Alert], None]) -> None:
-        self._alert_listeners.append(listener)
+        with self._listener_lock:
+            self._alert_listeners.append(listener)
 
     def remove_alert_listener(self, listener: Callable[[Alert], None]) -> None:
-        if listener in self._alert_listeners:
-            self._alert_listeners.remove(listener)
+        with self._listener_lock:
+            if listener in self._alert_listeners:
+                self._alert_listeners.remove(listener)
 
     def update_pr_info(self) -> None:
         # Server handles PR detection; nothing to do client-side.
