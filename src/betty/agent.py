@@ -217,7 +217,7 @@ class Agent:
                 self._save_to_cache(sid, report)
         self._cache.flush()
         if self._executor:
-            self._executor.shutdown(wait=False)
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
     def ask(
         self,

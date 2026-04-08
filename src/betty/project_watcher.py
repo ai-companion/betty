@@ -254,6 +254,5 @@ class ProjectWatcher:
             self._observer = None
         if observer:
             observer.stop()
-            observer.join(timeout=2.0)
-        if self._thread:
-            self._thread.join(timeout=6.0)
+            # No observer.join — it's a daemon thread.
+        # No thread.join — poll thread is daemon, will exit on its own.
