@@ -6,7 +6,6 @@ Discovers Claude Code sessions by inspecting tmux panes for running
 """
 
 import logging
-import re
 import subprocess
 import threading
 from pathlib import Path
@@ -14,9 +13,12 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
+_tmux_not_found_warned = False
+
 
 def _run_tmux(args: list[str], socket: str | None = None, timeout: float = 5.0) -> str | None:
     """Run a tmux command and return stdout, or None on failure."""
+    global _tmux_not_found_warned
     cmd = ["tmux"]
     if socket:
         cmd.extend(["-L", socket])
@@ -27,7 +29,9 @@ def _run_tmux(args: list[str], socket: str | None = None, timeout: float = 5.0) 
             return result.stdout
         logger.debug("tmux %s returned %d: %s", args, result.returncode, result.stderr.strip())
     except FileNotFoundError:
-        logger.warning("tmux not found on PATH")
+        if not _tmux_not_found_warned:
+            logger.warning("tmux not found on PATH")
+            _tmux_not_found_warned = True
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.debug("tmux command failed: %s", exc)
     return None
@@ -150,10 +154,46 @@ def discover_sessions_from_tmux(
     seen_sessions: set[str] = set()
 
     panes = _get_pane_pids(socket=socket)
-    for pane_id, pane_pid in panes:
-        claude_procs = _find_claude_processes(pane_pid)
-        for proc in claude_procs:
-            cwd = proc["cwd"]
+    if not panes:
+        return discovered
+
+    # Build the process tree once for all panes (single ps invocation).
+    children: dict[str, list[str]] = {}
+    comm_by_pid: dict[str, str] = {}
+    try:
+        ps_result = subprocess.run(
+            ["ps", "-e", "-o", "pid,ppid,comm"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if ps_result.returncode == 0:
+            for line in ps_result.stdout.strip().splitlines()[1:]:  # skip header
+                parts = line.split()
+                if len(parts) >= 3:
+                    pid, ppid, comm = parts[0], parts[1], parts[2]
+                    children.setdefault(ppid, []).append(pid)
+                    comm_by_pid[pid] = comm
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    for _, pane_pid in panes:
+        # BFS to find all descendants of this pane process.
+        descendants: set[str] = set()
+        queue = [pane_pid]
+        while queue:
+            p = queue.pop(0)
+            for child in children.get(p, []):
+                if child not in descendants:
+                    descendants.add(child)
+                    queue.append(child)
+
+        for pid in descendants:
+            comm = comm_by_pid.get(pid, "")
+            if "claude" not in comm.lower():
+                continue
+            cwd = _get_process_cwd(pid)
+            if not cwd:
+                continue
+
             encoded = _encode_project_path(cwd)
             project_path = projects_dir / encoded
 
@@ -224,20 +264,24 @@ class TmuxProjectWatcher:
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
 
+    def _poll_once(self) -> None:
+        """Discover sessions and report any that are new. Called by the poll loop."""
+        sessions = discover_sessions_from_tmux(socket=self._socket)
+        for session_id, transcript_path in sessions:
+            if session_id not in self._known_sessions:
+                try:
+                    if transcript_path.stat().st_size > 0:
+                        self._known_sessions.add(session_id)
+                        self._on_session_discovered(session_id, transcript_path)
+                except (PermissionError, OSError):
+                    pass
+
     def _poll_loop(self) -> None:
         while self._running:
             self._stop_event.wait(timeout=self._poll_interval)
             if not self._running:
                 break
-            sessions = discover_sessions_from_tmux(socket=self._socket)
-            for session_id, transcript_path in sessions:
-                if session_id not in self._known_sessions:
-                    try:
-                        if transcript_path.stat().st_size > 0:
-                            self._known_sessions.add(session_id)
-                            self._on_session_discovered(session_id, transcript_path)
-                    except (PermissionError, OSError):
-                        pass
+            self._poll_once()
 
     def stop(self) -> None:
         self._running = False
