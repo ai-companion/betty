@@ -6,11 +6,10 @@ using Python's built-in http.server (no extra dependencies).
 
 import json
 import logging
-import threading
-from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .models import Session, Turn, TaskState
 from .store import EventStore
@@ -18,6 +17,9 @@ from .store import EventStore
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 5557
+
+# Maximum request body size (1 MB) to prevent memory exhaustion.
+_MAX_BODY_SIZE = 1 * 1024 * 1024
 
 
 def _turn_to_dict(turn: Turn) -> dict[str, Any]:
@@ -120,11 +122,19 @@ def _make_handler(store: EventStore):
             self._send_json({"error": message}, status)
 
         def _read_body(self) -> bytes:
-            length = int(self.headers.get("Content-Length", 0))
-            return self.rfile.read(length) if length else b""
+            raw = self.headers.get("Content-Length", "0")
+            try:
+                length = int(raw)
+            except (ValueError, TypeError):
+                return b""
+            if length <= 0:
+                return b""
+            if length > _MAX_BODY_SIZE:
+                return b""
+            return self.rfile.read(length)
 
         def do_GET(self) -> None:
-            path = self.path.rstrip("/")
+            path = urlparse(self.path).path.rstrip("/")
 
             if path == "/api/health":
                 self._send_json({"status": "ok"})
@@ -173,7 +183,7 @@ def _make_handler(store: EventStore):
                 self._send_error(404, "Not found")
 
         def do_PUT(self) -> None:
-            path = self.path.rstrip("/")
+            path = urlparse(self.path).path.rstrip("/")
 
             if path == "/api/sessions/active":
                 body = self._read_body()
@@ -196,7 +206,7 @@ def _make_handler(store: EventStore):
                 self._send_error(404, "Not found")
 
         def do_POST(self) -> None:
-            path = self.path.rstrip("/")
+            path = urlparse(self.path).path.rstrip("/")
 
             if path == "/api/summarize":
                 count = store.summarize_historical_turns()
@@ -221,7 +231,7 @@ def _make_handler(store: EventStore):
                 self._send_error(404, "Not found")
 
         def do_DELETE(self) -> None:
-            path = self.path.rstrip("/")
+            path = urlparse(self.path).path.rstrip("/")
 
             if path == "/api/alerts":
                 store.clear_alerts()
@@ -268,7 +278,7 @@ def run_server(
     )
 
     handler = _make_handler(store)
-    server = HTTPServer((host, port), handler)
+    server = ThreadingHTTPServer((host, port), handler)
     logger.info("Betty server listening on %s:%d", host, port)
     print(f"Betty server listening on http://{host}:{port}")
     print(f"  Health:   http://{host}:{port}/api/health")
