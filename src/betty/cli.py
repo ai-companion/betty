@@ -14,6 +14,11 @@ from .config import CONFIG_FILE, get_example_configs, load_config, save_config, 
 from .store import EventStore
 from .tui_textual import BettyApp
 
+# TYPE_CHECKING-only import for type hints; actual import is deferred.
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .client import RemoteStore
+
 console = Console()
 
 
@@ -124,9 +129,10 @@ def get_project_paths(global_mode: bool, worktree_mode: bool = False) -> list[Pa
 @click.option("--collapse-tools/--no-collapse-tools", default=None, help="Collapse tool turns into groups")
 @click.option("--debug-logging/--no-debug-logging", default=None, help="Enable debug logging to file")
 @click.option("--manager-open-mode", type=click.Choice(["swap", "expand", "auto"]), default=None, help="Manager view open mode (swap, expand, or auto)")
+@click.option("--server", "server_url", default=None, help="Connect to a remote Betty server (e.g. http://localhost:5557)")
 @click.option("--version", "-v", is_flag=True, help="Show version")
 @click.pass_context
-def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, manager_open_mode: str | None, version: bool) -> None:
+def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mode: bool, style: str | None, collapse_tools: bool | None, debug_logging: bool | None, manager_open_mode: str | None, server_url: str | None, version: bool) -> None:
     """Betty - A CLI supervisor for Claude Code sessions."""
     if version:
         console.print(f"betty v{__version__}")
@@ -147,10 +153,10 @@ def main(ctx: click.Context, global_mode: bool, worktree_mode: bool, manager_mod
             config.debug_logging = debug_logging
         if manager_open_mode is not None:
             config.manager_open_mode = manager_open_mode
-        run_companion(global_mode=global_mode, worktree_mode=worktree_mode, manager_mode=manager_mode, config=config)
+        run_companion(global_mode=global_mode, worktree_mode=worktree_mode, manager_mode=manager_mode, config=config, server_url=server_url)
 
 
-def run_companion(global_mode: bool = False, worktree_mode: bool = False, manager_mode: bool = False, config: Config | None = None) -> None:
+def run_companion(global_mode: bool = False, worktree_mode: bool = False, manager_mode: bool = False, config: Config | None = None, server_url: str | None = None) -> None:
     """Run the main companion TUI with directory-based session discovery."""
     if config is None:
         config = load_config()
@@ -178,39 +184,54 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
-    projects_dir = Path.home() / ".claude" / "projects"
-    try:
-        project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
-    except GitNotFoundError:
-        console.print("[red]Error:[/red] --worktree requires git, but git is not installed or not on PATH")
-        raise SystemExit(1)
-    except GitCommandError as exc:
-        console.print(f"[red]Error:[/red] --worktree failed: {exc}")
-        raise SystemExit(1)
-    except NotAGitRepoError as exc:
-        console.print(
-            f"[red]Error:[/red] --worktree requires a git repository; git reported: {exc}"
+    # Decide whether to use a remote server or local store.
+    store: "EventStore | RemoteStore"
+    use_remote = False
+
+    if server_url:
+        from .client import RemoteStore, check_server
+        if check_server(server_url):
+            store = RemoteStore(server_url)
+            store.start_polling()
+            use_remote = True
+            console.print(f"[dim]Connected to Betty server at {server_url}[/dim]")
+        else:
+            console.print(f"[yellow]Warning:[/yellow] Cannot reach server at {server_url}, falling back to local scanning")
+
+    if not use_remote:
+        projects_dir = Path.home() / ".claude" / "projects"
+        try:
+            project_paths = get_project_paths(global_mode, worktree_mode=worktree_mode)
+        except GitNotFoundError:
+            console.print("[red]Error:[/red] --worktree requires git, but git is not installed or not on PATH")
+            raise SystemExit(1)
+        except GitCommandError as exc:
+            console.print(f"[red]Error:[/red] --worktree failed: {exc}")
+            raise SystemExit(1)
+        except NotAGitRepoError as exc:
+            console.print(
+                f"[red]Error:[/red] --worktree requires a git repository; git reported: {exc}"
+            )
+            raise SystemExit(1)
+
+        # Create store and start watching
+        # Manager mode loads all sessions; normal mode loads only most recent
+        max_sessions = None if manager_mode else 1
+        store = EventStore()
+        store.start_watching(
+            project_paths,
+            max_sessions=max_sessions,
+            projects_dir=projects_dir,
+            global_mode=global_mode,
         )
-        raise SystemExit(1)
 
-    # Create store and start watching
-    # Manager mode loads all sessions; normal mode loads only most recent
-    max_sessions = None if manager_mode else 1
-    store = EventStore()
-    store.start_watching(
-        project_paths,
-        max_sessions=max_sessions,
-        projects_dir=projects_dir,
-        global_mode=global_mode,
-    )
-
-    if global_mode:
-        scope = "all projects"
-    elif worktree_mode:
-        scope = f"git worktrees ({len(project_paths)} found)"
-    else:
-        scope = "current directory"
-    console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
+        if global_mode:
+            scope = "all projects"
+        elif worktree_mode:
+            scope = f"git worktrees ({len(project_paths)} found)"
+        else:
+            scope = "current directory"
+        console.print(f"[dim]Watching {scope} for Claude sessions...[/dim]")
 
     try:
         # Run Textual TUI
@@ -221,6 +242,33 @@ def run_companion(global_mode: bool = False, worktree_mode: bool = False, manage
     finally:
         store.stop()
         console.print("\n[dim]Goodbye![/dim]")
+
+
+@main.command("server")
+@click.option("--port", "-p", type=int, default=5557, help="Port to listen on (default: 5557)")
+@click.option("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+@click.option("--global", "-g", "global_mode", is_flag=True, help="Watch all projects")
+def server_cmd(port: int, host: str, global_mode: bool) -> None:
+    """Start the Betty API server.
+
+    Exposes session data via a REST API so remote TUI clients can connect.
+
+    Examples:
+      betty server                  # Start on default port 5557
+      betty server --port 8080      # Custom port
+      betty server --global         # Watch all projects
+    """
+    from .server import run_server
+
+    projects_dir = Path.home() / ".claude" / "projects"
+    project_paths = get_project_paths(global_mode)
+    run_server(
+        project_paths=project_paths,
+        port=port,
+        host=host,
+        global_mode=global_mode,
+        projects_dir=projects_dir if global_mode else None,
+    )
 
 
 @main.command()
