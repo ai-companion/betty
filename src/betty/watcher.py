@@ -75,8 +75,7 @@ class TranscriptWatcher:
             self._cancelled = True  # Prevent late starts from watch()
             self._running = False
         self._stop_event.set()  # Wake wait loop immediately
-        if self._thread:
-            self._thread.join(timeout=3.0)
+        # No join — thread is daemon, will exit on its own.
 
     def _watch_loop(self) -> None:
         """Main watch loop - use watchdog with fallback polling."""
@@ -125,7 +124,6 @@ class TranscriptWatcher:
         finally:
             if observer_started and observer.is_alive():
                 observer.stop()
-                observer.join(timeout=1.0)
 
     def _check_for_updates(self) -> None:
         """Check for new content in the transcript file.
