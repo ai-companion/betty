@@ -1,6 +1,7 @@
 """LLM summarization for assistant turns using litellm, openai SDK, or claude-code subprocess."""
 
 import logging
+import os
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -396,10 +397,19 @@ class Summarizer:
         # Extract model name from "claude-code/<model>" prefix
         claude_model = self.model.split("/", 1)[1] if "/" in self.model else self.model
 
+        # Only add --bare when using API key or Vertex auth (--bare blocks OAuth/keychain)
+        bare_flag = (
+            ["--bare"]
+            if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_USE_VERTEX")
+            else []
+        )
+        cmd = ["claude", "-p"] + bare_flag + [
+            "--no-session-persistence", "--model", claude_model,
+            "--disable-slash-commands", "--tools", "", "--setting-sources", "",
+            "--system-prompt", system_prompt]
+
         result = subprocess.run(
-            ["claude", "-p", "--no-session-persistence", "--model", claude_model,
-             "--disable-slash-commands", "--tools", "", "--setting-sources", "",
-             "--system-prompt", system_prompt],
+            cmd,
             input=prompt,
             capture_output=True,
             text=True,

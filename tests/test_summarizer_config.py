@@ -1,5 +1,6 @@
 """Tests for customizable summarization style and prompts."""
 
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -205,3 +206,51 @@ class TestSummaryConfigRoundTrip:
 
             assert loaded.summary.style == "custom"
             assert loaded.summary.custom_prompt == "Be concise"
+
+
+class TestClaudeCodeBareFlag:
+    """Tests for conditional --bare flag in claude-code subprocess calls."""
+
+    def _get_cmd(self, env_vars: dict | None = None):
+        """Call _call_claude_code with patched subprocess.run and return the cmd."""
+        env = env_vars or {}
+        summarizer = Summarizer(model="claude-code/haiku")
+        captured_cmd = None
+
+        def fake_run(cmd, **kwargs):
+            nonlocal captured_cmd
+            captured_cmd = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="summary", stderr="")
+
+        with patch("betty.summarizer.subprocess.run", side_effect=fake_run), \
+             patch.dict("os.environ", env, clear=False):
+            # Clear env vars not in env_vars to test absence
+            with patch.dict("os.environ", {
+                k: "" for k in ["ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_VERTEX"]
+                if k not in env
+            }):
+                summarizer._call_claude_code("test prompt", "test system")
+
+        return captured_cmd
+
+    def test_bare_with_api_key(self):
+        """--bare should be present when ANTHROPIC_API_KEY is set."""
+        cmd = self._get_cmd({"ANTHROPIC_API_KEY": "sk-test"})
+        assert "--bare" in cmd
+        assert cmd.index("--bare") == 2  # right after "claude", "-p"
+
+    def test_bare_with_vertex(self):
+        """--bare should be present when CLAUDE_CODE_USE_VERTEX is set."""
+        cmd = self._get_cmd({"CLAUDE_CODE_USE_VERTEX": "1"})
+        assert "--bare" in cmd
+        assert cmd.index("--bare") == 2
+
+    def test_no_bare_without_env_vars(self):
+        """--bare should be absent when neither env var is set."""
+        cmd = self._get_cmd({})
+        assert "--bare" not in cmd
+
+    def test_bare_with_both_env_vars(self):
+        """--bare should be present when both env vars are set."""
+        cmd = self._get_cmd({"ANTHROPIC_API_KEY": "sk-test", "CLAUDE_CODE_USE_VERTEX": "1"})
+        assert "--bare" in cmd
